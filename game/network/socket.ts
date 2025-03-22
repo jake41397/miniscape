@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import { Player } from '../../types/player';
+import { Player, Item } from '../../types/player';
 
 // Define our socket events
 export interface ServerToClientEvents {
@@ -8,12 +8,18 @@ export interface ServerToClientEvents {
   playerLeft: (playerId: string) => void;
   playerMoved: (player: { id: string, x: number, y: number, z: number }) => void;
   chatMessage: (message: { name: string, text: string }) => void;
+  inventoryUpdate: (inventory: Item[]) => void;
+  itemDropped: (drop: { dropId: string, itemType: string, x: number, y: number, z: number }) => void;
+  itemRemoved: (dropId: string) => void;
 }
 
 export interface ClientToServerEvents {
   join: (name: string) => void;
   playerMove: (position: { x: number, y: number, z: number }) => void;
   chat: (text: string) => void;
+  dropItem: (item: { itemId: string, itemType: string }) => void;
+  pickup: (dropId: string) => void;
+  gather: (resourceId: string) => void;
 }
 
 // Create a socket instance
