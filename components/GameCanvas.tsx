@@ -17,10 +17,6 @@ import {
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.15;
-
-// Ensure movement speed remains constant
-Object.freeze(MOVEMENT_SPEED);
-
 // World boundaries
 const WORLD_BOUNDS = {
   minX: -50, 
@@ -70,9 +66,6 @@ const GameCanvas: React.FC = () => {
   // Add sound toggle state
   const [soundEnabled, setSoundEnabled] = useState(true);
   
-  // Create a ref to store the createNameLabel function
-  const createNameLabelRef = useRef<((name: string, mesh: THREE.Mesh) => void) | null>(null);
-  
   useEffect(() => {
     // Init socket on component mount
     const socket = initializeSocket();
@@ -103,13 +96,6 @@ const GameCanvas: React.FC = () => {
   useEffect(() => {
     soundManager.setEnabled(soundEnabled);
   }, [soundEnabled]);
-  
-  // Add name label to player when name is set
-  useEffect(() => {
-    if (playerRef.current && playerName && createNameLabelRef.current) {
-      createNameLabelRef.current(playerName, playerRef.current);
-    }
-  }, [playerName]);
   
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -197,13 +183,6 @@ const GameCanvas: React.FC = () => {
     // Save player mesh to ref for later access
     playerRef.current = playerMesh;
     
-    // Also update lastSentPosition to match initial player position
-    lastSentPosition.current = { 
-      x: playerMesh.position.x, 
-      y: playerMesh.position.y, 
-      z: playerMesh.position.z 
-    };
-    
     // Add player to scene
     scene.add(playerMesh);
     
@@ -237,8 +216,12 @@ const GameCanvas: React.FC = () => {
       return nameLabel;
     };
     
-    // Store the createNameLabel function in the ref so it can be used by other useEffect hooks
-    createNameLabelRef.current = createNameLabel;
+    // Add name label to player when name is set
+    useEffect(() => {
+      if (playerRef.current && playerName) {
+        createNameLabel(playerName, playerRef.current);
+      }
+    }, [playerName]);
     
     // Make camera follow player
     camera.position.set(
@@ -369,15 +352,9 @@ const GameCanvas: React.FC = () => {
       }
     });
     
-    // Handle player movements - Fix the issue with position resets
+    // Handle player movements
     socket.on('playerMoved', (data) => {
-      // Only update other players' positions, not our own player
-      if (data.id === socket.id) {
-        console.log('Ignoring position update for our own player');
-        return; // Skip position updates for our own player
-      }
-      
-      // Update the position of other players
+      // Update the position of the moved player
       const playerMesh = playersRef.current.get(data.id);
       if (playerMesh) {
         playerMesh.position.set(data.x, data.y, data.z);
