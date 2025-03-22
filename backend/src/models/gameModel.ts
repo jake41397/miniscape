@@ -1,9 +1,28 @@
-const supabase = require('../config/supabase');
+import supabase from '../config/supabase';
+import logger from '../utils/logger';
+
+// Define interfaces for model objects
+interface WorldItem {
+  dropId: string;
+  itemType: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface ResourceNode {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  z: number;
+  respawnTime: number;
+}
 
 /**
  * Load all world items from the database
  */
-const loadWorldItems = async () => {
+export const loadWorldItems = async (): Promise<WorldItem[]> => {
   try {
     const { data, error } = await supabase
       .from('world_items')
@@ -13,7 +32,7 @@ const loadWorldItems = async () => {
       throw error;
     }
     
-    return data.map(item => ({
+    return data.map((item: any): WorldItem => ({
       dropId: item.id,
       itemType: item.item_type,
       x: item.x,
@@ -21,7 +40,7 @@ const loadWorldItems = async () => {
       z: item.z
     }));
   } catch (error) {
-    console.error('Error loading world items:', error);
+    logger.error('Error loading world items', error instanceof Error ? error : new Error('Unknown error'));
     return [];
   }
 };
@@ -29,7 +48,7 @@ const loadWorldItems = async () => {
 /**
  * Load all resource nodes from the database
  */
-const loadResourceNodes = async () => {
+export const loadResourceNodes = async (): Promise<ResourceNode[]> => {
   try {
     const { data, error } = await supabase
       .from('resource_nodes')
@@ -39,7 +58,7 @@ const loadResourceNodes = async () => {
       throw error;
     }
     
-    return data.map(node => ({
+    return data.map((node: any): ResourceNode => ({
       id: node.id,
       type: node.node_type,
       x: node.x,
@@ -48,7 +67,7 @@ const loadResourceNodes = async () => {
       respawnTime: node.respawn_time
     }));
   } catch (error) {
-    console.error('Error loading resource nodes:', error);
+    logger.error('Error loading resource nodes', error instanceof Error ? error : new Error('Unknown error'));
     return [];
   }
 };
@@ -56,7 +75,7 @@ const loadResourceNodes = async () => {
 /**
  * Save player position to the database
  */
-const savePlayerPosition = async (userId, x, y, z) => {
+export const savePlayerPosition = async (userId: string, x: number, y: number, z: number): Promise<void> => {
   try {
     const { error } = await supabase
       .from('player_data')
@@ -72,7 +91,7 @@ const savePlayerPosition = async (userId, x, y, z) => {
       throw error;
     }
   } catch (error) {
-    console.error(`Error saving position for player ${userId}:`, error);
+    logger.error(`Error saving position for player ${userId}`, error instanceof Error ? error : new Error('Unknown error'));
     throw error;
   }
 };
@@ -80,7 +99,7 @@ const savePlayerPosition = async (userId, x, y, z) => {
 /**
  * Save player inventory to the database
  */
-const savePlayerInventory = async (userId, inventory) => {
+export const savePlayerInventory = async (userId: string, inventory: any[]): Promise<void> => {
   try {
     const { error } = await supabase
       .from('player_data')
@@ -94,7 +113,7 @@ const savePlayerInventory = async (userId, inventory) => {
       throw error;
     }
   } catch (error) {
-    console.error(`Error saving inventory for player ${userId}:`, error);
+    logger.error(`Error saving inventory for player ${userId}`, error instanceof Error ? error : new Error('Unknown error'));
     throw error;
   }
 };
@@ -102,7 +121,7 @@ const savePlayerInventory = async (userId, inventory) => {
 /**
  * Add a dropped item to the world in the database
  */
-const dropItemInWorld = async (dropId, itemType, x, y, z) => {
+export const dropItemInWorld = async (dropId: string, itemType: string, x: number, y: number, z: number): Promise<void> => {
   try {
     const { error } = await supabase
       .from('world_items')
@@ -118,7 +137,7 @@ const dropItemInWorld = async (dropId, itemType, x, y, z) => {
       throw error;
     }
   } catch (error) {
-    console.error('Error adding item to world:', error);
+    logger.error('Error adding item to world', error instanceof Error ? error : new Error('Unknown error'));
     throw error;
   }
 };
@@ -126,7 +145,7 @@ const dropItemInWorld = async (dropId, itemType, x, y, z) => {
 /**
  * Remove an item from the world in the database
  */
-const removeWorldItem = async (dropId) => {
+export const removeWorldItem = async (dropId: string): Promise<void> => {
   try {
     const { error } = await supabase
       .from('world_items')
@@ -137,16 +156,7 @@ const removeWorldItem = async (dropId) => {
       throw error;
     }
   } catch (error) {
-    console.error(`Error removing world item ${dropId}:`, error);
+    logger.error(`Error removing world item ${dropId}`, error instanceof Error ? error : new Error('Unknown error'));
     throw error;
   }
-};
-
-module.exports = {
-  loadWorldItems,
-  loadResourceNodes,
-  savePlayerPosition,
-  savePlayerInventory,
-  dropItemInWorld,
-  removeWorldItem
 }; 

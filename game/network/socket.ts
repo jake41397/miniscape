@@ -40,18 +40,24 @@ export const initializeSocket = async () => {
       return null;
     }
     
-    // Connect to the socket server with auth token
-    socket = io('/api/socket', {
-      path: '/api/socket',
-      transports: ['websocket'],
+    // Connect to the backend socket server with auth token
+    const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
+    console.log('Connecting to backend socket server at:', BACKEND_URL);
+    console.log('Auth token available:', !!token);
+    
+    socket = io(BACKEND_URL, {
+      transports: ['websocket', 'polling'],
       auth: {
-        token
+        token: token
+      },
+      extraHeaders: {
+        'Authorization': `Bearer ${token}`
       }
     });
 
     // Log socket connection events
     socket.on('connect', () => {
-      console.log('Socket connected! ID:', socket?.id);
+      console.log('Socket connected to backend! ID:', socket?.id);
     });
 
     socket.on('disconnect', () => {

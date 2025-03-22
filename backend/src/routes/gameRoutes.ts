@@ -1,12 +1,21 @@
-const express = require('express');
-const router = express.Router();
-const supabase = require('../config/supabase');
-const gameModel = require('../models/gameModel');
+import express, { Request, Response, NextFunction, Router } from 'express';
+import supabase from '../config/supabase';
+import * as gameModel from '../models/gameModel';
+import logger from '../utils/logger';
+
+const router: Router = express.Router();
+
+// Type for route handlers to fix TypeScript errors
+type RouteHandler = (
+  req: Request,
+  res: Response,
+  next?: NextFunction
+) => Promise<any> | any;
 
 /**
  * Get world map data
  */
-router.get('/world', async (req, res) => {
+router.get('/world', (async (req: Request, res: Response) => {
   try {
     // Get world map data from database
     const { data: worldData, error } = await supabase
@@ -20,41 +29,41 @@ router.get('/world', async (req, res) => {
     
     res.status(200).json({ worldMap: worldData });
   } catch (error) {
-    console.error('Error fetching world map:', error);
+    logger.error('Error fetching world map', error instanceof Error ? error : new Error('Unknown error'));
     res.status(500).json({ error: 'Failed to fetch world map data' });
   }
-});
+}) as RouteHandler);
 
 /**
  * Get resource nodes
  */
-router.get('/resources', async (req, res) => {
+router.get('/resources', (async (req: Request, res: Response) => {
   try {
     const resourceNodes = await gameModel.loadResourceNodes();
     res.status(200).json({ resourceNodes });
   } catch (error) {
-    console.error('Error fetching resource nodes:', error);
+    logger.error('Error fetching resource nodes', error instanceof Error ? error : new Error('Unknown error'));
     res.status(500).json({ error: 'Failed to fetch resource nodes' });
   }
-});
+}) as RouteHandler);
 
 /**
  * Get world items
  */
-router.get('/items', async (req, res) => {
+router.get('/items', (async (req: Request, res: Response) => {
   try {
     const worldItems = await gameModel.loadWorldItems();
     res.status(200).json({ worldItems });
   } catch (error) {
-    console.error('Error fetching world items:', error);
+    logger.error('Error fetching world items', error instanceof Error ? error : new Error('Unknown error'));
     res.status(500).json({ error: 'Failed to fetch world items' });
   }
-});
+}) as RouteHandler);
 
 /**
  * Get game leaderboard
  */
-router.get('/leaderboard', async (req, res) => {
+router.get('/leaderboard', (async (req: Request, res: Response) => {
   try {
     // Get top players based on their level
     const { data: leaderboard, error } = await supabase
@@ -67,7 +76,7 @@ router.get('/leaderboard', async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
     
-    const formattedLeaderboard = leaderboard.map(player => ({
+    const formattedLeaderboard = leaderboard.map((player: any) => ({
       userId: player.user_id,
       username: player.profiles.username,
       avatarUrl: player.profiles.avatar_url,
@@ -77,15 +86,15 @@ router.get('/leaderboard', async (req, res) => {
     
     res.status(200).json({ leaderboard: formattedLeaderboard });
   } catch (error) {
-    console.error('Error fetching leaderboard:', error);
+    logger.error('Error fetching leaderboard', error instanceof Error ? error : new Error('Unknown error'));
     res.status(500).json({ error: 'Failed to fetch leaderboard' });
   }
-});
+}) as RouteHandler);
 
 /**
  * Get server status
  */
-router.get('/status', (req, res) => {
+router.get('/status', ((req: Request, res: Response) => {
   // Simple health check endpoint
   const status = {
     server: 'online',
@@ -95,6 +104,6 @@ router.get('/status', (req, res) => {
   };
   
   res.status(200).json(status);
-});
+}) as RouteHandler);
 
-module.exports = router; 
+export default router; 
