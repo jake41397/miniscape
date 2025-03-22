@@ -66,6 +66,9 @@ const GameCanvas: React.FC = () => {
   // Add sound toggle state
   const [soundEnabled, setSoundEnabled] = useState(true);
   
+  // Create a ref to store the createNameLabel function
+  const createNameLabelRef = useRef<((name: string, mesh: THREE.Mesh) => void) | null>(null);
+  
   useEffect(() => {
     // Init socket on component mount
     const socket = initializeSocket();
@@ -96,6 +99,13 @@ const GameCanvas: React.FC = () => {
   useEffect(() => {
     soundManager.setEnabled(soundEnabled);
   }, [soundEnabled]);
+  
+  // Add name label to player when name is set
+  useEffect(() => {
+    if (playerRef.current && playerName && createNameLabelRef.current) {
+      createNameLabelRef.current(playerName, playerRef.current);
+    }
+  }, [playerName]);
   
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -216,12 +226,8 @@ const GameCanvas: React.FC = () => {
       return nameLabel;
     };
     
-    // Add name label to player when name is set
-    useEffect(() => {
-      if (playerRef.current && playerName) {
-        createNameLabel(playerName, playerRef.current);
-      }
-    }, [playerName]);
+    // Store the createNameLabel function in the ref so it can be used by other useEffect hooks
+    createNameLabelRef.current = createNameLabel;
     
     // Make camera follow player
     camera.position.set(
