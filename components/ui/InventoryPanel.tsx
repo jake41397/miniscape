@@ -11,26 +11,38 @@ const InventoryPanel: React.FC<InventoryPanelProps> = ({ onDropItem }) => {
   const [isOpen, setIsOpen] = useState(false);
   
   useEffect(() => {
-    const socket = getSocket();
+    let socketInstance: any = null;
     
-    // Listen for inventory updates from server
-    socket.on('inventoryUpdate', (updatedInventory: Item[]) => {
-      setInventory(updatedInventory);
-    });
+    const setupSocket = async () => {
+      socketInstance = await getSocket();
+      
+      if (socketInstance) {
+        // Listen for inventory updates from server
+        socketInstance.on('inventoryUpdate', (updatedInventory: Item[]) => {
+          setInventory(updatedInventory);
+        });
+      }
+    };
+    
+    setupSocket();
     
     // Cleanup on unmount
     return () => {
-      socket.off('inventoryUpdate');
+      if (socketInstance) {
+        socketInstance.off('inventoryUpdate');
+      }
     };
   }, []);
   
-  const handleDropItem = (item: Item) => {
+  const handleDropItem = async (item: Item) => {
     if (onDropItem) {
       onDropItem(item);
     } else {
       // If no callback is provided, send directly to server
-      const socket = getSocket();
-      socket.emit('dropItem', { itemId: item.id, itemType: item.type });
+      const socket = await getSocket();
+      if (socket) {
+        socket.emit('dropItem', { itemId: item.id, itemType: item.type });
+      }
     }
   };
   

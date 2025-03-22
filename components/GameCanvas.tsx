@@ -345,162 +345,167 @@ const GameCanvas: React.FC = () => {
     createWorldResources();
     
     // Set up socket event listeners
-    const socket = getSocket();
-    
-    // Function to create a player mesh
-    const createPlayerMesh = (player: Player) => {
-      const otherPlayerGeometry = new THREE.BoxGeometry(1, 2, 1);
-      const otherPlayerMaterial = new THREE.MeshStandardMaterial({
-        color: 0xff5722, // Orange color for other players
+    const setupSocketListeners = async () => {
+      const socket = await getSocket();
+      if (!socket) return;
+      
+      // Function to create a player mesh
+      const createPlayerMesh = (player: Player) => {
+        const otherPlayerGeometry = new THREE.BoxGeometry(1, 2, 1);
+        const otherPlayerMaterial = new THREE.MeshStandardMaterial({
+          color: 0xff5722, // Orange color for other players
+        });
+        const otherPlayerMesh = new THREE.Mesh(otherPlayerGeometry, otherPlayerMaterial);
+        
+        // Set position from player data
+        otherPlayerMesh.position.set(player.x, player.y, player.z);
+        
+        // Store player data in userData
+        otherPlayerMesh.userData.playerId = player.id;
+        otherPlayerMesh.userData.playerName = player.name;
+        
+        // Add name label
+        createNameLabel(player.name, otherPlayerMesh);
+        
+        // Add to scene
+        scene.add(otherPlayerMesh);
+        
+        // Store in players map
+        playersRef.current.set(player.id, otherPlayerMesh);
+        
+        return otherPlayerMesh;
+      };
+      
+      // Handle initial players
+      socket.on('initPlayers', (players) => {
+        console.log('Received initial players:', players);
+        
+        // Add each existing player to the scene
+        players.forEach(player => {
+          if (!playersRef.current.has(player.id)) {
+            createPlayerMesh(player);
+          }
+        });
       });
-      const otherPlayerMesh = new THREE.Mesh(otherPlayerGeometry, otherPlayerMaterial);
       
-      // Set position from player data
-      otherPlayerMesh.position.set(player.x, player.y, player.z);
-      
-      // Store player data in userData
-      otherPlayerMesh.userData.playerId = player.id;
-      otherPlayerMesh.userData.playerName = player.name;
-      
-      // Add name label
-      createNameLabel(player.name, otherPlayerMesh);
-      
-      // Add to scene
-      scene.add(otherPlayerMesh);
-      
-      // Store in players map
-      playersRef.current.set(player.id, otherPlayerMesh);
-      
-      return otherPlayerMesh;
-    };
-    
-    // Handle initial players
-    socket.on('initPlayers', (players) => {
-      console.log('Received initial players:', players);
-      
-      // Add each existing player to the scene
-      players.forEach(player => {
+      // Handle new player joins
+      socket.on('playerJoined', (player) => {
+        console.log('Player joined:', player);
+        
+        // Play sound for new player joining
+        soundManager.play('playerJoin');
+        
+        // Add the new player to the scene if not exists
         if (!playersRef.current.has(player.id)) {
           createPlayerMesh(player);
-        }
-      });
-    });
-    
-    // Handle new player joins
-    socket.on('playerJoined', (player) => {
-      console.log('Player joined:', player);
-      
-      // Play sound for new player joining
-      soundManager.play('playerJoin');
-      
-      // Add the new player to the scene if not exists
-      if (!playersRef.current.has(player.id)) {
-        createPlayerMesh(player);
-      } else {
-        // Update existing player (might be a name change)
-        const existingMesh = playersRef.current.get(player.id);
-        if (existingMesh) {
-          existingMesh.position.set(player.x, player.y, player.z);
-          existingMesh.userData.playerName = player.name;
-        }
-      }
-    });
-    
-    // Handle player disconnects
-    socket.on('playerLeft', (playerId) => {
-      console.log('Player left:', playerId);
-      
-      // Remove player from scene
-      const playerMesh = playersRef.current.get(playerId);
-      if (playerMesh) {
-        scene.remove(playerMesh);
-        playersRef.current.delete(playerId);
-      }
-    });
-    
-    // Handle player movements
-    socket.on('playerMoved', (data) => {
-      // Update the position of the moved player
-      const playerMesh = playersRef.current.get(data.id);
-      if (playerMesh) {
-        // Ensure received positions are within bounds before applying
-        const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, data.x));
-        const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, data.z));
-        
-        // Calculate distance to new position
-        const currentPos = playerMesh.position;
-        const distanceToNewPos = Math.sqrt(
-          Math.pow(validX - currentPos.x, 2) + 
-          Math.pow(validZ - currentPos.z, 2)
-        );
-        
-        // If distance is very large, smooth the transition
-        const LARGE_MOVEMENT_THRESHOLD = 5; // Units
-        if (distanceToNewPos > LARGE_MOVEMENT_THRESHOLD) {
-          console.warn(`Large position change detected for player ${data.id}: ${distanceToNewPos.toFixed(2)} units`);
-          
-          // Instead of immediate jump, move halfway there
-          // This creates a smoother transition for large changes
-          const midX = currentPos.x + (validX - currentPos.x) * 0.5;
-          const midZ = currentPos.z + (validZ - currentPos.z) * 0.5;
-          
-          playerMesh.position.set(midX, data.y, midZ);
         } else {
-          // Normal update for reasonable distances
-          playerMesh.position.set(validX, data.y, validZ);
-        }
-      }
-    });
-    
-    // Handle item drops in the world
-    socket.on('itemDropped', (data) => {
-      console.log('Item dropped:', data);
-      
-      // Play drop sound
-      soundManager.play('itemDrop');
-      
-      // Create a mesh for the dropped item
-      const itemMesh = createItemMesh(data.itemType);
-      itemMesh.position.set(data.x, data.y, data.z);
-      
-      // Store the item ID in userData for raycasting identification
-      itemMesh.userData.dropId = data.dropId;
-      
-      // Add to scene
-      scene.add(itemMesh);
-      
-      // Store reference in worldItems
-      worldItemsRef.current.push({
-        ...data,
-        mesh: itemMesh
-      });
-    });
-    
-    // Handle item removals
-    socket.on('itemRemoved', (dropId) => {
-      console.log('Item removed:', dropId);
-      
-      // Find the item in our world items
-      const itemIndex = worldItemsRef.current.findIndex(item => item.dropId === dropId);
-      
-      if (itemIndex !== -1) {
-        const item = worldItemsRef.current[itemIndex];
-        
-        // Remove from scene if it has a mesh
-        if (item.mesh) {
-          scene.remove(item.mesh);
-          if (item.mesh.geometry) item.mesh.geometry.dispose();
-          if (Array.isArray(item.mesh.material)) {
-            item.mesh.material.forEach(material => material.dispose());
-          } else if (item.mesh.material) {
-            item.mesh.material.dispose();
+          // Update existing player (might be a name change)
+          const existingMesh = playersRef.current.get(player.id);
+          if (existingMesh) {
+            existingMesh.position.set(player.x, player.y, player.z);
+            existingMesh.userData.playerName = player.name;
           }
         }
+      });
+      
+      // Handle player disconnects
+      socket.on('playerLeft', (playerId) => {
+        console.log('Player left:', playerId);
         
-        // Remove from our list
-        worldItemsRef.current.splice(itemIndex, 1);
-      }
-    });
+        // Remove player from scene
+        const playerMesh = playersRef.current.get(playerId);
+        if (playerMesh) {
+          scene.remove(playerMesh);
+          playersRef.current.delete(playerId);
+        }
+      });
+      
+      // Handle player movements
+      socket.on('playerMoved', (data) => {
+        // Update the position of the moved player
+        const playerMesh = playersRef.current.get(data.id);
+        if (playerMesh) {
+          // Ensure received positions are within bounds before applying
+          const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, data.x));
+          const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, data.z));
+          
+          // Calculate distance to new position
+          const currentPos = playerMesh.position;
+          const distanceToNewPos = Math.sqrt(
+            Math.pow(validX - currentPos.x, 2) + 
+            Math.pow(validZ - currentPos.z, 2)
+          );
+          
+          // If distance is very large, smooth the transition
+          const LARGE_MOVEMENT_THRESHOLD = 5; // Units
+          if (distanceToNewPos > LARGE_MOVEMENT_THRESHOLD) {
+            console.warn(`Large position change detected for player ${data.id}: ${distanceToNewPos.toFixed(2)} units`);
+            
+            // Instead of immediate jump, move halfway there
+            // This creates a smoother transition for large changes
+            const midX = currentPos.x + (validX - currentPos.x) * 0.5;
+            const midZ = currentPos.z + (validZ - currentPos.z) * 0.5;
+            
+            playerMesh.position.set(midX, data.y, midZ);
+          } else {
+            // Normal update for reasonable distances
+            playerMesh.position.set(validX, data.y, validZ);
+          }
+        }
+      });
+      
+      // Handle item drops in the world
+      socket.on('itemDropped', (data) => {
+        console.log('Item dropped:', data);
+        
+        // Play drop sound
+        soundManager.play('itemDrop');
+        
+        // Create a mesh for the dropped item
+        const itemMesh = createItemMesh(data.itemType);
+        itemMesh.position.set(data.x, data.y, data.z);
+        
+        // Store the item ID in userData for raycasting identification
+        itemMesh.userData.dropId = data.dropId;
+        
+        // Add to scene
+        scene.add(itemMesh);
+        
+        // Store reference in worldItems
+        worldItemsRef.current.push({
+          ...data,
+          mesh: itemMesh
+        });
+      });
+      
+      // Handle item removals
+      socket.on('itemRemoved', (dropId) => {
+        console.log('Item removed:', dropId);
+        
+        // Find the item in our world items
+        const itemIndex = worldItemsRef.current.findIndex(item => item.dropId === dropId);
+        
+        if (itemIndex !== -1) {
+          const item = worldItemsRef.current[itemIndex];
+          
+          // Remove from scene if it has a mesh
+          if (item.mesh) {
+            scene.remove(item.mesh);
+            if (item.mesh.geometry) item.mesh.geometry.dispose();
+            if (Array.isArray(item.mesh.material)) {
+              item.mesh.material.forEach(material => material.dispose());
+            } else if (item.mesh.material) {
+              item.mesh.material.dispose();
+            }
+          }
+          
+          // Remove from our list
+          worldItemsRef.current.splice(itemIndex, 1);
+        }
+      });
+    };
+    
+    setupSocketListeners();
     
     // Handle keyboard input
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -563,7 +568,7 @@ const GameCanvas: React.FC = () => {
     };
     
     // Function to handle resource gathering
-    const gatherResource = (resourceId: string) => {
+    const gatherResource = async (resourceId: string) => {
       console.log('Gathering resource:', resourceId);
       
       // Set gathering flag to prevent spam
@@ -587,7 +592,10 @@ const GameCanvas: React.FC = () => {
       }
       
       // Send gather event to server
-      socket.emit('gather', resourceId);
+      const socket = await getSocket();
+      if (socket) {
+        socket.emit('gather', resourceId);
+      }
       
       // Visual feedback (could be improved)
       if (resourceNode && resourceNode.mesh) {
@@ -612,15 +620,18 @@ const GameCanvas: React.FC = () => {
       }
     };
     
-    // Function to handle item pickup
-    const pickupItem = (dropId: string) => {
+    // Function to pick up items
+    const pickupItem = async (dropId: string) => {
       console.log('Picking up item:', dropId);
       
-      // Play pickup sound
+      // Play sound
       soundManager.play('itemPickup');
       
       // Send pickup event to server
-      socket.emit('pickup', dropId);
+      const socket = await getSocket();
+      if (socket) {
+        socket.emit('pickup', dropId);
+      }
     };
     
     // Function to update player position based on key presses
@@ -758,8 +769,8 @@ const GameCanvas: React.FC = () => {
       }
     };
     
-    // Function to send position updates to server
-    const sendPositionUpdate = () => {
+    // Send position to server at throttled rate
+    const sendPositionUpdate = async () => {
       if (!playerRef.current || !isConnected || !movementChanged.current) return;
       
       const now = Date.now();
@@ -787,7 +798,10 @@ const GameCanvas: React.FC = () => {
           };
           
           // Send position to server
-          socket.emit('playerMove', validatedPosition);
+          const socket = await getSocket();
+          if (socket) {
+            socket.emit('playerMove', validatedPosition);
+          }
           
           // Update last sent position and time with validated coordinates
           lastSentPosition.current = { ...validatedPosition };
@@ -831,7 +845,7 @@ const GameCanvas: React.FC = () => {
     };
     animate();
     
-    // Cleanup on unmount
+    // Clean up on unmount
     return () => {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', handleKeyDown);
@@ -839,12 +853,19 @@ const GameCanvas: React.FC = () => {
       renderer.domElement.removeEventListener('click', handleMouseClick);
       
       // Remove socket event listeners
-      socket.off('initPlayers');
-      socket.off('playerJoined');
-      socket.off('playerLeft');
-      socket.off('playerMoved');
-      socket.off('itemDropped');
-      socket.off('itemRemoved');
+      const cleanup = async () => {
+        const socket = await getSocket();
+        if (socket) {
+          socket.off('initPlayers');
+          socket.off('playerJoined');
+          socket.off('playerLeft');
+          socket.off('playerMoved');
+          socket.off('itemDropped');
+          socket.off('itemRemoved');
+        }
+      };
+      
+      cleanup();
       
       // Dispose of geometries and materials
       groundGeometry.dispose();
