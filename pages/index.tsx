@@ -26,8 +26,20 @@ const Home: NextPage = () => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    // Initialize the socket server by making a fetch request to the socket API endpoint
+    const initializeSocket = async () => {
+      try {
+        await fetch('/api/socket');
+        console.log('Socket server initialized');
+      } catch (error) {
+        console.error('Failed to initialize socket server:', error);
+      }
+    };
+
     // Simulate loading process
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
+      // Initialize socket connection before showing the game
+      await initializeSocket();
       setIsLoading(false);
     }, 1000);
 
