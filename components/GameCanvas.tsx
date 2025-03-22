@@ -363,7 +363,11 @@ const GameCanvas: React.FC = () => {
       // Update the position of the moved player
       const playerMesh = playersRef.current.get(data.id);
       if (playerMesh) {
-        playerMesh.position.set(data.x, data.y, data.z);
+        // Ensure received positions are within bounds before applying
+        const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, data.x));
+        const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, data.z));
+        
+        playerMesh.position.set(validX, data.y, validZ);
       }
     });
     

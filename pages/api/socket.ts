@@ -34,6 +34,14 @@ interface ResourceNode {
   z: number;
 }
 
+// Define world boundaries
+const WORLD_BOUNDS = {
+  minX: -50,
+  maxX: 50,
+  minZ: -50,
+  maxZ: 50
+};
+
 // Main socket handling
 const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
   // Skip if socket is already initialized
@@ -81,9 +89,10 @@ const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
     const newPlayer: Player = {
       id: socket.id,
       name: `Player${socket.id.substring(0, 4)}`,
-      x: 0,
+      // Set initial position within valid bounds
+      x: Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, 0)),
       y: 1, // Standing on ground
-      z: 0,
+      z: Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, 0)),
       inventory: [] // Initialize with empty inventory
     };
     
@@ -104,14 +113,21 @@ const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
     socket.on('playerMove', (position) => {
       // Update player position in server state
       if (players[socket.id]) {
-        players[socket.id].x = position.x;
+        // Ensure position is within world boundaries
+        const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, position.x));
+        const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, position.z));
+        
+        // Update player position with validated coordinates
+        players[socket.id].x = validX;
         players[socket.id].y = position.y;
-        players[socket.id].z = position.z;
+        players[socket.id].z = validZ;
         
         // Broadcast new position to all other clients
         socket.broadcast.emit('playerMoved', {
           id: socket.id,
-          ...position
+          x: validX,
+          y: position.y,
+          z: validZ
         });
       }
     });
