@@ -14,19 +14,31 @@ const ChatPanel: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
-    const socket = getSocket();
+    let socketInstance: any = null;
     
-    // Listen for chat messages
-    socket.on('chatMessage', (message: ChatMessage) => {
-      setMessages(prevMessages => [...prevMessages, message]);
+    // Connect to socket
+    async function setupSocket() {
+      const socket = await getSocket();
+      if (!socket) return;
       
-      // Play sound for new message
-      soundManager.play('chatMessage');
-    });
+      socketInstance = socket;
+      
+      // Listen for chat messages
+      socket.on('chatMessage', (message: ChatMessage) => {
+        setMessages(prevMessages => [...prevMessages, message]);
+        
+        // Play sound for new message
+        soundManager.play('chatMessage');
+      });
+    }
+    
+    setupSocket();
     
     // Clean up on unmount
     return () => {
-      socket.off('chatMessage');
+      if (socketInstance) {
+        socketInstance.off('chatMessage');
+      }
     };
   }, []);
   
@@ -37,12 +49,14 @@ const ChatPanel: React.FC = () => {
     }
   }, [messages]);
   
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (inputValue.trim() === '') return;
     
-    const socket = getSocket();
+    const socket = await getSocket();
+    if (!socket) return;
+    
     socket.emit('chat', inputValue);
     
     // Clear input

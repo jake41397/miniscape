@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer';
-import { initializeSocket, getSocket } from '../game/network/socket';
+import { initializeSocket, disconnectSocket, getSocket } from '../game/network/socket';
 import { Player } from '../types/player';
 import ChatPanel from './ui/ChatPanel';
 import InventoryPanel from './ui/InventoryPanel';
@@ -76,27 +76,30 @@ const GameCanvas: React.FC = () => {
   
   useEffect(() => {
     // Init socket on component mount
-    const socket = initializeSocket();
-    
-    // Track socket connection state
-    socket.on('connect', () => {
-      setIsConnected(true);
+    async function connectSocket() {
+      const socket = await initializeSocket();
       
-      // Ask for player name
-      const name = prompt('Enter your name:') || `Player${socket.id?.substring(0, 4)}`;
-      setPlayerName(name);
+      // If no socket (not authenticated), redirect to login
+      if (!socket) {
+        window.location.href = '/auth/signin';
+        return;
+      }
       
-      // Send join message with name
-      socket.emit('join', name);
-    });
+      // Track socket connection state
+      socket.on('connect', () => {
+        setIsConnected(true);
+      });
+      
+      socket.on('disconnect', () => {
+        setIsConnected(false);
+      });
+    }
     
-    socket.on('disconnect', () => {
-      setIsConnected(false);
-    });
+    connectSocket();
     
     return () => {
       // Disconnect socket on unmount
-      socket.disconnect();
+      disconnectSocket();
     };
   }, []);
   

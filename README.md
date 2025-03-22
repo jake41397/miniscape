@@ -27,6 +27,11 @@ MiniScape is a simple multiplayer browser game inspired by RuneScape, built with
   - Zone indicator
   - Sound effects
 
+- **Authentication & Persistence**
+  - Google SSO (Single Sign-On) authentication
+  - Database-backed player data and game state
+  - Persistent inventory and player positions
+
 ## Technologies Used
 
 - **Frontend**
@@ -38,6 +43,109 @@ MiniScape is a simple multiplayer browser game inspired by RuneScape, built with
 - **Backend**
   - Next.js API routes
   - Socket.IO (real-time communication)
+  - Supabase (PostgreSQL database and authentication)
+
+## Environment Setup
+
+1. Create a `.env` file in the root directory with the following variables:
+   ```
+   # Server Configuration
+   PORT=4000
+   NODE_ENV=development
+
+   # Frontend URL
+   FRONTEND_URL=http://localhost:3000
+
+   # Supabase Configuration
+   SUPABASE_URL=https://your-project-id.supabase.co
+   SUPABASE_KEY=your-supabase-anon-key
+   SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+
+   # JWT Configuration
+   JWT_SECRET=your-jwt-secret-key
+   JWT_EXPIRY=7d
+
+   # App Version
+   APP_VERSION=1.0.0
+   ```
+
+2. Replace the Supabase configuration values with your actual Supabase project details.
+
+3. For production, make sure to use a strong, secure JWT secret and consider environment-specific configuration.
+
+## Project Structure
+
+The project is now organized with separate frontend and backend:
+
+```
+/
+├── frontend/       # Next.js frontend code
+├── backend/        # Express.js backend server
+│   ├── src/
+│   │   ├── controllers/   # Business logic
+│   │   ├── models/        # Database models
+│   │   ├── routes/        # API routes
+│   │   ├── middleware/    # Custom middleware
+│   │   ├── config/        # Configuration files
+│   │   ├── utils/         # Utility functions
+│   │   └── index.js       # Server entry point
+│   └── logs/             # Server logs
+├── components/    # Shared React components
+├── pages/         # Next.js pages
+├── lib/           # Shared library code
+├── styles/        # CSS styles
+└── public/        # Static assets
+```
+
+## Getting Started
+
+1. Install dependencies:
+   ```bash
+   # Install root dependencies
+   npm install
+   
+   # Install backend dependencies
+   cd backend
+   npm install
+   
+   # Install frontend dependencies
+   cd ../frontend
+   npm install
+   ```
+
+2. Start the development servers:
+   ```bash
+   # Start backend (from the backend directory)
+   npm run dev
+   
+   # Start frontend (from the frontend directory)
+   npm run dev
+   ```
+
+3. Access the application:
+   - Frontend: http://localhost:3000
+   - Backend API: http://localhost:4000
+
+## Logging
+
+The backend uses a custom logger that writes to both the console and log files:
+
+- Log files are stored in `backend/logs/` directory
+- Log files are named with the format `server_YYYY-MM-DD.log`
+- Four log levels are available: DEBUG, INFO, WARN, and ERROR
+- In development mode, all log levels are recorded
+- In production mode, DEBUG logs are omitted
+
+To use the logger in your code:
+
+```javascript
+const logger = require('./utils/logger');
+
+logger.info('This is an info message');
+logger.warn('This is a warning message');
+logger.error('This is an error message', error, { additionalData: 'value' });
+logger.debug('This is a debug message'); // Only logged in development
+```
 
 ## Installation
 
@@ -52,12 +160,22 @@ cd MiniScape
 npm install
 ```
 
-3. Run the development server:
+3. Set up environment variables:
+   - Create a `.env.local` file in the root directory based on `.env.local.example`
+   - Set up a Supabase project and add your credentials to the file
+   - Set up Google OAuth credentials and add them to the file
+
+4. Apply database migrations:
+```bash
+npm run migrate
+```
+
+5. Run the development server:
 ```bash
 npm run dev
 ```
 
-4. Open your browser and navigate to:
+6. Open your browser and navigate to:
 ```
 http://localhost:3000
 ```
@@ -65,7 +183,7 @@ http://localhost:3000
 ## How to Play
 
 1. **Getting Started**
-   - Enter your name when prompted upon entering the game
+   - Sign in with your Google account
    - Move around using WASD or arrow keys
 
 2. **Resource Gathering**
@@ -95,28 +213,21 @@ http://localhost:3000
 - **Chat**: Type in chat box and press Enter
 - **Sound**: Toggle sound on/off with the sound button
 
-## Project Structure
+## Database Schema
 
-```
-MiniScape/
-├── components/         # React components
-│   ├── GameCanvas.tsx  # Main game canvas with Three.js
-│   └── ui/             # UI components
-│       ├── ChatPanel.tsx
-│       └── InventoryPanel.tsx
-├── game/               # Game logic
-│   ├── audio/          # Sound manager
-│   ├── network/        # Socket connection
-│   └── world/          # World objects and resources
-├── pages/              # Next.js pages
-│   ├── api/            # API routes
-│   │   └── socket.ts   # Socket.IO server
-│   └── index.tsx       # Main game page
-├── public/             # Static assets
-│   └── sounds/         # Sound effects
-├── styles/             # CSS styles
-└── types/              # TypeScript type definitions
-```
+The game uses a PostgreSQL database (via Supabase) with the following tables:
+
+- **profiles**: User profile information
+- **player_data**: Game state for each player (position, inventory)
+- **world_items**: Persistent items dropped in the world
+- **resource_nodes**: Resource nodes in the game world
+
+## Setting up Supabase
+
+1. Create a new Supabase project at [supabase.com](https://supabase.com)
+2. Create the required tables using the migration scripts in the `migrations` folder
+3. Configure Google OAuth in the Supabase Authentication settings
+4. Add your Supabase URL and keys to the `.env.local` file
 
 ## Credits
 

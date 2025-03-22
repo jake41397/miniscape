@@ -1,6 +1,7 @@
 // Player interface
 export interface Player {
   id: string;
+  userId?: string; // Supabase user ID
   name: string;
   x: number;
   y: number;

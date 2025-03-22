@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 import { Player, Item } from '../../types/player';
+import { supabase } from '../../lib/supabase';
 
 // Define our socket events
 export interface ServerToClientEvents {
@@ -11,10 +12,11 @@ export interface ServerToClientEvents {
   inventoryUpdate: (inventory: Item[]) => void;
   itemDropped: (drop: { dropId: string, itemType: string, x: number, y: number, z: number }) => void;
   itemRemoved: (dropId: string) => void;
+  initWorldItems: (items: { dropId: string, itemType: string, x: number, y: number, z: number }[]) => void;
+  initResourceNodes: (nodes: { id: string, type: string, x: number, y: number, z: number }[]) => void;
 }
 
 export interface ClientToServerEvents {
-  join: (name: string) => void;
   playerMove: (position: { x: number, y: number, z: number }) => void;
   chat: (text: string) => void;
   dropItem: (item: { itemId: string, itemType: string }) => void;
@@ -26,12 +28,25 @@ export interface ClientToServerEvents {
 let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
 
 // Initialize socket connection
-export const initializeSocket = () => {
+export const initializeSocket = async () => {
   if (!socket) {
-    // Connect to the socket server
+    // Get the session token for authentication
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    
+    // Don't connect if not authenticated
+    if (!token) {
+      console.warn('No auth token available, not connecting to socket server');
+      return null;
+    }
+    
+    // Connect to the socket server with auth token
     socket = io('/api/socket', {
       path: '/api/socket',
-      transports: ['websocket']
+      transports: ['websocket'],
+      auth: {
+        token
+      }
     });
 
     // Log socket connection events
@@ -52,9 +67,9 @@ export const initializeSocket = () => {
 };
 
 // Get the socket instance
-export const getSocket = () => {
+export const getSocket = async () => {
   if (!socket) {
-    return initializeSocket();
+    return await initializeSocket();
   }
   return socket;
 };

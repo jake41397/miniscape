@@ -2,7 +2,13 @@ import { Server as SocketIOServer } from 'socket.io';
 import type { Server as HTTPServer } from 'http';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { Socket as NetSocket } from 'net';
+import { createClient } from '@supabase/supabase-js';
 import { Player, Item, ItemType } from '../../types/player';
+
+// Initialize Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 interface SocketServer extends HTTPServer {
   io?: SocketIOServer | null;
@@ -32,6 +38,7 @@ interface ResourceNode {
   x: number;
   y: number;
   z: number;
+  respawnTime: number;
 }
 
 // Define world boundaries
@@ -63,100 +70,185 @@ const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
   // Store connected players
   const players: Record<string, Player> = {};
   
-  // Store world items (dropped by players)
-  const worldItems: WorldItem[] = [];
+  // Store world items (dropped by players) - these will be loaded from DB
+  let worldItems: WorldItem[] = [];
   
-  // Create some resource nodes
-  const resourceNodes: ResourceNode[] = [
-    // Trees in Lumbridge area
-    { id: 'tree-1', type: 'tree', x: 10, y: 1, z: 10 },
-    { id: 'tree-2', type: 'tree', x: 15, y: 1, z: 15 },
-    { id: 'tree-3', type: 'tree', x: 20, y: 1, z: 10 },
+  // Store resource nodes - these will be loaded from DB
+  let resourceNodes: ResourceNode[] = [];
+
+  // Load world items from DB
+  try {
+    const { data: dbWorldItems, error } = await supabase
+      .from('world_items')
+      .select('*');
     
-    // Rocks in Barbarian Village
-    { id: 'rock-1', type: 'rock', x: -20, y: 1, z: -20 },
-    { id: 'rock-2', type: 'rock', x: -25, y: 1, z: -15 },
+    if (error) {
+      console.error('Error loading world items:', error);
+    } else if (dbWorldItems) {
+      worldItems = dbWorldItems.map(item => ({
+        dropId: item.id,
+        itemType: item.item_type,
+        x: item.x,
+        y: item.y,
+        z: item.z
+      }));
+      console.log(`Loaded ${worldItems.length} world items from database`);
+    }
+  } catch (err) {
+    console.error('Failed to load world items:', err);
+  }
+
+  // Load resource nodes from DB
+  try {
+    const { data: dbResourceNodes, error } = await supabase
+      .from('resource_nodes')
+      .select('*');
     
-    // Fishing spots
-    { id: 'fish-1', type: 'fish', x: 30, y: 1, z: -30 },
-  ];
+    if (error) {
+      console.error('Error loading resource nodes:', error);
+    } else if (dbResourceNodes) {
+      resourceNodes = dbResourceNodes.map(node => ({
+        id: node.id,
+        type: node.node_type as 'tree' | 'rock' | 'fish',
+        x: node.x,
+        y: node.y,
+        z: node.z,
+        respawnTime: node.respawn_time
+      }));
+      console.log(`Loaded ${resourceNodes.length} resource nodes from database`);
+    }
+  } catch (err) {
+    console.error('Failed to load resource nodes:', err);
+  }
 
   // Socket event handlers
-  io.on('connection', (socket) => {
+  io.on('connection', async (socket) => {
     console.log(`New connection: ${socket.id}`);
     
-    // Create placeholder player
-    const newPlayer: Player = {
-      id: socket.id,
-      name: `Player${socket.id.substring(0, 4)}`,
-      // Set initial position within valid bounds
-      x: Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, 0)),
-      y: 1, // Standing on ground
-      z: Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, 0)),
-      inventory: [] // Initialize with empty inventory
-    };
+    // Require authentication token
+    const token = socket.handshake.auth.token;
+    if (!token) {
+      console.log(`Socket ${socket.id} has no auth token, disconnecting`);
+      socket.disconnect();
+      return;
+    }
     
-    // Store the player in our players object
-    players[socket.id] = newPlayer;
-    
-    // Tell all other clients about the new player
-    socket.broadcast.emit('playerJoined', newPlayer);
-    
-    // Send the new player the list of existing players
-    const existingPlayers = Object.values(players).filter(p => p.id !== socket.id);
-    socket.emit('initPlayers', existingPlayers);
-    
-    // Send initial inventory (empty for new player)
-    socket.emit('inventoryUpdate', players[socket.id].inventory || []);
+    // Verify the token and get user data
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      
+      if (error || !user) {
+        console.log(`Invalid auth token from socket ${socket.id}, disconnecting`);
+        socket.disconnect();
+        return;
+      }
+      
+      // Load player data from database
+      const { data: playerData, error: playerError } = await supabase
+        .from('player_data')
+        .select('*')
+        .eq('user_id', user.id)
+        .single();
+        
+      if (playerError && playerError.code !== 'PGRST116') { // Not found
+        console.error(`Error loading player data for ${user.id}:`, playerError);
+        socket.disconnect();
+        return;
+      }
+      
+      // Get user profile
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', user.id)
+        .single();
+        
+      if (profileError) {
+        console.error(`Error loading profile for ${user.id}:`, profileError);
+        socket.disconnect();
+        return;
+      }
+      
+      // Create player object
+      const newPlayer: Player = {
+        id: socket.id,
+        userId: user.id,
+        name: profile.username,
+        x: playerData ? playerData.x : 0,
+        y: playerData ? playerData.y : 1,
+        z: playerData ? playerData.z : 0,
+        inventory: playerData ? JSON.parse(playerData.inventory) : []
+      };
+      
+      // Store the player in our players object
+      players[socket.id] = newPlayer;
+      
+      // Tell all other clients about the new player
+      socket.broadcast.emit('playerJoined', newPlayer);
+      
+      // Send the new player the list of existing players
+      const existingPlayers = Object.values(players).filter(p => p.id !== socket.id);
+      socket.emit('initPlayers', existingPlayers);
+      
+      // Send world items
+      socket.emit('initWorldItems', worldItems);
+      
+      // Send resource nodes
+      socket.emit('initResourceNodes', resourceNodes);
+      
+      // Send inventory
+      socket.emit('inventoryUpdate', newPlayer.inventory || []);
+    } catch (authError) {
+      console.error(`Authentication error for socket ${socket.id}:`, authError);
+      socket.disconnect();
+      return;
+    }
     
     // Handle player movement
-    socket.on('playerMove', (position) => {
+    socket.on('playerMove', async (position) => {
       // Update player position in server state
       if (players[socket.id]) {
         // Ensure position is within world boundaries
         const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, position.x));
         const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, position.z));
         
-        // Calculate distance from previous position to detect anomalous movement
-        const prevPos = players[socket.id];
-        const moveDistance = Math.sqrt(
-          Math.pow(validX - prevPos.x, 2) + 
-          Math.pow(validZ - prevPos.z, 2)
-        );
-        
-        // If distance is suspiciously large, apply a sanity check
-        const SUSPICIOUS_DISTANCE = 10; // Units
-        let finalX = validX;
-        let finalZ = validZ;
-        
-        if (moveDistance > SUSPICIOUS_DISTANCE) {
-          console.warn(`Large movement detected for player ${socket.id}: ${moveDistance.toFixed(2)} units`);
-          
-          // Calculate direction vector
-          const dirX = moveDistance > 0 ? (validX - prevPos.x) / moveDistance : 0;
-          const dirZ = moveDistance > 0 ? (validZ - prevPos.z) / moveDistance : 0;
-          
-          // Limit movement to a reasonable distance
-          finalX = prevPos.x + (dirX * SUSPICIOUS_DISTANCE);
-          finalZ = prevPos.z + (dirZ * SUSPICIOUS_DISTANCE);
-          
-          // Re-apply boundary constraints
-          finalX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, finalX));
-          finalZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, finalZ));
-        }
-        
         // Update player position with validated coordinates
-        players[socket.id].x = finalX;
+        players[socket.id].x = validX;
         players[socket.id].y = position.y;
-        players[socket.id].z = finalZ;
+        players[socket.id].z = validZ;
         
         // Broadcast new position to all other clients
         socket.broadcast.emit('playerMoved', {
           id: socket.id,
-          x: finalX,
+          x: validX,
           y: position.y,
-          z: finalZ
+          z: validZ
         });
+        
+        // Update position in database (throttled)
+        // We don't want to update the database on every movement event
+        // so we'll use a debounce mechanism with socket data
+        const now = Date.now();
+        const lastUpdate = socket.data.lastPositionUpdate || 0;
+        if (now - lastUpdate > 5000) { // Update position every 5 seconds max
+          socket.data.lastPositionUpdate = now;
+          
+          try {
+            if (players[socket.id].userId) {
+              await supabase
+                .from('player_data')
+                .update({ 
+                  x: validX, 
+                  y: position.y, 
+                  z: validZ,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('user_id', players[socket.id].userId);
+            }
+          } catch (error) {
+            console.error('Failed to update player position in DB:', error);
+          }
+        }
       }
     });
     
@@ -166,17 +258,8 @@ const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
       io.emit('chatMessage', { name: playerName, text });
     });
     
-    // Custom join with name
-    socket.on('join', (name) => {
-      if (players[socket.id]) {
-        players[socket.id].name = name;
-        // Inform others of name change
-        socket.broadcast.emit('playerJoined', players[socket.id]);
-      }
-    });
-    
     // Handle resource gathering
-    socket.on('gather', (resourceId) => {
+    socket.on('gather', async (resourceId) => {
       // Find the resource node
       const resource = resourceNodes.find(node => node.id === resourceId);
       
@@ -213,11 +296,26 @@ const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
         
         // Send updated inventory to the player
         socket.emit('inventoryUpdate', players[socket.id].inventory);
+        
+        // Update inventory in database
+        try {
+          if (players[socket.id].userId) {
+            await supabase
+              .from('player_data')
+              .update({ 
+                inventory: JSON.stringify(players[socket.id].inventory),
+                updated_at: new Date().toISOString()
+              })
+              .eq('user_id', players[socket.id].userId);
+          }
+        } catch (error) {
+          console.error('Failed to update inventory in DB:', error);
+        }
       }
     });
     
     // Handle item dropping
-    socket.on('dropItem', (item) => {
+    socket.on('dropItem', async (item) => {
       const { itemId, itemType } = item;
       const player = players[socket.id];
       
@@ -246,12 +344,39 @@ const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
           
           // Broadcast the dropped item to all clients
           io.emit('itemDropped', worldItem);
+          
+          // Save to database
+          try {
+            // Update inventory in player_data
+            if (player.userId) {
+              await supabase
+                .from('player_data')
+                .update({
+                  inventory: JSON.stringify(player.inventory),
+                  updated_at: new Date().toISOString()
+                })
+                .eq('user_id', player.userId);
+            
+              // Add world item
+              await supabase
+                .from('world_items')
+                .insert({
+                  id: worldItem.dropId,
+                  item_type: worldItem.itemType,
+                  x: worldItem.x,
+                  y: worldItem.y,
+                  z: worldItem.z
+                });
+            }
+          } catch (error) {
+            console.error('Failed to save dropped item to DB:', error);
+          }
         }
       }
     });
     
     // Handle item pickup
-    socket.on('pickup', (dropId) => {
+    socket.on('pickup', async (dropId) => {
       const player = players[socket.id];
       const itemIndex = worldItems.findIndex(item => item.dropId === dropId);
       
@@ -286,15 +411,58 @@ const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
           
           // Tell everyone the item is gone
           io.emit('itemRemoved', dropId);
+          
+          // Update database
+          try {
+            // Remove world item
+            await supabase
+              .from('world_items')
+              .delete()
+              .eq('id', dropId);
+              
+            // Update inventory
+            if (player.userId) {
+              await supabase
+                .from('player_data')
+                .update({
+                  inventory: JSON.stringify(player.inventory),
+                  updated_at: new Date().toISOString()
+                })
+                .eq('user_id', player.userId);
+            }
+          } catch (error) {
+            console.error('Failed to update DB after item pickup:', error);
+          }
         }
       }
     });
     
     // Handle player disconnection
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       console.log(`Player disconnected: ${socket.id}`);
+      
+      // Save final player state to database
+      try {
+        const player = players[socket.id];
+        if (player && player.userId) {
+          await supabase
+            .from('player_data')
+            .update({
+              x: player.x,
+              y: player.y,
+              z: player.z,
+              inventory: JSON.stringify(player.inventory || []),
+              updated_at: new Date().toISOString()
+            })
+            .eq('user_id', player.userId);
+        }
+      } catch (error) {
+        console.error('Failed to save player state on disconnect:', error);
+      }
+      
       // Remove player from our players object
       delete players[socket.id];
+      
       // Tell everyone this player left
       io.emit('playerLeft', socket.id);
     });
