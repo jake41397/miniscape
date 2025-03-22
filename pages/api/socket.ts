@@ -117,17 +117,45 @@ const socket = async (req: NextApiRequest, res: NextApiResponseWithSocket) => {
         const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, position.x));
         const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, position.z));
         
+        // Calculate distance from previous position to detect anomalous movement
+        const prevPos = players[socket.id];
+        const moveDistance = Math.sqrt(
+          Math.pow(validX - prevPos.x, 2) + 
+          Math.pow(validZ - prevPos.z, 2)
+        );
+        
+        // If distance is suspiciously large, apply a sanity check
+        const SUSPICIOUS_DISTANCE = 10; // Units
+        let finalX = validX;
+        let finalZ = validZ;
+        
+        if (moveDistance > SUSPICIOUS_DISTANCE) {
+          console.warn(`Large movement detected for player ${socket.id}: ${moveDistance.toFixed(2)} units`);
+          
+          // Calculate direction vector
+          const dirX = moveDistance > 0 ? (validX - prevPos.x) / moveDistance : 0;
+          const dirZ = moveDistance > 0 ? (validZ - prevPos.z) / moveDistance : 0;
+          
+          // Limit movement to a reasonable distance
+          finalX = prevPos.x + (dirX * SUSPICIOUS_DISTANCE);
+          finalZ = prevPos.z + (dirZ * SUSPICIOUS_DISTANCE);
+          
+          // Re-apply boundary constraints
+          finalX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, finalX));
+          finalZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, finalZ));
+        }
+        
         // Update player position with validated coordinates
-        players[socket.id].x = validX;
+        players[socket.id].x = finalX;
         players[socket.id].y = position.y;
-        players[socket.id].z = validZ;
+        players[socket.id].z = finalZ;
         
         // Broadcast new position to all other clients
         socket.broadcast.emit('playerMoved', {
           id: socket.id,
-          x: validX,
+          x: finalX,
           y: position.y,
-          z: validZ
+          z: finalZ
         });
       }
     });

@@ -60,6 +60,11 @@ const GameCanvas: React.FC = () => {
   // Track if player movement has changed since last send
   const movementChanged = useRef(false);
   
+  // Add position history tracking to detect anomalous movements
+  const positionHistory = useRef<Array<{x: number, z: number, time: number}>>([]);
+  const MAX_HISTORY_LENGTH = 5;
+  const ANOMALOUS_SPEED_THRESHOLD = 1.0; // Units per second
+  
   // Keep track of gathering cooldown
   const isGathering = useRef(false);
   
@@ -179,6 +184,58 @@ const GameCanvas: React.FC = () => {
     // Create a simple grid for reference
     const gridHelper = new THREE.GridHelper(100, 20);
     scene.add(gridHelper);
+    
+    // Add boundary visualizers for debugging
+    const createBoundaryMarkers = () => {
+      // Use a bright color for visibility
+      const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+      const markerGeometry = new THREE.SphereGeometry(0.5);
+      
+      // Place markers at corners and midpoints of the world boundaries
+      const boundaryPoints = [
+        // Corners
+        { x: WORLD_BOUNDS.minX, z: WORLD_BOUNDS.minZ },
+        { x: WORLD_BOUNDS.minX, z: WORLD_BOUNDS.maxZ },
+        { x: WORLD_BOUNDS.maxX, z: WORLD_BOUNDS.minZ },
+        { x: WORLD_BOUNDS.maxX, z: WORLD_BOUNDS.maxZ },
+        // Midpoints of edges
+        { x: WORLD_BOUNDS.minX, z: 0 },
+        { x: WORLD_BOUNDS.maxX, z: 0 },
+        { x: 0, z: WORLD_BOUNDS.minZ },
+        { x: 0, z: WORLD_BOUNDS.maxZ },
+      ];
+      
+      // Create and add markers to scene
+      boundaryPoints.forEach(point => {
+        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        marker.position.set(point.x, 1, point.z); // Position at y=1 to be visible above ground
+        scene.add(marker);
+      });
+      
+      // Create visible lines along the boundaries
+      const lineGeometry = new THREE.BufferGeometry();
+      const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
+      
+      // Define the outline of the world boundary box (on ground level)
+      const linePoints = [
+        // Bottom square
+        new THREE.Vector3(WORLD_BOUNDS.minX, 0.1, WORLD_BOUNDS.minZ),
+        new THREE.Vector3(WORLD_BOUNDS.maxX, 0.1, WORLD_BOUNDS.minZ),
+        new THREE.Vector3(WORLD_BOUNDS.maxX, 0.1, WORLD_BOUNDS.maxZ),
+        new THREE.Vector3(WORLD_BOUNDS.minX, 0.1, WORLD_BOUNDS.maxZ),
+        new THREE.Vector3(WORLD_BOUNDS.minX, 0.1, WORLD_BOUNDS.minZ)
+      ];
+      
+      lineGeometry.setFromPoints(linePoints);
+      const boundaryLine = new THREE.Line(lineGeometry, lineMaterial);
+      scene.add(boundaryLine);
+      
+      console.log('Boundary markers created at world bounds', WORLD_BOUNDS);
+    };
+    
+    // Enable boundary markers for debugging
+    // Comment out in production if not needed
+    createBoundaryMarkers();
     
     // Create player avatar (a simple box for now)
     const playerGeometry = new THREE.BoxGeometry(1, 2, 1);
@@ -367,7 +424,28 @@ const GameCanvas: React.FC = () => {
         const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, data.x));
         const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, data.z));
         
-        playerMesh.position.set(validX, data.y, validZ);
+        // Calculate distance to new position
+        const currentPos = playerMesh.position;
+        const distanceToNewPos = Math.sqrt(
+          Math.pow(validX - currentPos.x, 2) + 
+          Math.pow(validZ - currentPos.z, 2)
+        );
+        
+        // If distance is very large, smooth the transition
+        const LARGE_MOVEMENT_THRESHOLD = 5; // Units
+        if (distanceToNewPos > LARGE_MOVEMENT_THRESHOLD) {
+          console.warn(`Large position change detected for player ${data.id}: ${distanceToNewPos.toFixed(2)} units`);
+          
+          // Instead of immediate jump, move halfway there
+          // This creates a smoother transition for large changes
+          const midX = currentPos.x + (validX - currentPos.x) * 0.5;
+          const midZ = currentPos.z + (validZ - currentPos.z) * 0.5;
+          
+          playerMesh.position.set(midX, data.y, midZ);
+        } else {
+          // Normal update for reasonable distances
+          playerMesh.position.set(validX, data.y, validZ);
+        }
       }
     });
     
@@ -572,19 +650,88 @@ const GameCanvas: React.FC = () => {
       
       // Only update if there's actual movement
       if (moveX !== 0 || moveZ !== 0) {
-        // Apply movement with bounds checking
-        const newX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, player.position.x + moveX));
-        const newZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, player.position.z + moveZ));
+        // Get delta time for frame-rate independent movement
+        const delta = clockRef.current.getDelta();
+        // Apply frame-rate independent movement with bounds checking
+        const newX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, player.position.x + (moveX * delta * 60))); // Normalize to 60fps
+        const newZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, player.position.z + (moveZ * delta * 60)));
         
-        // Update player position
-        player.position.x = newX;
-        player.position.z = newZ;
+        // Only set position and flag changes if there's an actual difference
+        if (Math.abs(newX - player.position.x) > 0.0001 || Math.abs(newZ - player.position.z) > 0.0001) {
+          // Update player position
+          player.position.x = newX;
+          player.position.z = newZ;
+          
+          // Flag that movement has changed
+          movementChanged.current = true;
+          
+          // Update current zone based on position
+          updatePlayerZone(newX, newZ);
+          
+          // Add to position history for anomaly detection
+          const now = Date.now();
+          positionHistory.current.push({x: newX, z: newZ, time: now});
+          if (positionHistory.current.length > MAX_HISTORY_LENGTH) {
+            positionHistory.current.shift();
+          }
+          
+          // Check for anomalous speed if we have enough history
+          if (positionHistory.current.length >= 2) {
+            detectAnomalousMovement();
+          }
+        }
+      }
+    };
+    
+    // Function to detect anomalous movement (sudden jumps)
+    const detectAnomalousMovement = () => {
+      const history = positionHistory.current;
+      const latest = history[history.length - 1];
+      const previous = history[history.length - 2];
+      
+      // Calculate distance and time between points
+      const distance = Math.sqrt(
+        Math.pow(latest.x - previous.x, 2) + 
+        Math.pow(latest.z - previous.z, 2)
+      );
+      const timeDiff = (latest.time - previous.time) / 1000; // Convert to seconds
+      
+      if (timeDiff > 0) {
+        const speed = distance / timeDiff;
         
-        // Flag that movement has changed
-        movementChanged.current = true;
-        
-        // Update current zone based on position
-        updatePlayerZone(newX, newZ);
+        // If speed exceeds threshold, adjust position
+        if (speed > ANOMALOUS_SPEED_THRESHOLD && playerRef.current) {
+          console.warn(`Anomalous speed detected: ${speed.toFixed(2)} units/sec`);
+          
+          // Instead of immediate position correction, apply a smooth transition
+          // For now, just cap the movement to a reasonable distance
+          const maxAllowedDistance = MOVEMENT_SPEED * 2; // Allow some acceleration but cap it
+          
+          if (distance > maxAllowedDistance && playerRef.current) {
+            // Calculate direction vector
+            const dirX = (latest.x - previous.x) / distance;
+            const dirZ = (latest.z - previous.z) / distance;
+            
+            // Limit the movement to max allowed distance
+            const cappedX = previous.x + (dirX * maxAllowedDistance);
+            const cappedZ = previous.z + (dirZ * maxAllowedDistance);
+            
+            // Apply clamping again to ensure we're within bounds
+            const boundedX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, cappedX));
+            const boundedZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, cappedZ));
+            
+            // Update position
+            playerRef.current.position.x = boundedX;
+            playerRef.current.position.z = boundedZ;
+            
+            // Update last position in history
+            positionHistory.current[positionHistory.current.length - 1] = {
+              x: boundedX, 
+              z: boundedZ, 
+              time: latest.time
+            };
+          }
+        }
       }
     };
     
@@ -626,11 +773,21 @@ const GameCanvas: React.FC = () => {
         const dz = Math.abs(position.z - lastSentPosition.current.z);
         
         if (dx > 0.01 || dz > 0.01) {
-          // Send position to server
-          socket.emit('playerMove', position);
+          // Ensure position is still within bounds before sending
+          const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, position.x));
+          const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, position.z));
           
-          // Update last sent position and time
-          lastSentPosition.current = { ...position };
+          const validatedPosition = {
+            x: validX,
+            y: position.y,
+            z: validZ
+          };
+          
+          // Send position to server
+          socket.emit('playerMove', validatedPosition);
+          
+          // Update last sent position and time with validated coordinates
+          lastSentPosition.current = { ...validatedPosition };
           lastSendTime.current = now;
         }
         
@@ -648,10 +805,7 @@ const GameCanvas: React.FC = () => {
     const animate = () => {
       requestAnimationFrame(animate);
       
-      // Get delta time for animations
-      const delta = clockRef.current.getDelta();
-      
-      // Update player movement
+      // Update player movement (delta time is calculated inside updatePlayerMovement)
       updatePlayerMovement();
       
       // Send position updates
@@ -666,7 +820,7 @@ const GameCanvas: React.FC = () => {
       }
       
       // Animate dropped items
-      updateDroppedItems(worldItemsRef.current, delta);
+      updateDroppedItems(worldItemsRef.current, clockRef.current.getDelta());
       
       // Render scene and labels
       renderer.render(scene, camera);
