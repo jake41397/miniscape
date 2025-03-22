@@ -16,7 +16,49 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 // Create a single supabase client for the entire app
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    flowType: 'implicit'
+  }
+});
+
+// Helper function to reset auth state and try again with implicit flow if PKCE fails
+export const resetAuthAndSignIn = async () => {
+  try {
+    // First try to sign out to clear any stale state
+    await supabase.auth.signOut();
+    
+    // Clear any storage that might be causing issues
+    if (typeof window !== 'undefined') {
+      // Remove all supabase auth-related items from localStorage
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith('supabase.auth.')) {
+          localStorage.removeItem(key);
+        }
+      });
+      
+      // Also clear sessionStorage items
+      Object.keys(sessionStorage).forEach(key => {
+        if (key.startsWith('supabase.auth.')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      
+      console.log('Auth storage cleared, redirecting to sign in');
+    }
+    
+    // Redirect to sign in page with clean state
+    window.location.href = '/auth/signin';
+  } catch (error) {
+    console.error('Error resetting auth state:', error);
+    // Force a page reload as last resort
+    window.location.reload();
+  }
+};
 
 // Define the user profile type
 export type UserProfile = {

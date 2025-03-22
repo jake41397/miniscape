@@ -4,15 +4,7 @@ const nextConfig = {
   webpack: (config) => {
     return config;
   },
-  // Disable the bodyParser specifically for the socket API route
-  async rewrites() {
-    return [
-      {
-        source: '/api/socket',
-        destination: '/api/socket',
-      },
-    ];
-  },
+  // No need for rewrites now that we're using the backend socket server
 }
 
 module.exports = nextConfig 

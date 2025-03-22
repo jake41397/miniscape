@@ -92,16 +92,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Sign in with Google
   const signInWithGoogle = async () => {
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      // Clear any previous auth states that might be incomplete
+      localStorage.removeItem('supabase.auth.code_verifier');
+      localStorage.removeItem('supabase.auth.state');
+      
+      // Mark that we're starting auth flow
+      sessionStorage.setItem('miniscape_auth_attempt', new Date().toISOString());
+      
+      // Use implicit flow for more reliable auth
+      const response = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/api/auth/callback`,
+          redirectTo: `${window.location.origin}/auth/handle-callback`,
+          skipBrowserRedirect: false,
+          // Set additional scopes and parameters for better reliability
+          scopes: 'email profile',
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
         },
       });
       
-      if (error) {
-        throw error;
+      if (response.error) {
+        throw response.error;
       }
+      
+      console.log('Auth flow started successfully');
     } catch (error) {
       console.error('Error signing in with Google:', error);
     }

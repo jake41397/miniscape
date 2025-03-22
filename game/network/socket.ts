@@ -14,6 +14,7 @@ export interface ServerToClientEvents {
   itemRemoved: (dropId: string) => void;
   initWorldItems: (items: { dropId: string, itemType: string, x: number, y: number, z: number }[]) => void;
   initResourceNodes: (nodes: { id: string, type: string, x: number, y: number, z: number }[]) => void;
+  error: (errorMessage: string) => void;
 }
 
 export interface ClientToServerEvents {
@@ -30,43 +31,96 @@ let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
 // Initialize socket connection
 export const initializeSocket = async () => {
   if (!socket) {
-    // Get the session token for authentication
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    
-    // Don't connect if not authenticated
-    if (!token) {
-      console.warn('No auth token available, not connecting to socket server');
+    try {
+      // Get the session token for authentication
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      
+      // Don't connect if not authenticated
+      if (!token) {
+        console.warn('No auth token available, not connecting to socket server');
+        return null;
+      }
+      
+      // Always use the backend socket server with auth token
+      // We're standardizing on the backend implementation
+      const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
+      console.log('Connecting to backend socket server at:', BACKEND_URL);
+      
+      // Log token information for debugging (limited for security)
+      console.log('Auth token info:', {
+        available: !!token,
+        length: token.length,
+        format: token.split('.').length === 3 ? 'JWT' : 'unknown',
+        prefix: token.substring(0, 6) + '...',
+      });
+      
+      // Create socket connection with better reconnection and error handling
+      socket = io(BACKEND_URL, {
+        transports: ['websocket', 'polling'],
+        path: '/socket.io', // Ensure correct path for backend server
+        auth: {
+          token
+        },
+        extraHeaders: {
+          'Authorization': `Bearer ${token}`
+        },
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+        timeout: 10000,
+        forceNew: true, // Force a new connection each time
+      });
+
+      // Enhanced logging and error handling
+      socket.on('connect', () => {
+        console.log(`Socket connected successfully! ID: ${socket?.id}`);
+        // Save connection time for debugging
+        localStorage.setItem('socket_connected_at', Date.now().toString());
+      });
+
+      socket.on('disconnect', (reason) => {
+        console.log(`Socket disconnected, reason: ${reason}`);
+        if (reason === 'io server disconnect') {
+          // The server has forcefully disconnected the socket
+          console.log('Socket was disconnected by the server, will not reconnect automatically');
+        }
+      });
+
+      socket.on('connect_error', (err) => {
+        console.error('Socket connection error:', err.message);
+        
+        // Handle authentication errors specifically
+        if (err.message.includes('Authentication') || err.message.includes('auth') || err.message.includes('401')) {
+          console.log('Authentication error detected, attempting token refresh');
+          
+          // Clean up the failed socket
+          socket?.disconnect();
+          socket = null;
+          
+          // Try to refresh the auth token
+          supabase.auth.refreshSession().then(({ data, error }) => {
+            if (error) {
+              console.error('Token refresh failed:', error.message);
+              return;
+            }
+            
+            if (data.session) {
+              console.log('Token refreshed successfully, will reconnect on next getSocket call');
+              localStorage.setItem('token_refreshed_at', Date.now().toString());
+            }
+          });
+        }
+      });
+
+      // Listen for custom error events from the server
+      socket.on('error', (errorMsg) => {
+        console.error('Received error from socket server:', errorMsg);
+      });
+    } catch (error) {
+      console.error('Error initializing socket:', error);
+      socket = null;
       return null;
     }
-    
-    // Connect to the backend socket server with auth token
-    const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
-    console.log('Connecting to backend socket server at:', BACKEND_URL);
-    console.log('Auth token available:', !!token);
-    
-    socket = io(BACKEND_URL, {
-      transports: ['websocket', 'polling'],
-      auth: {
-        token: token
-      },
-      extraHeaders: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
-
-    // Log socket connection events
-    socket.on('connect', () => {
-      console.log('Socket connected to backend! ID:', socket?.id);
-    });
-
-    socket.on('disconnect', () => {
-      console.log('Socket disconnected');
-    });
-
-    socket.on('connect_error', (err) => {
-      console.error('Socket connection error:', err.message);
-    });
   }
 
   return socket;
@@ -86,4 +140,21 @@ export const disconnectSocket = () => {
     socket.disconnect();
     socket = null;
   }
+};
+
+// Setup socket cleanup for navigation
+export const setupSocketCleanup = () => {
+  // This function ensures the socket is properly cleaned up during navigation
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', () => {
+      console.log('Window unloading, disconnecting socket');
+      disconnectSocket();
+    });
+  }
+  
+  return () => {
+    // This return function will be called when the component using this unmounts
+    console.log('Component unmounting, disconnecting socket');
+    disconnectSocket();
+  };
 }; 

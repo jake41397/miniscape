@@ -12,6 +12,7 @@ import authRoutes from './routes/authRoutes';
 import playerRoutes from './routes/playerRoutes';
 import gameRoutes from './routes/gameRoutes';
 import logger from './utils/logger';
+import { configureSocketIO } from './middleware/corsMiddleware';
 
 // Define the extended Socket interface
 interface ExtendedSocket extends Socket {
@@ -30,14 +31,18 @@ const PORT = process.env.PORT || 4000;
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:8080',
+    'https://miniscape.vercel.app'
+  ],
   credentials: true
 }));
 app.use(express.json());
 
 // Health check route (public)
 app.get('/health', (req: Request, res: Response) => {
-  res.status(200).json({ status: 'ok' });
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // Auth routes (public)
@@ -53,11 +58,19 @@ const server = http.createServer(app);
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: [
+      'http://localhost:3000',
+      'http://localhost:8080',
+      'https://miniscape.vercel.app'
+    ],
     methods: ['GET', 'POST'],
     credentials: true
-  }
+  },
+  path: '/socket.io'
 });
+
+// Configure Socket.IO settings
+configureSocketIO(io);
 
 // Apply socket authentication middleware
 io.use(async (socket: ExtendedSocket, next) => {
@@ -70,10 +83,13 @@ io.use(async (socket: ExtendedSocket, next) => {
 });
 
 // Initialize game state
-initializeGameState().catch((err: any) => {
-  logger.error('Failed to initialize game state', err instanceof Error ? err : new Error(String(err)));
-  process.exit(1);
-});
+initializeGameState()
+  .then(() => {
+    logger.info('Game state initialized successfully');
+  })
+  .catch((error) => {
+    logger.error('Failed to initialize game state', error);
+  });
 
 // Setup socket handlers
 io.on('connection', (socket: ExtendedSocket) => {
@@ -92,10 +108,8 @@ io.on('connection', (socket: ExtendedSocket) => {
 
 // Start server
 server.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`, { 
-    environment: process.env.NODE_ENV,
-    version: process.env.APP_VERSION || '1.0.0'
-  });
+  logger.info(`MiniScape backend server running on port ${PORT}`);
+  logger.info(`Socket.IO server available at path /socket.io`);
 });
 
 // Handle graceful shutdown

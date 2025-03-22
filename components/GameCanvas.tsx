@@ -35,6 +35,13 @@ const GameCanvas: React.FC = () => {
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
   const clockRef = useRef<THREE.Clock>(new THREE.Clock());
   const labelRendererRef = useRef<CSS2DRenderer | null>(null);
+  const cleanupIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Add a ref for cleanup functions so they can be accessed outside useEffect
+  const cleanupFunctionsRef = useRef<{
+    initialCleanup?: () => void;
+    cleanupPlayerMeshes?: () => void;
+  }>({});
   
   const [playerName, setPlayerName] = useState<string>('');
   const [isConnected, setIsConnected] = useState(false);
@@ -73,6 +80,12 @@ const GameCanvas: React.FC = () => {
   
   // Create a ref to store the createNameLabel function
   const createNameLabelRef = useRef<((name: string, mesh: THREE.Mesh) => void) | null>(null);
+  
+  // Add a ref to track all name labels in the scene for proper cleanup
+  const nameLabelsRef = useRef<Map<string, CSS2DObject>>(new Map());
+  
+  // Add state to track if cleanup is in progress
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
   
   useEffect(() => {
     // Init socket on component mount
@@ -258,11 +271,36 @@ const GameCanvas: React.FC = () => {
     
     // Create name label for player
     const createNameLabel = (name: string, mesh: THREE.Mesh) => {
-      // Remove existing label if there is one
+      // Get player ID
+      const playerId = mesh.userData.playerId;
+      
+      // Remove any existing label for this player from the scene and ref
+      if (playerId && nameLabelsRef.current.has(playerId)) {
+        const existingLabel = nameLabelsRef.current.get(playerId);
+        if (existingLabel) {
+          // Remove from parent if it has one
+          if (existingLabel.parent) {
+            existingLabel.parent.remove(existingLabel);
+          }
+          // Also remove from scene directly to be sure
+          scene.remove(existingLabel);
+          // Remove from our tracking map
+          nameLabelsRef.current.delete(playerId);
+        }
+      }
+      
+      // Remove existing labels from the mesh to avoid duplicates
+      const childrenToRemove: THREE.Object3D[] = [];
       mesh.children.forEach(child => {
         if ((child as any).isCSS2DObject) {
-          mesh.remove(child);
+          childrenToRemove.push(child);
         }
+      });
+      
+      // Remove the children outside the loop
+      childrenToRemove.forEach(child => {
+        mesh.remove(child);
+        scene.remove(child);
       });
       
       // Create new label
@@ -278,10 +316,19 @@ const GameCanvas: React.FC = () => {
       nameDiv.style.fontWeight = 'bold';
       nameDiv.style.textAlign = 'center';
       nameDiv.style.userSelect = 'none';
+      nameDiv.style.pointerEvents = 'none'; // Make sure labels don't interfere with clicks
       
       const nameLabel = new CSS2DObject(nameDiv);
       nameLabel.position.set(0, 2.5, 0); // Position above the player
+      nameLabel.userData.labelType = 'playerName';
+      nameLabel.userData.forPlayer = playerId;
       
+      // Add to tracking map if we have a playerId
+      if (playerId) {
+        nameLabelsRef.current.set(playerId, nameLabel);
+      }
+      
+      // Add to mesh
       mesh.add(nameLabel);
       return nameLabel;
     };
@@ -351,6 +398,79 @@ const GameCanvas: React.FC = () => {
       
       // Function to create a player mesh
       const createPlayerMesh = (player: Player) => {
+        // First check if this is the player's own character
+        if (socket.id === player.id) {
+          console.log('Attempted to create mesh for own player, skipping:', player);
+          return null;
+        }
+        
+        // Find any existing meshes for this player to ensure proper cleanup
+        const existingMeshes: THREE.Object3D[] = [];
+        
+        // Check in playersRef first
+        if (playersRef.current.has(player.id)) {
+          const knownMesh = playersRef.current.get(player.id);
+          if (knownMesh) {
+            existingMeshes.push(knownMesh);
+          }
+        }
+        
+        // Also search the entire scene for duplicates
+        scene.traverse((object) => {
+          if (object.userData && object.userData.playerId === player.id) {
+            // Only add to our list if not already in existingMeshes
+            if (!existingMeshes.includes(object)) {
+              existingMeshes.push(object);
+            }
+          }
+        });
+        
+        // Clean up all existing meshes for this player
+        existingMeshes.forEach(mesh => {
+          // First remove any CSS2DObjects
+          mesh.traverse((child) => {
+            if ((child as any).isCSS2DObject) {
+              if (child.parent) {
+                child.parent.remove(child);
+              }
+              scene.remove(child);
+            }
+          });
+          
+          // Clean up any object data
+          if ((mesh as THREE.Mesh).geometry) {
+            (mesh as THREE.Mesh).geometry.dispose();
+          }
+          
+          // Clean up materials
+          if ((mesh as THREE.Mesh).material) {
+            if (Array.isArray((mesh as THREE.Mesh).material)) {
+              ((mesh as THREE.Mesh).material as THREE.Material[]).forEach((material: THREE.Material) => material.dispose());
+            } else {
+              ((mesh as THREE.Mesh).material as THREE.Material).dispose();
+            }
+          }
+          
+          // Remove from scene
+          scene.remove(mesh);
+        });
+        
+        // Remove from our tracking references
+        playersRef.current.delete(player.id);
+            
+        // Remove from name labels ref
+        if (nameLabelsRef.current.has(player.id)) {
+          const label = nameLabelsRef.current.get(player.id);
+          if (label) {
+            if (label.parent) {
+              label.parent.remove(label);
+            }
+            scene.remove(label);
+            nameLabelsRef.current.delete(player.id);
+          }
+        }
+        
+        // Create new player mesh
         const otherPlayerGeometry = new THREE.BoxGeometry(1, 2, 1);
         const otherPlayerMaterial = new THREE.MeshStandardMaterial({
           color: 0xff5722, // Orange color for other players
@@ -380,11 +500,38 @@ const GameCanvas: React.FC = () => {
       socket.on('initPlayers', (players) => {
         console.log('Received initial players:', players);
         
+        // Run cleanup to remove any potential duplicates before adding new players
+        cleanupPlayerMeshes();
+        
+        // Store the player's own ID when receiving initial players
+        // This helps differentiate the local player from others
+        if (!socket.id) {
+          console.warn('Socket ID not available when initializing players');
+        } else {
+          // Set player name from the player data if it exists
+          const ownPlayerData = players.find(p => p.id === socket.id);
+          if (ownPlayerData) {
+            setPlayerName(ownPlayerData.name);
+          }
+        }
+        
         // Add each existing player to the scene
         players.forEach(player => {
-          if (!playersRef.current.has(player.id)) {
-            createPlayerMesh(player);
+          // Skip creating a mesh for the current player to avoid duplication
+          if (player.id === socket.id) {
+            console.log('Skipping creating mesh for own player:', player);
+            // Position the local player at their saved position
+            if (playerRef.current) {
+              playerRef.current.position.set(player.x, player.y, player.z);
+              
+              // Store player data in userData
+              playerRef.current.userData.playerId = player.id;
+              playerRef.current.userData.playerName = player.name;
+            }
+            return;
           }
+          
+          createPlayerMesh(player);
         });
       });
       
@@ -395,29 +542,96 @@ const GameCanvas: React.FC = () => {
         // Play sound for new player joining
         soundManager.play('playerJoin');
         
-        // Add the new player to the scene if not exists
-        if (!playersRef.current.has(player.id)) {
-          createPlayerMesh(player);
-        } else {
-          // Update existing player (might be a name change)
-          const existingMesh = playersRef.current.get(player.id);
-          if (existingMesh) {
-            existingMesh.position.set(player.x, player.y, player.z);
-            existingMesh.userData.playerName = player.name;
+        // Check if this is the local player (shouldn't happen but as a safety measure)
+        if (player.id === socket.id) {
+          console.log('Received playerJoined for self, adjusting local player:', player);
+          
+          // Update local player position instead of creating a new mesh
+          if (playerRef.current) {
+            playerRef.current.position.set(player.x, player.y, player.z);
+            
+            // Ensure player name is set
+            setPlayerName(player.name);
+            
+            // Update player data in userData
+            playerRef.current.userData.playerId = player.id;
+            playerRef.current.userData.playerName = player.name;
           }
+          return;
         }
+        
+        // Always use createPlayerMesh which handles existing players properly
+        createPlayerMesh(player);
       });
       
       // Handle player disconnects
       socket.on('playerLeft', (playerId) => {
         console.log('Player left:', playerId);
         
-        // Remove player from scene
+        // Skip if this is the local player ID (we shouldn't remove ourselves)
+        if (playerId === socket.id) {
+          console.warn('Received playerLeft for local player, ignoring');
+          return;
+        }
+        
+        // First, remove any name label from our tracking map and the scene
+        if (nameLabelsRef.current.has(playerId)) {
+          const label = nameLabelsRef.current.get(playerId);
+          if (label) {
+            // Remove from parent if it has one
+            if (label.parent) {
+              label.parent.remove(label);
+            }
+            // Also remove from scene directly to be sure
+            scene.remove(label);
+          }
+          // Remove from our map
+          nameLabelsRef.current.delete(playerId);
+        }
+        
+        // Remove player mesh from scene
         const playerMesh = playersRef.current.get(playerId);
         if (playerMesh) {
+          // First remove any attached CSS2DObjects directly
+          const childrenToRemove: THREE.Object3D[] = [];
+          playerMesh.traverse((child) => {
+            if ((child as any).isCSS2DObject) {
+              childrenToRemove.push(child);
+            }
+          });
+          
+          // Remove the children outside the traversal
+          childrenToRemove.forEach(child => {
+            if (child.parent) {
+              child.parent.remove(child);
+            }
+            scene.remove(child);
+          });
+          
+          // Clean up any object data
+          if (playerMesh.geometry) playerMesh.geometry.dispose();
+          if (Array.isArray(playerMesh.material)) {
+            playerMesh.material.forEach(material => material.dispose());
+          } else if (playerMesh.material) {
+            playerMesh.material.dispose();
+          }
+          
+          // Remove from scene
           scene.remove(playerMesh);
           playersRef.current.delete(playerId);
         }
+        
+        // Additional safety check - look for any orphaned labels in the scene
+        scene.traverse((object) => {
+          if ((object as any).isCSS2DObject && 
+              object.userData && 
+              object.userData.forPlayer === playerId) {
+            if (object.parent) {
+              object.parent.remove(object);
+            }
+            scene.remove(object);
+          }
+        });
       });
       
       // Handle player movements
@@ -451,6 +665,12 @@ const GameCanvas: React.FC = () => {
             // Normal update for reasonable distances
             playerMesh.position.set(validX, data.y, validZ);
           }
+        }
+        
+        // Occasionally run a cleanup after movement updates (every ~5 seconds)
+        // This helps catch any ghosts that might have appeared
+        if (Math.random() < 0.05) { // ~5% chance each update
+          cleanupPlayerMeshes();
         }
       });
       
@@ -503,6 +723,228 @@ const GameCanvas: React.FC = () => {
           worldItemsRef.current.splice(itemIndex, 1);
         }
       });
+      
+      // Add a function to perform thorough player mesh cleanup to prevent duplicates
+      const cleanupPlayerMeshes = () => {
+        console.log('Running aggressive player mesh cleanup');
+        
+        // Get a list of valid player IDs we should keep (all players currently in the game)
+        const validPlayerIds = new Set<string>();
+        // Add IDs from our player reference map
+        playersRef.current.forEach((_, id) => validPlayerIds.add(id));
+        // Always consider our own player ID valid
+        if (socket.id) validPlayerIds.add(socket.id);
+        
+        console.log('Valid player IDs:', Array.from(validPlayerIds));
+        
+        // First, do a full scene traversal to find ALL player-related objects
+        const allPlayerObjects: THREE.Object3D[] = [];
+        const playerIdToObjects = new Map<string, THREE.Object3D[]>();
+        
+        scene.traverse((object) => {
+          // Check if this is a player mesh by checking for specific properties
+          if (object.userData && object.userData.playerId) {
+            const playerId = object.userData.playerId;
+            allPlayerObjects.push(object);
+            
+            // Group by player ID
+            if (!playerIdToObjects.has(playerId)) {
+              playerIdToObjects.set(playerId, []);
+            }
+            playerIdToObjects.get(playerId)?.push(object);
+          }
+        });
+        
+        console.log(`Found ${allPlayerObjects.length} total player-related objects in scene`);
+        
+        // Now handle each player ID case separately
+        playerIdToObjects.forEach((objects, playerId) => {
+          // Case 1: This is an invalid player ID (player no longer in the game)
+          if (!validPlayerIds.has(playerId)) {
+            console.log(`Removing all objects for invalid player ${playerId}`);
+            // Remove all objects for this invalid player
+            objects.forEach(obj => removePlayerObject(obj));
+            // Also make sure it's removed from our references
+            playersRef.current.delete(playerId);
+            // Remove from name labels ref
+            if (nameLabelsRef.current.has(playerId)) {
+              const label = nameLabelsRef.current.get(playerId);
+              if (label) {
+                if (label.parent) {
+                  label.parent.remove(label);
+                }
+                scene.remove(label);
+                nameLabelsRef.current.delete(playerId);
+              }
+            }
+          } 
+          // Case 2: This is our own player ID
+          else if (playerId === socket.id) {
+            console.log(`Processing own player objects, found ${objects.length}`);
+            
+            // Keep only playerRef.current, remove all others
+            objects.forEach(obj => {
+              if (obj !== playerRef.current) {
+                console.log('Removing duplicate of own player');
+                removePlayerObject(obj);
+              }
+            });
+          }
+          // Case 3: This is another valid player
+          else {
+            console.log(`Processing player ${playerId}, found ${objects.length} objects`);
+            
+            // If we have multiple objects, keep only the most appropriate one
+            if (objects.length > 1) {
+              // First, check if we have a reference in playersRef
+              const knownMesh = playersRef.current.get(playerId);
+              // If we don't have a known mesh, just keep the last one added
+              const toKeep = knownMesh && objects.includes(knownMesh) 
+                ? knownMesh 
+                : objects[objects.length - 1];
+              
+              // Remove all except the one to keep
+              objects.forEach(obj => {
+                if (obj !== toKeep) {
+                  console.log(`Removing duplicate mesh for player ${playerId}`);
+                  removePlayerObject(obj);
+                }
+              });
+              
+              // Make sure our reference is up to date
+              playersRef.current.set(playerId, toKeep as THREE.Mesh);
+            }
+          }
+        });
+        
+        // Additional safety check for any orphaned name labels
+        scene.traverse((object) => {
+          if ((object as any).isCSS2DObject && 
+              object.userData && 
+              object.userData.labelType === 'playerName') {
+            
+            const playerId = object.userData.forPlayer;
+            // If this label is for a player not in our valid set, or the object has no parent
+            if (!playerId || !validPlayerIds.has(playerId) || !object.parent) {
+              console.log(`Removing orphaned name label for player ${playerId}`);
+              if (object.parent) {
+                object.parent.remove(object);
+              }
+              scene.remove(object);
+              if (playerId) nameLabelsRef.current.delete(playerId);
+            }
+          }
+        });
+      };
+      
+      // Helper function to remove a player object and clean up resources
+      const removePlayerObject = (object: THREE.Object3D) => {
+        // Remove any CSS2DObjects first
+        object.traverse((child) => {
+          if ((child as any).isCSS2DObject) {
+            if (child.parent) {
+              child.parent.remove(child);
+            }
+            scene.remove(child);
+          }
+        });
+        
+        // Clean up geometry and materials if it's a mesh
+        if ((object as THREE.Mesh).geometry) {
+          (object as THREE.Mesh).geometry.dispose();
+        }
+        if ((object as THREE.Mesh).material) {
+          if (Array.isArray((object as THREE.Mesh).material)) {
+            ((object as THREE.Mesh).material as THREE.Material[]).forEach(
+              (material: THREE.Material) => material.dispose()
+            );
+          } else {
+            ((object as THREE.Mesh).material as THREE.Material).dispose();
+          }
+        }
+        
+        // Remove from scene
+        scene.remove(object);
+      };
+      
+      // Add an initial thorough cleanup function that's more aggressive
+      const initialCleanup = () => {
+        console.log('Performing VERY aggressive initial cleanup');
+        
+        // First, collect all player-related objects
+        const playerObjects: THREE.Object3D[] = [];
+        
+        // Do a full scene traversal
+        scene.traverse((object) => {
+          // Check if this has any player-related userData
+          if (object.userData && (
+              object.userData.playerId || 
+              (object.userData.labelType === 'playerName') ||
+              (object as any).isCSS2DObject
+          )) {
+            // Skip our own player reference
+            if (object !== playerRef.current) {
+              playerObjects.push(object);
+            }
+          }
+        });
+        
+        console.log(`Initial cleanup found ${playerObjects.length} objects to check`);
+        
+        // Clean up every player object except our own playerRef
+        playerObjects.forEach(object => {
+          // Skip if this is our own player mesh (should be preserved)
+          if (object === playerRef.current) return;
+          
+          // Handle CSS2D objects
+          if ((object as any).isCSS2DObject) {
+            if (object.parent) {
+              object.parent.remove(object);
+            }
+            scene.remove(object);
+          } else {
+            // For meshes, clean up resources
+            removePlayerObject(object);
+          }
+        });
+        
+        // Clear our tracking references (except our own player)
+        const ownId = socket.id;
+        playersRef.current.forEach((mesh, id) => {
+          if (id !== ownId) {
+            playersRef.current.delete(id);
+          }
+        });
+        
+        // Clear name labels (except our own)
+        nameLabelsRef.current.forEach((label, id) => {
+          if (id !== ownId) {
+            nameLabelsRef.current.delete(id);
+          }
+        });
+        
+        console.log('Initial cleanup complete');
+      };
+      
+      // Store cleanup functions in ref so they can be accessed outside useEffect
+      cleanupFunctionsRef.current = {
+        initialCleanup,
+        cleanupPlayerMeshes
+      };
+      
+      // Call this aggressive cleanup when socket connects
+      socket.on('connect', () => {
+        console.log('Socket connected, performing thorough cleanup');
+        initialCleanup();
+      });
+      
+      // Add periodic cleanup to catch any ghosts that might have slipped through
+      const cleanupInterval = setInterval(() => {
+        cleanupPlayerMeshes();
+      }, 10000); // Run every 10 seconds
+      
+      // Store the cleanup interval in the ref
+      cleanupIntervalRef.current = cleanupInterval;
     };
     
     setupSocketListeners();
@@ -873,6 +1315,25 @@ const GameCanvas: React.FC = () => {
       playerGeometry.dispose();
       playerMaterial.dispose();
       
+      // Clean up all name labels
+      nameLabelsRef.current.forEach((label) => {
+        if (label.parent) {
+          label.parent.remove(label);
+        }
+        scene.remove(label);
+      });
+      nameLabelsRef.current.clear();
+      
+      // Do an additional traversal to catch any remaining CSS2DObjects
+      scene.traverse((object) => {
+        if ((object as any).isCSS2DObject) {
+          if (object.parent) {
+            object.parent.remove(object);
+          }
+          scene.remove(object);
+        }
+      });
+      
       // Dispose of other player meshes
       playersRef.current.forEach((mesh) => {
         scene.remove(mesh);
@@ -920,8 +1381,25 @@ const GameCanvas: React.FC = () => {
         canvasRef.current?.removeChild(labelRendererRef.current.domElement);
       }
       renderer.dispose();
+      
+      // Clear the cleanup interval
+      if (cleanupIntervalRef.current) {
+        clearInterval(cleanupIntervalRef.current);
+      }
     };
   }, [isConnected, currentZone, soundEnabled]);
+  
+  // Create a function to trigger manual cleanup
+  const handleCleanupClick = () => {
+    setIsCleaningUp(true);
+    
+    setTimeout(() => {
+      if (cleanupFunctionsRef.current.initialCleanup) {
+        cleanupFunctionsRef.current.initialCleanup();
+      }
+      setIsCleaningUp(false);
+    }, 100);
+  };
   
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -962,6 +1440,27 @@ const GameCanvas: React.FC = () => {
         }}
       >
         {soundEnabled ? '🔊 Sound On' : '🔇 Sound Off'}
+      </button>
+      
+      {/* Ghost cleanup button */}
+      <button
+        onClick={handleCleanupClick}
+        disabled={isCleaningUp}
+        style={{
+          position: 'absolute',
+          top: '45px',
+          right: '10px',
+          backgroundColor: isCleaningUp ? 'rgba(100, 100, 100, 0.5)' : 'rgba(255, 0, 0, 0.6)',
+          color: 'white',
+          border: 'none',
+          borderRadius: '5px',
+          padding: '5px 10px',
+          cursor: isCleaningUp ? 'default' : 'pointer',
+          fontSize: '12px',
+          zIndex: 100
+        }}
+      >
+        {isCleaningUp ? 'Cleaning...' : '👻 Remove Ghosts'}
       </button>
       
       <ChatPanel />

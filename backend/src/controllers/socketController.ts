@@ -84,6 +84,9 @@ const WORLD_BOUNDS: WorldBounds = {
 // Store connected players
 const players: PlayersStore = {};
 
+// Add a map to track user ID to socket ID for reconnection handling
+const userIdToSocketId: Record<string, string> = {};
+
 // Store world items and resource nodes
 let worldItems: WorldItem[] = [];
 let resourceNodes: ResourceNode[] = [];
@@ -135,6 +138,24 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     }
     
     console.log(`Socket ${socket.id} authenticated as user ${socket.user.id}`);
+    
+    // Check if this user is already connected with a different socket
+    const existingSocketId = userIdToSocketId[socket.user.id];
+    if (existingSocketId && players[existingSocketId]) {
+      console.log(`User ${socket.user.id} reconnected. Old socket: ${existingSocketId}, New socket: ${socket.id}`);
+      
+      // Save the player data from the old connection
+      const existingPlayer = players[existingSocketId];
+      
+      // Tell ALL clients to remove the old player instance first
+      io.emit('playerLeft', existingSocketId);
+      
+      // Remove the old socket association
+      delete players[existingSocketId];
+    }
+    
+    // Update the user ID to socket ID mapping
+    userIdToSocketId[socket.user.id] = socket.id;
     
     // Load player data from database
     let { data: playerData, error: playerError } = await supabase
@@ -522,6 +543,14 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
                 console.error('Error saving player inventory on disconnect:', err instanceof Error ? err : new Error(String(err)));
               });
             }
+            
+            // Only remove the userIdToSocketId mapping if this is the current socket for this user
+            if (userIdToSocketId[socket.user.id] === socket.id) {
+              console.log(`Removing user ID ${socket.user.id} from socket ID mapping`);
+              delete userIdToSocketId[socket.user.id];
+            } else {
+              console.log(`Not removing user ID mapping because ${socket.user.id} is now connected with socket ${userIdToSocketId[socket.user.id]}`);
+            }
           }
         } catch (error) {
           console.error('Error during player disconnect save:', error instanceof Error ? error : new Error(String(error)));
@@ -530,12 +559,13 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         // Remove player from our state
         delete players[socket.id];
         
-        // Let other clients know the player left
-        socket.broadcast.emit('playerLeft', socket.id);
+        // Let ALL clients know the player left, not just broadcast
+        io.emit('playerLeft', socket.id);
         
         // Log the disconnection
         if (Object.keys(players).length > 0) {
           console.log('Remaining players:', Object.keys(players).map(id => `${players[id].name} (${id})`).join(', '));
+          console.log('User ID to Socket ID mappings:', Object.entries(userIdToSocketId).map(([uid, sid]) => `${uid} -> ${sid}`).join(', '));
         } else {
           console.log('No players remain connected');
         }
