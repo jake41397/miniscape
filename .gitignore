@@ -5,6 +5,10 @@ node_modules
 dist
 **/dist
 
+# Next.js static export
+frontend/out
+**/out
+
 # Next.js build
 .next
 **/.next
@@ -12,6 +16,7 @@ dist
 # Environment variables
 .env
 .env.local
+.env.development
 .env.development.local
 .env.test.local
 .env.production.local

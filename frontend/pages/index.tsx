@@ -149,35 +149,22 @@ const Home: NextPage = () => {
     if (!authLoading) {
       addDebugInfo(`Auth loaded, checking session (exists: ${!!session})`);
       
-      // If no session, redirect to login after a short delay
+      // If no session, redirect to login immediately with direct navigation
       if (!session && !redirectAttempted.current) {
         redirectAttempted.current = true;
-        addDebugInfo('No valid session, preparing redirect to login...');
+        addDebugInfo('No valid session, executing direct navigation to login...');
         
-        // Set a safety timeout to force navigation if the router push fails
-        const safetyTimeoutId = setTimeout(() => {
-          addDebugInfo('Safety timeout reached, forcing direct navigation');
-          window.location.href = '/auth/signin';
-        }, 3000);
-        
-        // Use router.push with a shorter timeout
-        redirectTimeoutRef.current = setTimeout(() => {
-          addDebugInfo('Executing redirect to signin page');
-          // Store intention to redirect
+        try {
+          // Store redirect attempt time
           localStorage.setItem('redirect_to_signin_at', Date.now().toString());
           
-          router.push('/auth/signin')
-            .then(() => {
-              addDebugInfo('Router.push to /auth/signin completed successfully');
-              clearTimeout(safetyTimeoutId);
-            })
-            .catch(err => {
-              addDebugInfo(`Router.push failed: ${err.message}`);
-              // Force navigation as a fallback
-              addDebugInfo('Forcing redirect using window.location.href');
-              window.location.href = '/auth/signin';
-            });
-        }, 300); // Shorter delay to prevent rapid redirects
+          // Use window.location.href for more reliable direct navigation in production
+          window.location.href = '/auth/signin';
+        } catch (err) {
+          addDebugInfo(`Redirect error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          // As a backup, try a forced reload to the signin page
+          window.location.replace('/auth/signin');
+        }
       } else if (session) {
         addDebugInfo('Valid session found, continuing to game initialization');
         // Clear any stored redirect intentions

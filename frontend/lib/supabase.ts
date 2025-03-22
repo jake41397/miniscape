@@ -22,7 +22,28 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     storage: typeof window !== 'undefined' ? window.localStorage : undefined,
     autoRefreshToken: true,
     detectSessionInUrl: true,
-    flowType: 'implicit'
+    flowType: 'implicit',
+    debug: process.env.NODE_ENV === 'development'
+  },
+  global: {
+    fetch: (...args) => {
+      // Add reliable timeout to fetch requests to prevent hanging
+      return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          reject(new Error('Supabase request timeout'));
+        }, 10000); // 10 second timeout
+        
+        fetch(...args)
+          .then(response => {
+            clearTimeout(timeoutId);
+            resolve(response);
+          })
+          .catch(error => {
+            clearTimeout(timeoutId);
+            reject(error);
+          });
+      });
+    }
   }
 });
 

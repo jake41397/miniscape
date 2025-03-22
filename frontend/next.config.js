@@ -1,10 +1,19 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  webpack: (config) => {
-    return config;
+  output: 'export',
+  images: {
+    unoptimized: true,
   },
-  // No need for rewrites now that we're using the backend socket server
-}
+  // Ensure APIs can be mocked with /api routes in static export
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: 'https://miniscape.io/api/:path*',
+      },
+    ];
+  },
+};
 
-module.exports = nextConfig 
+module.exports = nextConfig; 

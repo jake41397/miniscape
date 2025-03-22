@@ -228,6 +228,46 @@ const SignIn: NextPage = () => {
     );
   }
   
+  // Add this useEffect to the SignIn component:
+
+  useEffect(() => {
+    // Check for a stuck state and force a clean auth state if needed
+    const checkStuckState = async () => {
+      try {
+        // Check if we've been redirected from a failed home page load
+        const redirectTime = localStorage.getItem('redirect_to_signin_at');
+        if (redirectTime) {
+          const redirectTimestamp = parseInt(redirectTime, 10);
+          const timeSinceRedirect = Date.now() - redirectTimestamp;
+          
+          // If we've been on this page for a while after a redirect, try to force a clean state
+          if (timeSinceRedirect > 5000 && !loading && !session) {
+            addDebugInfo(`Potential stuck state detected, clearing auth state (${Math.round(timeSinceRedirect / 1000)}s since redirect)`);
+            
+            // Clear Supabase auth storage
+            localStorage.removeItem('supabase.auth.token');
+            sessionStorage.removeItem('supabase.auth.token');
+            
+            // Make a server-side diagnostic request
+            const res = await fetch('/api/auth-debug');
+            if (res.ok) {
+              const data = await res.json();
+              addDebugInfo(`Auth debug response: ${JSON.stringify(data)}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error in stuck state check:', e);
+      }
+    };
+    
+    checkStuckState();
+    
+    // Also set a repeated check
+    const intervalId = setInterval(checkStuckState, 5000);
+    return () => clearInterval(intervalId);
+  }, [loading, session]);
+  
   // Normal sign-in page
   return (
     <div style={{ 

@@ -236,3 +236,189 @@ This project was created as a learning exercise in building a multiplayer game w
 ## License
 
 [MIT License](LICENSE)
+
+## Development Environment
+
+### Using dev.miniscape.io
+
+We've set up a streamlined development environment that allows you to run both frontend and backend servers with a single command, accessible at `dev.miniscape.io`.
+
+#### Setup
+
+1. Run the setup script:
+   ```bash
+   chmod +x start-dev.sh
+   ./start-dev.sh
+   ```
+
+2. Access the development environment at:
+   ```
+   https://dev.miniscape.io
+   ```
+
+### Production Environment
+
+To deploy to production, we've created a dedicated script that will set up everything for the production environment.
+
+#### Setup
+
+1. Run the production setup script:
+   ```bash
+   chmod +x start-prod.sh
+   ./start-prod.sh
+   ```
+
+2. Access the production environment at:
+   ```
+   https://miniscape.io
+   ```
+
+### Managing Environments
+
+We have several scripts to help manage the development and production environments:
+
+#### Starting Environments
+
+- Start development environment: `./start-dev.sh`
+- Start production environment: `./start-prod.sh`
+- Start both environments: `./start-both.sh`
+
+#### Stopping Environments
+
+- Stop development environment: `./stop-dev.sh`
+- Stop production environment: `./stop-prod.sh` 
+- Stop all environments: `./stop-all.sh`
+
+#### Deploying Latest Changes
+
+For deploying the latest changes to production:
+
+```bash
+./deploy-prod-latest.sh
+```
+
+This script will:
+1. Pull the latest changes from the current git branch
+2. Install any new dependencies
+3. Build and export the frontend for production (static files)
+4. Build the backend for production
+5. Restart the production environment
+
+### Reloading and Restarting Environments
+
+We have dedicated scripts for reloading and fully restarting both environments:
+
+#### Full Restart
+
+For a complete restart of all services:
+
+```bash
+./restart-env.sh
+```
+
+This script will:
+- Stop all PM2 processes
+- Restart NGINX
+- Start all services again
+
+## Running on System Startup
+
+Both environments can be configured to run simultaneously and automatically start when the system boots up.
+
+### Setting Up PM2 Startup
+
+The startup scripts can be used to run either individual environments or both at once:
+
+#### Running Both Environments Simultaneously
+
+For running both dev and prod environments on the same server:
+
+```bash
+chmod +x start-both.sh
+./start-both.sh
+```
+
+This will:
+- Start both development and production environments
+- Configure PM2 to save both process lists for startup
+- Give you the startup command to run with sudo privileges
+
+#### Running Individual Environments
+
+If you prefer to run only one environment:
+
+```bash
+# For development only
+./start-dev.sh
+
+# For production only
+./start-prod.sh
+```
+
+Each script will output a PM2 startup command like:
+```bash
+sudo env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u username --hp /home/username
+```
+
+Run this command to enable PM2 startup, and your applications will automatically restart when the system reboots.
+
+### Accessing Both Environments
+
+When both environments are running simultaneously, they are accessed via their respective domains:
+
+- **Development Environment**:
+  - Frontend: https://dev.miniscape.io/
+  - Backend API: https://dev.miniscape.io/api
+  - Socket.IO: https://dev.miniscape.io/socket.io
+
+- **Production Environment**:
+  - Frontend: https://miniscape.io/
+  - Backend API: https://miniscape.io/api
+  - Socket.IO: https://miniscape.io/socket.io
+
+The NGINX configurations ensure that requests to each domain are routed to the correct application servers running on their designated ports.
+
+### Reloading and Restarting Environments
+
+We have dedicated scripts for reloading and fully restarting both environments:
+
+#### Reloading (Zero Downtime)
+
+For making configuration changes without downtime:
+
+```bash
+./reload-env.sh
+```
+
+This will:
+- Reload NGINX configuration
+- Reload all PM2 processes with zero downtime
+
+#### Full Restart
+
+For a complete restart of all services:
+
+```bash
+./restart-env.sh
+```
+
+This will:
+- Restart NGINX
+- Stop and delete all PM2 processes
+- Start both development and production environments
+- Save the PM2 process list for startup
+
+#### Troubleshooting PM2 Process Issues
+
+If you encounter issues with PM2 processes (wrong names, stopped processes, or config files running as processes), use the fix script:
+
+```bash
+./fix-pm2.sh
+```
+
+This will:
+- Stop and delete all PM2 processes
+- Start the development and production processes with their correct names
+- Save the correct process list for startup
+
+These scripts make it easy to maintain both environments on the same server and handle updates or configuration changes.

@@ -34,7 +34,13 @@ app.use(cors({
   origin: [
     'http://localhost:3000',
     'http://localhost:8080',
-    'https://miniscape.vercel.app'
+    'https://miniscape.vercel.app',
+    'http://dev.miniscape.io',
+    'https://dev.miniscape.io',
+    'http://miniscape.io',
+    'https://miniscape.io',
+    'http://www.miniscape.io',
+    'https://www.miniscape.io'
   ],
   credentials: true
 }));
@@ -61,7 +67,13 @@ const io = new Server(server, {
     origin: [
       'http://localhost:3000',
       'http://localhost:8080',
-      'https://miniscape.vercel.app'
+      'https://miniscape.vercel.app',
+      'http://dev.miniscape.io',
+      'https://dev.miniscape.io',
+      'http://miniscape.io',
+      'https://miniscape.io',
+      'http://www.miniscape.io',
+      'https://www.miniscape.io'
     ],
     methods: ['GET', 'POST'],
     credentials: true

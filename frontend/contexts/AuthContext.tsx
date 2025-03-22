@@ -27,10 +27,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     async function fetchInitialSession() {
       try {
+        setLoading(true);
+        
         // Get active session
         const { data: { session: initialSession }, error } = await supabase.auth.getSession();
         
         if (error) {
+          console.error('Error fetching initial session:', error);
           throw error;
         }
         
@@ -40,25 +43,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(initialSession.user);
           await fetchUserProfile(initialSession.user.id);
         }
-      } catch (error) {
-        console.error('Error fetching initial session:', error);
-      } finally {
+        
+        // Log auth state for debugging
+        console.log(`Auth initialized: session ${initialSession ? 'exists' : 'does not exist'}`);
+        
+        // Ensure loading state is set to false regardless of errors
         setLoading(false);
+      } catch (error) {
+        console.error('Error in auth initialization:', error);
+        // Always set loading to false even on error
+        setLoading(false);
+        
+        // Check for storage errors (can happen in incognito mode)
+        if (error instanceof Error && error.message.includes('localStorage')) {
+          console.warn('LocalStorage error detected, auth may not work properly in private browsing');
+        }
       }
     }
     
     fetchInitialSession();
     
-    // Set up auth state change listener
+    // Set up auth state change listener with the same error handling
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, currentSession) => {
-        setSession(currentSession);
-        setUser(currentSession?.user || null);
-        
-        if (currentSession?.user) {
-          await fetchUserProfile(currentSession.user.id);
-        } else {
-          setProfile(null);
+        try {
+          console.log(`Auth state changed: ${event}`);
+          setSession(currentSession);
+          setUser(currentSession?.user || null);
+          
+          if (currentSession?.user) {
+            await fetchUserProfile(currentSession.user.id);
+          } else {
+            setProfile(null);
+          }
+        } catch (error) {
+          console.error('Error in auth state change handler:', error);
         }
       }
     );
