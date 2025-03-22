@@ -28,6 +28,16 @@ export interface ClientToServerEvents {
 // Create a socket instance
 let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
 
+// Get the current socket status
+export const getSocketStatus = () => {
+  return {
+    connected: socket?.connected || false,
+    id: socket?.id || null,
+    reconnectAttempts: 0, // We don't track this currently
+    paused: false // We don't track this currently
+  };
+};
+
 // Initialize socket connection
 export const initializeSocket = async () => {
   if (!socket) {
