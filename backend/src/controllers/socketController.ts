@@ -418,17 +418,37 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     });
     
     // Handle chat messages
-    socket.on('chat', (text: string) => {
-      const playerName = players[socket.id]?.name || 'Unknown';
-      // Instead of 'chat', emit 'chatMessage' to match frontend expectations
-      // Add a timestamp to help with message expiration
-      io.emit('chatMessage', {
+    socket.on('chat', async (text: string) => {
+      // Get player info or use defaults if somehow not found
+      const player = players[socket.id] || { name: 'Unknown', id: socket.id };
+      const playerName = player.name;
+      
+      console.log(`Chat message received from player ${playerName} (${socket.id}):`, text);
+      
+      // Create the message object with all required fields
+      const messageObj = {
         sender: playerName,
         name: playerName, // For compatibility
         text: text,
         playerId: socket.id,
         timestamp: Date.now()
-      });
+      };
+      
+      console.log('Emitting chat message to all clients:', messageObj);
+      
+      // Emit to all clients including sender
+      io.emit('chatMessage', messageObj);
+      
+      // Log the number of clients that should receive this
+      try {
+        // Use proper Socket.IO v4 method to get connected sockets
+        console.log(`Active socket rooms:`, Array.from(io.sockets.adapter.rooms.keys()));
+        const connectedSockets = await io.fetchSockets();
+        console.log(`Message sent to ${connectedSockets.length} connected clients:`, 
+          connectedSockets.map(s => s.id).join(', '));
+      } catch (error) {
+        console.error('Error getting socket clients:', error);
+      }
     });
     
     // Handle resource gathering

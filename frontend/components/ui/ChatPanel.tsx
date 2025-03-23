@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getSocket } from '../../game/network/socket';
 import soundManager from '../../game/audio/soundManager';
 
@@ -8,15 +8,108 @@ interface ChatMessage {
   playerId?: string;
   timestamp?: number;
   sender?: string; // For backward compatibility
+  isLocal?: boolean;
 }
 
+// Persist messages in localStorage (limited to last 50)
+const saveMessages = (messages: ChatMessage[]) => {
+  try {
+    // Only keep the last 50 messages to avoid storage limits
+    const messagesToSave = messages.slice(-50);
+    localStorage.setItem('chat_messages', JSON.stringify(messagesToSave));
+  } catch (error) {
+    console.error('Error saving chat messages to localStorage:', error);
+  }
+};
+
+// Load messages from localStorage
+const loadMessages = (): ChatMessage[] => {
+  try {
+    const savedMessages = localStorage.getItem('chat_messages');
+    console.log('Loading chat messages from localStorage:', 
+      savedMessages ? `Found ${JSON.parse(savedMessages).length} messages` : 'No messages found');
+    
+    if (savedMessages) {
+      return JSON.parse(savedMessages);
+    }
+  } catch (error) {
+    console.error('Error loading chat messages from localStorage:', error);
+  }
+  console.log('Returning empty messages array from loadMessages');
+  return [];
+};
+
 const ChatPanel: React.FC = () => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  console.log('ChatPanel rendering');
+  
+  // Initialize messages from localStorage
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const loadedMessages = loadMessages();
+    console.log('Initial messages state set with', loadedMessages.length, 'messages');
+    return loadedMessages;
+  });
   const [inputValue, setInputValue] = useState('');
   const [minimized, setMinimized] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  // Keep track of messages we've already processed to prevent duplicates
-  const processedMessageIds = useRef<Set<string>>(new Set());
+  // Keep track of our own socket ID for message comparison
+  const mySocketIdRef = useRef<string | undefined>(undefined);
+  
+  // Save messages to localStorage whenever they change
+  useEffect(() => {
+    console.log('Messages changed, saving to localStorage:', messages.length, 'messages');
+    saveMessages(messages);
+  }, [messages]);
+  
+  // Create a chat message handler that can access latest messages
+  const handleChatMessage = useCallback((message: ChatMessage) => {
+    console.log('🔴 Chat message received in panel:', message);
+    
+    // Debug check if message has all required fields
+    if (!message.text) {
+      console.warn('Received message with empty text!', message);
+      return; // Skip messages with no text
+    }
+    
+    // Determine if this is our own message or from another player
+    const isOwnMessage = message.playerId === mySocketIdRef.current;
+    
+    // Check if we're seeing a server echo of our own message
+    // that we already added locally to avoid duplicates
+    if (isOwnMessage) {
+      // Get the latest messages (not from closure)
+      const latestMessages = [...messages];
+      
+      const recentOwnMessage = latestMessages.find(msg => 
+        msg.isLocal && 
+        msg.text === message.text && 
+        msg.timestamp && 
+        message.timestamp && 
+        Math.abs(msg.timestamp - message.timestamp) < 2000
+      );
+      
+      if (recentOwnMessage) {
+        console.log('Skipping server echo of our own message that was already added locally');
+        return;
+      }
+    }
+    
+    console.log(`Adding message from ${isOwnMessage ? 'ourselves' : message.name} to chat history`);
+    
+    // Create a formatted message object to add to our state
+    const formattedMessage = {
+      ...message,
+      // For display consistency
+      name: isOwnMessage ? 'You' : message.name || message.sender || 'Unknown'
+    };
+    
+    // Add to messages state
+    setMessages(prevMessages => [...prevMessages, formattedMessage]);
+    
+    // Play sound for new message (only for others' messages)
+    if (!isOwnMessage) {
+      soundManager.play('chatMessage');
+    }
+  }, [messages]); // Depend on messages to get the latest state
   
   useEffect(() => {
     let socketInstance: any = null;
@@ -29,37 +122,13 @@ const ChatPanel: React.FC = () => {
       // First remove any existing chatMessage listeners to prevent duplicates
       socket.off('chatMessage');
       
+      // Store our socket ID for message comparison
+      mySocketIdRef.current = socket.id;
+      
       socketInstance = socket;
       
-      // Listen for chat messages - this component handles displaying messages in the chat panel
-      // and playing the chat sound. The GameCanvas component handles creating the chat bubbles.
-      socket.on('chatMessage', (message: ChatMessage) => {
-        console.log('Chat message received in panel:', message);
-        
-        // Create a unique ID for this message
-        const messageId = `${message.playerId}-${message.timestamp}`;
-        
-        // Check if we've already processed this message
-        if (processedMessageIds.current.has(messageId)) {
-          console.log('Duplicate message detected, ignoring:', messageId);
-          return;
-        }
-        
-        // Add to processed set
-        processedMessageIds.current.add(messageId);
-        
-        // Add message to state
-        setMessages(prevMessages => [...prevMessages, message]);
-        
-        // Play sound for new message
-        soundManager.play('chatMessage');
-        
-        // Clean up old message IDs if the set gets too large
-        if (processedMessageIds.current.size > 100) {
-          const oldestEntries = Array.from(processedMessageIds.current).slice(0, 50);
-          oldestEntries.forEach(id => processedMessageIds.current.delete(id));
-        }
-      });
+      // Listen for chat messages using our callback handler
+      socket.on('chatMessage', handleChatMessage);
       
       // Log to confirm listener setup
       console.log('Chat message listener set up in ChatPanel');
@@ -74,10 +143,11 @@ const ChatPanel: React.FC = () => {
         socketInstance.off('chatMessage');
       }
     };
-  }, []);
+  }, [handleChatMessage]); // Only dependency is the message handler
   
   // Scroll to bottom when messages change
   useEffect(() => {
+    console.log(`Messages updated, total count: ${messages.length}`);
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
@@ -89,8 +159,29 @@ const ChatPanel: React.FC = () => {
     if (inputValue.trim() === '') return;
     
     const socket = await getSocket();
-    if (!socket) return;
+    if (!socket) {
+      console.error('Cannot send message - socket not connected');
+      return;
+    }
     
+    console.log('Sending chat message:', inputValue);
+    
+    // Get our own player name
+    const playerName = 'You'; // We'll use a generic name for local display
+    
+    // Create a direct message for immediate display
+    const directMessage = {
+      name: playerName,
+      text: inputValue,
+      timestamp: Date.now(),
+      // Mark as local so we can style it differently
+      isLocal: true
+    };
+    
+    // Add local message immediately without waiting for server
+    setMessages(prev => [...prev, directMessage]);
+    
+    // Send to the server - it will broadcast to all clients including us
     socket.emit('chat', inputValue);
     
     // Clear input
@@ -130,10 +221,71 @@ const ChatPanel: React.FC = () => {
           borderBottom: '1px solid rgba(255, 255, 255, 0.2)',
           cursor: 'pointer'
         }}
-        onClick={() => setMinimized(!minimized)}
       >
-        <span style={{ color: 'white', fontWeight: 'bold' }}>Chat</span>
-        <span style={{ color: 'white' }}>{minimized ? '▲' : '▼'}</span>
+        <span style={{ color: 'white', fontWeight: 'bold' }}>
+          Chat {messages.length > 0 && `(${messages.length})`}
+        </span>
+        <div>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation(); // Prevent triggering minimize
+              
+              // Create test message options
+              const testOptions = [
+                { role: 'local', name: 'You', isLocal: true },
+                { role: 'other', name: 'Test Player', playerId: 'test-player-id' }
+              ];
+              
+              // Alternate between local and other player messages for easier testing
+              const nextTest = messages.length % 2 === 0 ? testOptions[0] : testOptions[1];
+              
+              // Add a test message directly to state
+              const testMessage = {
+                ...nextTest,
+                text: `${nextTest.role === 'local' ? 'Your' : 'Other player'} test message at ${new Date().toLocaleTimeString()}`,
+                timestamp: Date.now()
+              };
+              
+              console.log('Adding test message directly to state:', testMessage);
+              setMessages(prev => [...prev, testMessage]);
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#ff9800',
+              cursor: 'pointer',
+              marginRight: '8px',
+              fontSize: '12px'
+            }}
+            title="Add test message (alternates between your message and other player's message)"
+          >
+            🧪
+          </button>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation(); // Prevent triggering minimize
+              console.log('Force refreshing chat messages display');
+              setMessages([...messages]); // Force re-render
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#4caf50',
+              cursor: 'pointer',
+              marginRight: '8px',
+              fontSize: '12px'
+            }}
+            title="Refresh messages"
+          >
+            🔄
+          </button>
+          <span 
+            style={{ color: 'white', cursor: 'pointer' }}
+            onClick={() => setMinimized(!minimized)}
+          >
+            {minimized ? '▲' : '▼'}
+          </span>
+        </div>
       </div>
       
       {!minimized && (
@@ -148,25 +300,57 @@ const ChatPanel: React.FC = () => {
               gap: '8px'
             }}
           >
+            {/* Debug information */}
+            <div style={{ color: '#666', fontSize: '10px', marginBottom: '5px' }}>
+              Debug: {messages.length} messages in state
+            </div>
+
+            {/* Empty state message */}
+            {messages.length === 0 && (
+              <div style={{ color: '#888', textAlign: 'center', padding: '20px 0' }}>
+                No messages yet. Start chatting or click 🧪 to add a test message!
+              </div>
+            )}
+            
+            {/* Simplified message rendering */}
             {messages.map((msg, index) => {
-              const isRecent = isRecentMessage(msg.timestamp);
+              // Determine if this is a message from ourselves or another player
+              const isOwnMessage = msg.isLocal || (msg.playerId === mySocketIdRef.current);
+              
               return (
                 <div 
-                  key={index} 
+                  key={`msg-${index}`} 
                   style={{ 
                     color: 'white', 
                     fontSize: '14px',
-                    backgroundColor: isRecent ? 'rgba(0, 128, 0, 0.2)' : 'transparent',
-                    padding: '4px 8px',
+                    backgroundColor: isOwnMessage 
+                      ? 'rgba(25, 118, 210, 0.5)' // Blue for our messages 
+                      : 'rgba(50, 50, 50, 0.5)',  // Dark for others
+                    padding: '6px 10px',
                     borderRadius: '4px',
-                    transition: 'background-color 0.5s ease'
+                    borderLeft: isOwnMessage 
+                      ? '3px solid #2196f3'   // Blue border for ours
+                      : '3px solid #4caf50',  // Green border for others
+                    marginBottom: '4px'
                   }}
                 >
-                  <span style={{ color: '#4caf50', fontWeight: 'bold' }}>{msg.name}: </span>
-                  <span>{msg.text}</span>
+                  <div style={{ 
+                    color: isOwnMessage ? '#90caf9' : '#4caf50', 
+                    fontWeight: 'bold', 
+                    marginBottom: '2px',
+                    display: 'flex',
+                    justifyContent: 'space-between'
+                  }}>
+                    <span>{msg.name || msg.sender || 'Unknown'}</span>
+                    <span style={{ fontSize: '10px', color: '#aaa' }}>
+                      {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ''}
+                    </span>
+                  </div>
+                  <div>{msg.text || '[Empty message]'}</div>
                 </div>
               );
             })}
+            
             <div ref={messagesEndRef} />
           </div>
           
