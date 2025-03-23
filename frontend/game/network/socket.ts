@@ -42,8 +42,18 @@ export const getSocketStatus = () => {
 export const initializeSocket = async () => {
   if (!socket) {
     try {
-      // Get the session token for authentication
-      const { data } = await supabase.auth.getSession();
+      // Add a promise with timeout to handle auth session retrieval
+      const getSessionWithTimeout = () => {
+        return Promise.race([
+          supabase.auth.getSession(),
+          new Promise<never>((_, reject) => 
+            setTimeout(() => reject(new Error('Auth session retrieval timed out')), 5000)
+          )
+        ]);
+      };
+      
+      // Get the session token for authentication with timeout
+      const { data } = await getSessionWithTimeout();
       const token = data.session?.access_token;
       
       // Don't connect if not authenticated
@@ -52,33 +62,46 @@ export const initializeSocket = async () => {
         return null;
       }
       
-      // Always use the backend socket server with auth token
-      // We're standardizing on the backend implementation
-      const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
-      console.log('Connecting to backend socket server at:', BACKEND_URL);
+      // Default backend URL for fallback
+      let BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
+      
+      // Use same domain for WebSocket connections to avoid CORS issues
+      if (typeof window !== 'undefined') {
+        // Always use the same origin for socket.io connections
+        const protocol = window.location.protocol === 'https:' ? 'https://' : 'http://';
+        const hostname = window.location.hostname;
+        
+        // For production or development server, use the same hostname
+        if (hostname.includes('miniscape.io') || hostname === 'localhost') {
+          BACKEND_URL = `${protocol}${hostname}`;
+          console.log('Using same-origin WebSocket URL:', BACKEND_URL);
+        }
+      }
+      
+      console.log('Connecting to socket server at:', BACKEND_URL);
       
       // Log token information for debugging (limited for security)
       console.log('Auth token info:', {
         available: !!token,
-        length: token.length,
-        format: token.split('.').length === 3 ? 'JWT' : 'unknown',
-        prefix: token.substring(0, 6) + '...',
+        length: token?.length,
+        format: token?.split('.').length === 3 ? 'JWT' : 'unknown',
+        prefix: token?.substring(0, 6) + '...',
       });
       
       // Create socket connection with better reconnection and error handling
       socket = io(BACKEND_URL, {
-        transports: ['websocket', 'polling'],
-        path: '/socket.io', // Ensure correct path for backend server
+        transports: ['websocket', 'polling'], // Try websocket first, fallback to polling
+        path: '/socket.io',
         auth: {
           token
         },
-        extraHeaders: {
-          'Authorization': `Bearer ${token}`
-        },
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
-        timeout: 10000,
-        forceNew: true, // Force a new connection each time
+        timeout: 10000, // Increased from 5s to 10s for slower networks
+        forceNew: true,
+        extraHeaders: {
+          'Authorization': `Bearer ${token}`
+        }
       });
 
       // Enhanced logging and error handling
@@ -107,17 +130,25 @@ export const initializeSocket = async () => {
           socket?.disconnect();
           socket = null;
           
-          // Try to refresh the auth token
-          supabase.auth.refreshSession().then(({ data, error }) => {
+          // Try to refresh the auth token with timeout
+          Promise.race([
+            supabase.auth.refreshSession(),
+            new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error('Token refresh timed out')), 5000)
+            )
+          ]).then((result: any) => {
+            const { data, error } = result;
             if (error) {
               console.error('Token refresh failed:', error.message);
               return;
             }
             
-            if (data.session) {
+            if (data?.session) {
               console.log('Token refreshed successfully, will reconnect on next getSocket call');
               localStorage.setItem('token_refreshed_at', Date.now().toString());
             }
+          }).catch(error => {
+            console.error('Token refresh error:', error.message);
           });
         }
       });
@@ -126,6 +157,20 @@ export const initializeSocket = async () => {
       socket.on('error', (errorMsg) => {
         console.error('Received error from socket server:', errorMsg);
       });
+      
+      // Add timeout for connection to prevent hanging
+      const connectTimeout = setTimeout(() => {
+        if (socket && !socket.connected) {
+          console.warn('Socket connection timed out after 8 seconds');
+          // Do not disconnect, just return the socket as is
+          // The component will handle this scenario
+        }
+      }, 8000);
+      
+      // Clear timeout when connected or error
+      socket.once('connect', () => clearTimeout(connectTimeout));
+      socket.once('connect_error', () => clearTimeout(connectTimeout));
+      
     } catch (error) {
       console.error('Error initializing socket:', error);
       socket = null;

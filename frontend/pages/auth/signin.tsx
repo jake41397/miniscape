@@ -74,6 +74,57 @@ const SignIn: NextPage = () => {
     addDebugInfo(`Auth state changed: session=${!!session}, loading=${loading}`);
   }, [session, loading]);
   
+  // Check for a stuck state and force a clean auth state if needed
+  useEffect(() => {
+    const checkStuckState = async () => {
+      try {
+        // Check if we've been redirected from a failed home page load
+        const redirectTime = localStorage.getItem('redirect_to_signin_at');
+        if (redirectTime) {
+          const redirectTimestamp = parseInt(redirectTime, 10);
+          const timeSinceRedirect = Date.now() - redirectTimestamp;
+          
+          // If we've been on this page for a while after a redirect, try to force a clean state
+          if (timeSinceRedirect > 5000 && !loading && !session) {
+            addDebugInfo(`Potential stuck state detected, clearing auth state (${Math.round(timeSinceRedirect / 1000)}s since redirect)`);
+            
+            // Clear Supabase auth storage
+            localStorage.removeItem('supabase.auth.token');
+            sessionStorage.removeItem('supabase.auth.token');
+            
+            // Make a server-side diagnostic request
+            const res = await fetch('/api/auth-debug');
+            const data = await res.json();
+            addDebugInfo(`Auth debug response: ${JSON.stringify(data)}`);
+            
+            // Clear local indicators
+            localStorage.removeItem('redirect_to_signin_at');
+            
+            // Try to sign out directly via Supabase
+            await supabase.auth.signOut();
+            addDebugInfo('Forced sign out completed');
+            
+            // Wait a bit more then reload the page
+            setTimeout(() => {
+              addDebugInfo('Reloading page after forced sign out');
+              window.location.reload();
+            }, 1000);
+          }
+        }
+      } catch (error: any) {
+        console.error('Error in checkStuckState:', error);
+        addDebugInfo(`Error in checkStuckState: ${error.message || 'Unknown error'}`);
+      }
+    };
+    
+    // Run the check
+    checkStuckState();
+    
+    // Also set up a periodic check
+    const interval = setInterval(checkStuckState, 10000);
+    return () => clearInterval(interval);
+  }, [session, loading]);
+  
   // Redirect to home if already authenticated, but with a delay to prevent flickering
   useEffect(() => {
     // Only attempt redirect if not already redirecting and auth is done loading
@@ -228,44 +279,6 @@ const SignIn: NextPage = () => {
     );
   }
   
-  useEffect(() => {
-    // Check for a stuck state and force a clean auth state if needed
-    const checkStuckState = async () => {
-      try {
-        // Check if we've been redirected from a failed home page load
-        const redirectTime = localStorage.getItem('redirect_to_signin_at');
-        if (redirectTime) {
-          const redirectTimestamp = parseInt(redirectTime, 10);
-          const timeSinceRedirect = Date.now() - redirectTimestamp;
-          
-          // If we've been on this page for a while after a redirect, try to force a clean state
-          if (timeSinceRedirect > 5000 && !loading && !session) {
-            addDebugInfo(`Potential stuck state detected, clearing auth state (${Math.round(timeSinceRedirect / 1000)}s since redirect)`);
-            
-            // Clear Supabase auth storage
-            localStorage.removeItem('supabase.auth.token');
-            sessionStorage.removeItem('supabase.auth.token');
-            
-            // Make a server-side diagnostic request
-            const res = await fetch('/api/auth-debug');
-            if (res.ok) {
-              const data = await res.json();
-              addDebugInfo(`Auth debug response: ${JSON.stringify(data)}`);
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Error in stuck state check:', e);
-      }
-    };
-    
-    checkStuckState();
-    
-    // Also set a repeated check
-    const intervalId = setInterval(checkStuckState, 5000);
-    return () => clearInterval(intervalId);
-  }, [loading, session]);
-  
   // Normal sign-in page
   return (
     <div style={{ 
@@ -345,6 +358,71 @@ const SignIn: NextPage = () => {
             G
           </span>
           Sign in with Google
+        </button>
+        
+        {/* Button to reset auth state if user gets stuck */}
+        <button 
+          onClick={() => {
+            addDebugInfo('Reset auth state button clicked');
+            
+            // Log information about the current environment
+            addDebugInfo(`Current hostname: ${window.location.hostname}`);
+            addDebugInfo(`Current URL: ${window.location.href}`);
+            
+            // Check if there's any localhost redirect configuration
+            if (localStorage.getItem('supabase.auth.callback_url')?.includes('localhost')) {
+              addDebugInfo('⚠️ Found localhost callback URL in storage - this can cause redirect issues');
+            }
+            
+            // Clear all auth-related storage
+            Object.keys(localStorage).forEach(key => {
+              if (key.startsWith('supabase.auth.') || key.includes('auth_')) {
+                addDebugInfo(`Removing from localStorage: ${key}`);
+                localStorage.removeItem(key);
+              }
+            });
+            
+            Object.keys(sessionStorage).forEach(key => {
+              if (key.startsWith('supabase.auth.') || key.includes('auth_')) {
+                addDebugInfo(`Removing from sessionStorage: ${key}`);
+                sessionStorage.removeItem(key);
+              }
+            });
+            
+            // Clear cookies
+            document.cookie.split(';').forEach(c => {
+              const cookie = c.trim();
+              if (cookie.startsWith('sb-')) {
+                const name = cookie.split('=')[0];
+                addDebugInfo(`Removing cookie: ${name}`);
+                document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+              }
+            });
+            
+            // Add manual fix for common oauth issues
+            localStorage.setItem('oauth_hostname_override', window.location.hostname);
+            addDebugInfo(`Set current hostname override: ${window.location.hostname}`);
+            
+            addDebugInfo('Auth state reset complete, reloading page');
+            // Add cache-busting parameter to the reload
+            window.location.href = `${window.location.pathname}?reset=${Date.now()}`;
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '0.75rem 1.5rem',
+            backgroundColor: 'transparent',
+            color: 'rgba(255, 255, 255, 0.7)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            borderRadius: '4px',
+            fontSize: '0.9rem',
+            cursor: 'pointer',
+            width: '100%',
+            marginBottom: '1rem'
+          }}
+        >
+          Reset Authentication State
         </button>
         
         {/* debug info display */}

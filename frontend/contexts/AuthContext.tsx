@@ -29,8 +29,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         setLoading(true);
         
+        // Check for hostname override from previous reset
+        const hostnameOverride = localStorage.getItem('oauth_hostname_override');
+        if (hostnameOverride && hostnameOverride !== window.location.hostname) {
+          console.log(`Hostname override detected: ${hostnameOverride} vs current: ${window.location.hostname}`);
+          
+          // If we're on localhost but override is set to production hostname
+          if (window.location.hostname === 'localhost' && hostnameOverride !== 'localhost') {
+            console.log('Detected development environment with production hostname override');
+          }
+          
+          // If we have potential conflict, clear it
+          if (hostnameOverride.includes('localhost') && !window.location.hostname.includes('localhost')) {
+            console.log('Clearing localhost override in production environment');
+            localStorage.removeItem('oauth_hostname_override');
+          }
+        }
+        
+        // Set a timeout for auth operations to prevent indefinite loading
+        const authTimeout = setTimeout(() => {
+          console.warn('Auth initialization timed out after 10 seconds');
+          setLoading(false);
+          // Clear any potentially corrupted auth state
+          localStorage.removeItem('supabase.auth.token');
+          sessionStorage.removeItem('supabase.auth.token');
+        }, 10000); // 10 second timeout
+        
         // Get active session
         const { data: { session: initialSession }, error } = await supabase.auth.getSession();
+        
+        // Clear the timeout since we got a response
+        clearTimeout(authTimeout);
         
         if (error) {
           console.error('Error fetching initial session:', error);
@@ -57,6 +86,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Check for storage errors (can happen in incognito mode)
         if (error instanceof Error && error.message.includes('localStorage')) {
           console.warn('LocalStorage error detected, auth may not work properly in private browsing');
+        }
+        
+        // Try to recover from potential token errors
+        try {
+          localStorage.removeItem('supabase.auth.token');
+          sessionStorage.removeItem('supabase.auth.token');
+          console.log('Cleared auth tokens due to initialization error');
+        } catch (e) {
+          console.error('Failed to clear auth tokens:', e);
         }
       }
     }
@@ -111,35 +149,90 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Sign in with Google
   const signInWithGoogle = async () => {
     try {
-      // Clear any previous auth states that might be incomplete
-      localStorage.removeItem('supabase.auth.code_verifier');
-      localStorage.removeItem('supabase.auth.state');
-      
-      // Mark that we're starting auth flow
-      sessionStorage.setItem('miniscape_auth_attempt', new Date().toISOString());
-      
-      // Use implicit flow for more reliable auth
-      const response = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/auth/handle-callback`,
-          skipBrowserRedirect: false,
-          // Set additional scopes and parameters for better reliability
-          scopes: 'email profile',
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          }
-        },
+      // Clear all auth-related storage
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith('supabase.auth.')) {
+          localStorage.removeItem(key);
+        }
       });
       
-      if (response.error) {
-        throw response.error;
+      Object.keys(sessionStorage).forEach(key => {
+        if (key.startsWith('supabase.auth.')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      
+      document.cookie.split(';').forEach(c => {
+        const cookie = c.trim();
+        if (cookie.startsWith('sb-')) {
+          const name = cookie.split('=')[0];
+          document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+        }
+      });
+      
+      console.log('Starting new auth flow, all storage cleared');
+      
+      // Determine the correct redirect URL based on the current hostname
+      let redirectUrl: string;
+      
+      // Check if we're on localhost or the dev server
+      const currentHostname = window.location.hostname;
+      console.log(`Current hostname: ${currentHostname}`);
+      
+      if (currentHostname === 'localhost' || currentHostname === '127.0.0.1') {
+        // For local development
+        redirectUrl = `${window.location.origin}/auth/handle-callback`;
+        console.log(`Using local redirect URL: ${redirectUrl}`);
+      } else {
+        // For production deployment
+        redirectUrl = `https://${currentHostname}/auth/handle-callback`;
+        console.log(`Using production redirect URL: ${redirectUrl}`);
       }
       
-      console.log('Auth flow started successfully');
+      // Add a timestamp to prevent caching issues
+      redirectUrl = `${redirectUrl}?t=${Date.now()}`;
+      
+      // Simplify the call with the explicit redirect URL
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: redirectUrl,
+          skipBrowserRedirect: false,
+        }
+      });
+      
+      if (error) {
+        throw error;
+      }
+      
+      console.log('Auth flow initiated successfully');
+      
     } catch (error) {
       console.error('Error signing in with Google:', error);
+      
+      // If there's an error, try the alternative approach
+      try {
+        console.log('Trying alternative sign-in approach...');
+        
+        // Determine the fallback redirect URL
+        const fallbackUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          ? `${window.location.origin}/auth/signin`
+          : `https://${window.location.hostname}/auth/signin`;
+          
+        const { error: fallbackError } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: fallbackUrl,
+            skipBrowserRedirect: false
+          }
+        });
+        
+        if (fallbackError) {
+          console.error('Alternative sign-in also failed:', fallbackError);
+        }
+      } catch (fallbackErr) {
+        console.error('Alternative sign-in approach failed:', fallbackErr);
+      }
     }
   };
   

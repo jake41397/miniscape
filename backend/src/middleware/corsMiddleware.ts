@@ -9,7 +9,10 @@ export const configureSocketIO = (io: Server): void => {
   // Allow connections from frontend
   const allowedOrigins = [
     'http://localhost:3000',    // Local Next.js dev server
-    'http://localhost:8080',    // Alternative dev server
+    'http://localhost:8080',
+    'https://dev.miniscape.io',
+    'https://miniscape.io',
+    'https://www.miniscape.io',
     'https://miniscape.vercel.app' // Production URL (update to match your domain)
   ];
   

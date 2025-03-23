@@ -138,6 +138,22 @@ const Home: NextPage = () => {
     }
     lastAuthCheck.current = now;
 
+    // Set a maximum loading time to avoid getting stuck
+    const maxLoadingTime = setTimeout(() => {
+      // If we're still loading after 15 seconds, force a navigation to signin page
+      if (authLoading) {
+        addDebugInfo('Auth loading timeout reached (15s), forcing navigation to signin');
+        try {
+          localStorage.setItem('redirect_to_signin_at', Date.now().toString());
+          localStorage.setItem('auth_timeout', 'true');
+          window.location.href = '/auth/signin';
+        } catch (err) {
+          addDebugInfo(`Redirect error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          window.location.replace('/auth/signin');
+        }
+      }
+    }, 15000);
+
     // Clear any existing redirect timeout
     if (redirectTimeoutRef.current) {
       addDebugInfo('Clearing existing redirect timeout');
@@ -147,6 +163,9 @@ const Home: NextPage = () => {
 
     // Only check auth after auth state has loaded and we haven't already tried to redirect
     if (!authLoading) {
+      // Clear the max loading timeout since auth is done loading
+      clearTimeout(maxLoadingTime);
+      
       addDebugInfo(`Auth loaded, checking session (exists: ${!!session})`);
       
       // If no session, redirect to login immediately with direct navigation
@@ -169,11 +188,13 @@ const Home: NextPage = () => {
         addDebugInfo('Valid session found, continuing to game initialization');
         // Clear any stored redirect intentions
         localStorage.removeItem('redirect_to_signin_at');
+        localStorage.removeItem('auth_timeout');
       }
     }
     
     // Add a safety cleanup to ensure we don't get stuck
     return () => {
+      clearTimeout(maxLoadingTime);
       if (redirectTimeoutRef.current) {
         clearTimeout(redirectTimeoutRef.current);
         redirectTimeoutRef.current = null;
@@ -186,11 +207,20 @@ const Home: NextPage = () => {
     try {
       addDebugInfo('Starting direct socket initialization with backend');
       
+      // Set a timeout for socket connection
+      const socketTimeout = setTimeout(() => {
+        setIsLoading(false);
+        addDebugInfo('Socket connection timed out after 10 seconds, proceeding anyway');
+      }, 10000);
+      
       // Import and use our socket client implementation
       const { initializeSocket: initSocket, getSocket } = await import('../game/network/socket');
       
       // Initialize the socket connection
       const socket = await initSocket();
+      
+      // Clear the timeout since initialization completed
+      clearTimeout(socketTimeout);
       
       if (!socket) {
         throw new Error('Failed to initialize socket - no connection established');
@@ -200,20 +230,31 @@ const Home: NextPage = () => {
       if (socket.connected) {
         addDebugInfo('Socket connected successfully!', { socketId: socket.id });
         localStorage.setItem('socket_initialized_at', Date.now().toString());
+        setIsLoading(false);
       } else {
         addDebugInfo('Socket initialized but not yet connected - waiting for connection');
         
-        // Add a listener for connection
+        // Add a listener for connection with a timeout
+        const connectionTimeout = setTimeout(() => {
+          addDebugInfo('Socket connection timeout reached, proceeding anyway');
+          setIsLoading(false);
+        }, 5000);
+        
+        // Add a one-time connection listener
         socket.once('connect', () => {
+          clearTimeout(connectionTimeout);
           addDebugInfo('Socket connected after initialization', { socketId: socket.id });
           localStorage.setItem('socket_initialized_at', Date.now().toString());
+          setIsLoading(false);
         });
         
         // Add a one-time error listener
         socket.once('connect_error', (err) => {
+          clearTimeout(connectionTimeout);
           const errorMessage = err instanceof Error ? err.message : 'Unknown error';
           addDebugInfo(`Socket connection error: ${errorMessage}`);
           setSocketError(errorMessage);
+          setIsLoading(false);
         });
       }
     } catch (error) {
@@ -221,6 +262,7 @@ const Home: NextPage = () => {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       addDebugInfo(`Failed to initialize socket: ${errorMessage}`);
       setSocketError(errorMessage);
+      setIsLoading(false);
       
       // Set a timer to retry in 5 seconds
       const retryTimeoutId = setTimeout(() => {

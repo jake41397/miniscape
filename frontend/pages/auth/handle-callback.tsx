@@ -10,6 +10,15 @@ const HandleCallback: NextPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(true);
   const [debugInfo, setDebugInfo] = useState<string[]>([]);
+  // Add state for client-side only values
+  const [clientInfo, setClientInfo] = useState({
+    origin: '',
+    hostname: '',
+    protocol: '',
+    url: '',
+    pathname: ''
+  });
+  const [isClient, setIsClient] = useState(false);
   
   // Debug logger
   const addDebugInfo = (info: string) => {
@@ -17,117 +26,219 @@ const HandleCallback: NextPage = () => {
     setDebugInfo(prev => [...prev, info]);
   };
   
+  // First useEffect - just to set client state
   useEffect(() => {
-    // Only run once the router is ready and we have query params
-    if (!router.isReady) return;
-    
-    // Get hash and query parameters
-    const { code, error: queryError, access_token, provider_token } = router.query;
-    const hashParams = new URLSearchParams(window.location.hash.substring(1));
-    const hashAccessToken = hashParams.get('access_token');
-    
-    // Log what we received for debugging
-    addDebugInfo(`Received callback with: ${JSON.stringify({
-      code: code ? `${String(code).substring(0, 10)}...` : null,
-      access_token: access_token ? 'present' : null,
-      hash_access_token: hashAccessToken ? 'present' : null,
-      error: queryError || null
-    })}`);
-    
-    // Handle errors passed from provider
-    if (queryError) {
-      addDebugInfo(`Auth error from provider: ${queryError}`);
-      setError(`Authentication error: ${queryError}`);
-      setProcessing(false);
+    setIsClient(true);
+    setClientInfo({
+      origin: window.location.origin,
+      hostname: window.location.hostname,
+      protocol: window.location.protocol,
+      url: window.location.href,
+      pathname: window.location.pathname
+    });
+    addDebugInfo('Client-side rendering initialized');
+  }, []);
+  
+  // Second useEffect - handle the authentication flow only after client-side is ready
+  useEffect(() => {
+    // Only proceed if we're on the client AND the router is ready
+    if (!isClient || !router.isReady) {
       return;
     }
     
+    // Add debug information about the current URL and redirect
+    addDebugInfo(`Current URL: ${clientInfo.url}`);
+    addDebugInfo(`Current hostname: ${clientInfo.hostname}`);
+    
+    // Check if there's a localhost reference in the URL
+    if (clientInfo.url.includes('localhost:3000')) {
+      addDebugInfo('⚠️ Detected localhost in URL. This might cause authentication issues.');
+    }
+    
+    // Set a timeout
+    const timeoutId = setTimeout(() => {
+      addDebugInfo('Callback handling timed out after 30 seconds');
+      setError('Authentication timed out. Please try again.');
+      setProcessing(false);
+    }, 30000);
+    
+    // Simplified auth handling
     const handleAuth = async () => {
       try {
         addDebugInfo('Starting auth handling process');
         
-        // Check if we already have a session from the redirect
-        const { data: { session: existingSession } } = await supabase.auth.getSession();
+        // Check for errors in URL params first
+        if (router.query.error) {
+          addDebugInfo(`Auth error from query: ${router.query.error}`);
+          throw new Error(String(router.query.error));
+        }
         
-        if (existingSession) {
-          addDebugInfo(`Found existing session for user: ${existingSession.user.email}`);
+        // Log relevant query parameters for debugging
+        if (router.query.code) {
+          addDebugInfo(`Auth code present: ${String(router.query.code).substring(0, 10)}...`);
+        }
+        
+        if (router.query.state) {
+          addDebugInfo(`Auth state present: ${String(router.query.state).substring(0, 10)}...`);
+        }
+        
+        // Get the session directly from Supabase - should work with PKCE flow
+        addDebugInfo('Attempting to get session from Supabase');
+        console.log('SUPABASE AUTH: Starting getSession call');
+        const startTime = Date.now();
+        
+        // Set a more aggressive timeout just for this API call
+        const sessionPromise = supabase.auth.getSession();
+        const sessionTimeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Supabase getSession timed out after 10 seconds')), 10000);
+        });
+        
+        try {
+          // Race the session promise against a timeout
+          const { data, error } = await Promise.race([sessionPromise, sessionTimeoutPromise]) as any;
+          const endTime = Date.now();
+          console.log(`SUPABASE AUTH: getSession completed in ${endTime - startTime}ms`);
           
-          // Setup user profile
-          await setupUserProfile(existingSession.user.id);
+          if (error) {
+            addDebugInfo(`Error getting session: ${error.message}`);
+            console.error('SUPABASE AUTH ERROR:', error);
+            throw error;
+          }
           
-          // Redirect to home page
-          addDebugInfo('Redirecting to home page with existing session');
-          router.push('/');
+          if (data?.session) {
+            clearTimeout(timeoutId);
+            addDebugInfo(`Session found for user: ${data.session.user.email}`);
+            console.log('SUPABASE AUTH: Session successfully obtained');
+            
+            // Setup user profile
+            await setupUserProfile(data.session.user.id);
+            
+            // Redirect to home page using the correct hostname
+            const homeUrl = clientInfo.hostname === 'localhost' || clientInfo.hostname === '127.0.0.1'
+              ? `${clientInfo.origin}/`
+              : `https://${clientInfo.hostname}/`;
+              
+            addDebugInfo(`Redirecting to home page: ${homeUrl}`);
+            window.location.href = homeUrl;
+            return;
+          } else {
+            addDebugInfo('No session found from getSession() call');
+            console.log('SUPABASE AUTH: No session returned from getSession()');
+          }
+        } catch (sessionError) {
+          // If the session call times out or fails, log it and continue to code exchange
+          addDebugInfo(`Session retrieval issue: ${sessionError instanceof Error ? sessionError.message : 'Unknown error'}`);
+          console.warn('SUPABASE AUTH: Session retrieval failed, continuing to code exchange', sessionError);
+        }
+        
+        // If we don't have a session, we need to handle code or implicit flow
+        const code = router.query.code;
+        const fragment = window.location.hash;
+        
+        if (code) {
+          addDebugInfo(`Processing code parameter: ${String(code).substring(0, 10)}...`);
+          
+          try {
+            // Exchange code for session with a timeout
+            addDebugInfo('Attempting to exchange code for session');
+            console.log('SUPABASE AUTH: Starting exchangeCodeForSession call');
+            const exchangeStartTime = Date.now();
+            
+            // Set a promise with timeout for code exchange
+            const exchangePromise = supabase.auth.exchangeCodeForSession(String(code));
+            const exchangeTimeoutPromise = new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('Code exchange timed out after 15 seconds')), 15000);
+            });
+            
+            // Race the exchange against a timeout
+            const { data: exchangeData, error: exchangeError } = await Promise.race([
+              exchangePromise, 
+              exchangeTimeoutPromise
+            ]) as any;
+            
+            const exchangeEndTime = Date.now();
+            console.log(`SUPABASE AUTH: exchangeCodeForSession completed in ${exchangeEndTime - exchangeStartTime}ms`);
+            
+            if (exchangeError) {
+              addDebugInfo(`Code exchange error: ${exchangeError.message}`);
+              console.error('SUPABASE AUTH EXCHANGE ERROR:', exchangeError);
+              throw exchangeError;
+            }
+            
+            if (exchangeData?.session) {
+              clearTimeout(timeoutId);
+              addDebugInfo(`Session established for user: ${exchangeData.session.user.email}`);
+              
+              // Setup user profile
+              await setupUserProfile(exchangeData.session.user.id);
+              
+              // Redirect to home page with correct hostname
+              const homeUrl = clientInfo.hostname === 'localhost' || clientInfo.hostname === '127.0.0.1'
+                ? `${clientInfo.origin}/`
+                : `https://${clientInfo.hostname}/`;
+                
+              addDebugInfo(`Redirecting to home page after code exchange: ${homeUrl}`);
+              window.location.href = homeUrl;
+              return;
+            } else {
+              addDebugInfo('No session established after code exchange');
+            }
+          } catch (codeError) {
+            addDebugInfo(`Code processing error: ${codeError instanceof Error ? codeError.message : 'Unknown error'}`);
+            
+            // If we time out on both methods, try a server-side diagnostic
+            try {
+              addDebugInfo('Running server-side diagnostics after auth failure');
+              const diagnosticStartTime = Date.now();
+              const diagnosticResponse = await fetch('/api/supabase-debug');
+              const diagnosticData = await diagnosticResponse.json();
+              const diagnosticEndTime = Date.now();
+              
+              addDebugInfo(`Diagnostic completed in ${diagnosticEndTime - diagnosticStartTime}ms`);
+              console.log('SUPABASE DIAGNOSTICS:', diagnosticData);
+              
+              // If we got useful diagnostic info, display it
+              if (diagnosticData.tests?.oauthUrl?.url) {
+                addDebugInfo(`OAuth URL from diagnostics: ${new URL(diagnosticData.tests.oauthUrl.url).origin}`);
+              }
+              
+              // Log connection status
+              if (diagnosticData.tests?.connection) {
+                addDebugInfo(`Database connection: ${diagnosticData.tests.connection.success ? 'OK' : 'Failed'}`);
+              }
+            } catch (diagError) {
+              addDebugInfo(`Diagnostic error: ${diagError instanceof Error ? diagError.message : 'Unknown error'}`);
+            }
+          }
+        } else if (fragment && fragment.includes('access_token')) {
+          addDebugInfo('Found access token in URL fragment');
+          
+          // We can force a refresh to process the hash
+          addDebugInfo('Refreshing page to process hash fragment');
+          window.location.href = clientInfo.pathname;
           return;
         }
         
-        // For implicit flow, we should have an access token in the URL hash
-        if (hashAccessToken) {
-          addDebugInfo('Found access token in URL hash (implicit flow)');
-          
-          // The supabase client should automatically process this because detectSessionInUrl is true
-          // Let's verify that it worked by getting the session
-          const { data: { session } } = await supabase.auth.getSession();
-          
-          if (session) {
-            addDebugInfo(`Session established from URL hash for user: ${session.user.email}`);
-            
-            // Setup user profile
-            await setupUserProfile(session.user.id);
-            
-            // Redirect to home page
-            addDebugInfo('Redirecting to home page');
-            router.push('/');
-            return;
-          } else {
-            addDebugInfo('No session established from URL hash');
-          }
-        }
-        
-        // If we have a code but no session yet, try exchanging it directly
-        if (code) {
-          addDebugInfo(`Processing auth code: ${code}`);
-          
-          try {
-            // Try to exchange code for session
-            const { data, error: sessionError } = await supabase.auth.exchangeCodeForSession(String(code));
-            
-            if (sessionError) {
-              addDebugInfo(`Session exchange error: ${sessionError.message}`);
-              throw sessionError;
-            }
-            
-            if (data.session && data.user) {
-              addDebugInfo(`Successfully exchanged code for session: ${data.user.email}`);
-              
-              // Setup user profile
-              await setupUserProfile(data.user.id);
-              
-              // Redirect to home page
-              addDebugInfo('Redirecting to home page');
-              router.push('/');
-              return;
-            }
-          } catch (codeExchangeError) {
-            addDebugInfo(`Code exchange failed: ${codeExchangeError instanceof Error ? codeExchangeError.message : 'Unknown error'}`);
-          }
-        }
-        
-        // If we got here, we weren't able to establish a session
-        addDebugInfo('Failed to establish a session from callback parameters');
-        setError('Authentication session was lost. Please try signing in again.');
+        // If we get here, we've tried everything and still don't have a session
+        clearTimeout(timeoutId);
+        addDebugInfo('All auth methods failed');
+        setError('Unable to complete authentication. Please try signing in again.');
         setProcessing(false);
+        
       } catch (error) {
-        console.error('Error in auth handling:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Authentication failed';
-        addDebugInfo(`Error: ${errorMessage}`);
-        setError(errorMessage);
+        clearTimeout(timeoutId);
+        const errorMsg = error instanceof Error ? error.message : 'Unknown authentication error';
+        addDebugInfo(`Auth error: ${errorMsg}`);
+        setError(errorMsg);
         setProcessing(false);
       }
     };
     
+    // Start the auth handling process
     handleAuth();
-  }, [router.isReady, router.query]);
+    
+    return () => clearTimeout(timeoutId);
+  }, [isClient, router.isReady, router.query, clientInfo]); // All necessary dependencies
   
   // Setup user profile
   async function setupUserProfile(userId: string) {
@@ -226,149 +337,210 @@ const HandleCallback: NextPage = () => {
   
   return (
     <div style={{ 
-      width: '100%', 
-      height: '100vh', 
-      display: 'flex', 
+      display: 'flex',
       flexDirection: 'column',
-      justifyContent: 'center', 
+      justifyContent: 'center',
       alignItems: 'center',
-      background: 'linear-gradient(to bottom, #1a1a2e, #16213e)'
+      minHeight: '100vh',
+      padding: '1rem',
+      backgroundColor: '#14181d',
+      color: 'white',
+      fontFamily: 'sans-serif'
     }}>
       <Head>
         <title>{error ? 'Authentication Error' : 'Completing Authentication...'}</title>
       </Head>
       
       <div style={{
-        padding: '2rem',
         backgroundColor: 'rgba(255, 255, 255, 0.1)',
         borderRadius: '8px',
-        backdropFilter: 'blur(10px)',
-        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+        padding: '2rem',
+        maxWidth: '600px',
+        width: '100%',
         textAlign: 'center',
-        width: '90%',
-        maxWidth: '400px'
+        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
       }}>
-        {processing ? (
+        <h1 style={{ marginBottom: '1rem' }}>
+          {processing ? 'Processing Authentication...' : (error ? 'Authentication Error' : 'Redirecting...')}
+        </h1>
+        
+        {processing && (
           <>
-            <h1 style={{ 
-              marginBottom: '1rem',
-              fontSize: '1.5rem',
-              fontWeight: 'bold',
-              color: 'white'
-            }}>
-              Completing Sign In
-            </h1>
-            
-            <p style={{ 
-              marginBottom: '2rem',
-              color: 'rgba(255, 255, 255, 0.8)', 
-              fontSize: '1rem' 
-            }}>
-              Please wait while we complete the authentication process...
-            </p>
-            
-            <div 
-              style={{ 
-                width: '30px', 
-                height: '30px', 
-                border: '3px solid rgba(255, 255, 255, 0.3)', 
-                borderTop: '3px solid #ffffff', 
+            <p>Please wait while we complete the authentication process...</p>
+            <div style={{ margin: '2rem 0', textAlign: 'center' }}>
+              <div style={{ 
+                display: 'inline-block',
+                width: '30px',
+                height: '30px',
+                border: '3px solid rgba(255, 255, 255, 0.3)',
                 borderRadius: '50%',
-                margin: '0 auto',
+                borderTopColor: 'white',
                 animation: 'spin 1s linear infinite'
-              }} 
-            />
-            
-            <style jsx>{`
-              @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-              }
-            `}</style>
-          </>
-        ) : (
-          <>
-            <h1 style={{ 
-              marginBottom: '1rem',
-              fontSize: '1.5rem',
-              fontWeight: 'bold',
-              color: '#ff6b6b'
-            }}>
-              Authentication Error
-            </h1>
-            
-            <p style={{ 
-              marginBottom: '2rem',
-              color: 'rgba(255, 255, 255, 0.8)', 
-              fontSize: '1rem' 
-            }}>
-              {error || 'There was a problem completing the authentication. Please try again.'}
-            </p>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <button 
-                onClick={handleDirectSignIn}
-                style={{
-                  padding: '0.75rem 1.5rem',
-                  backgroundColor: '#4285F4',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
-                  width: '100%'
-                }}
-              >
-                Try Again
-              </button>
-              
-              <Link 
-                href="/auth/signin"
-                style={{
-                  padding: '0.75rem 1.5rem',
-                  backgroundColor: 'transparent',
-                  color: 'white',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '4px',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
-                  width: '100%',
-                  textDecoration: 'none',
-                  textAlign: 'center',
-                  boxSizing: 'border-box'
-                }}
-              >
-                Back to Sign In
-              </Link>
+              }} />
+              <style jsx>{`
+                @keyframes spin {
+                  to { transform: rotate(360deg); }
+                }
+              `}</style>
             </div>
-            
-            {/* Debug information */}
-            <div style={{
-              marginTop: '20px',
-              padding: '10px',
-              backgroundColor: 'rgba(0, 0, 0, 0.2)',
-              borderRadius: '4px',
-              color: 'rgba(255, 255, 255, 0.7)',
-              fontSize: '12px',
-              fontFamily: 'monospace',
-              textAlign: 'left',
-              maxHeight: '200px',
-              overflowY: 'auto'
-            }}>
-              <strong>Debug Info:</strong>
-              {debugInfo.map((info, i) => (
-                <div key={i} style={{ marginTop: '5px' }}>{info}</div>
-              ))}
-              
-              <div style={{ marginTop: '10px' }}>
-                <strong>Auth URL Info:</strong>
-                <div>Code: {router.query.code?.toString().substring(0, 10)}...</div>
-              </div>
+            <div style={{ marginTop: '1.5rem' }}>
+              <button
+                onClick={() => {
+                  const homeUrl = clientInfo.hostname === 'localhost' || clientInfo.hostname === '127.0.0.1'
+                    ? `${clientInfo.origin}/`
+                    : `https://${clientInfo.hostname}/`;
+                  
+                  addDebugInfo(`Manual skip to home: ${homeUrl}`);
+                  window.location.href = homeUrl;
+                }}
+                style={{
+                  backgroundColor: 'transparent',
+                  color: 'rgba(255, 255, 255, 0.7)',
+                  border: '1px solid rgba(255, 255, 255, 0.3)',
+                  padding: '0.5rem 1rem',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.9rem',
+                  marginTop: '1rem'
+                }}
+              >
+                Skip to Home Page
+              </button>
+              <p style={{ fontSize: '0.8rem', color: 'rgba(255, 255, 255, 0.5)', marginTop: '0.5rem' }}>
+                (If you've already signed in successfully but the redirect isn't working)
+              </p>
             </div>
           </>
         )}
+        
+        {error && (
+          <>
+            <p style={{ color: '#e57373', marginBottom: '1rem' }}>{error}</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
+              <button 
+                onClick={handleDirectSignIn}
+                style={{
+                  backgroundColor: '#4285F4',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontWeight: 'bold',
+                  width: '100%',
+                  maxWidth: '300px'
+                }}
+              >
+                Try Direct Sign-in
+              </button>
+              <button 
+                onClick={() => {
+                  window.location.href = '/auth/signin';
+                }}
+                style={{
+                  backgroundColor: 'transparent',
+                  color: 'white',
+                  border: '1px solid rgba(255, 255, 255, 0.3)',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  width: '100%',
+                  maxWidth: '300px'
+                }}
+              >
+                Return to Sign In
+              </button>
+            </div>
+            
+            <div style={{ 
+              marginTop: '20px', 
+              backgroundColor: 'rgba(229, 115, 115, 0.1)', 
+              padding: '10px', 
+              borderRadius: '4px',
+              fontSize: '0.8rem',
+              textAlign: 'left' 
+            }}>
+              <h4 style={{ marginTop: 0 }}>Troubleshooting Tips:</h4>
+              <ul style={{ paddingLeft: '20px', margin: '10px 0' }}>
+                <li>Check that cookies are enabled in your browser</li>
+                <li>Try using incognito/private browsing mode</li>
+                <li>Verify that popup blockers are disabled</li>
+                <li>If you're on a corporate or school network, check firewall settings</li>
+                <li>Try the "Direct Sign-in" button which uses an alternative auth method</li>
+              </ul>
+              <p style={{ marginBottom: 0 }}>
+                If problems persist, please contact support and include the authentication code: 
+                <code style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '2px 4px', borderRadius: '2px', marginLeft: '4px' }}>
+                  {router.query.code ? String(router.query.code).substring(0, 10) + '...' : 'None'}
+                </code>
+              </p>
+            </div>
+          </>
+        )}
+        
+        {/* Enhanced debug information for troubleshooting */}
+        <div style={{
+          marginTop: '2rem',
+          padding: '1rem',
+          backgroundColor: 'rgba(0, 0, 0, 0.2)',
+          borderRadius: '4px',
+          textAlign: 'left',
+          fontSize: '0.8rem'
+        }}>
+          <h3>Debug Information</h3>
+          <div>
+            {debugInfo.map((info, i) => (
+              <div key={i}>{info}</div>
+            ))}
+            <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '0.5rem' }}>
+              <strong>Auth URL Info:</strong>
+              <div>Code: {router.query.code ? String(router.query.code).substring(0, 10) + '...' : 'None'}</div>
+              <div>State: {router.query.state ? String(router.query.state).substring(0, 10) + '...' : 'None'}</div>
+              <div>Error: {router.query.error || 'None'}</div>
+              <div>Error Description: {router.query.error_description || 'None'}</div>
+              <div>Time Param: {router.query.t || 'None'}</div>
+            </div>
+            <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '0.5rem' }}>
+              <strong>Environment Info:</strong>
+              {isClient ? (
+                <>
+                  <div>URL Origin: {clientInfo.origin}</div>
+                  <div>Hostname: {clientInfo.hostname}</div>
+                  <div>Protocol: {clientInfo.protocol}</div>
+                </>
+              ) : (
+                <>
+                  <div>URL Origin: Loading...</div>
+                  <div>Hostname: Loading...</div>
+                  <div>Protocol: Loading...</div>
+                </>
+              )}
+              <div>Supabase URL: {process.env.NEXT_PUBLIC_SUPABASE_URL || 'Not defined'}</div>
+              <div>Supabase ANON Key: {process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'Defined' : 'Not defined'}</div>
+            </div>
+            
+            <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '0.5rem' }}>
+              <strong>Tools:</strong>
+              <button 
+                onClick={() => {
+                  window.open('/api/supabase-debug', '_blank');
+                }}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: '#0F766E',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '0.8rem',
+                  marginTop: '0.5rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Run Supabase Diagnostics
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

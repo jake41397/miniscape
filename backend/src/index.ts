@@ -66,19 +66,35 @@ const io = new Server(server, {
   cors: {
     origin: [
       'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:4000',
+      'http://localhost:4001',
+      'http://localhost:5000',
       'http://localhost:8080',
+      'https://localhost:3000',
+      'https://localhost:3001',
+      'https://localhost:4000',
       'https://miniscape.vercel.app',
       'http://dev.miniscape.io',
       'https://dev.miniscape.io',
       'http://miniscape.io',
       'https://miniscape.io',
       'http://www.miniscape.io',
-      'https://www.miniscape.io'
+      'https://www.miniscape.io',
+      // Handle wildcards for subdomains
+      /^https?:\/\/.*\.miniscape\.io$/
     ],
-    methods: ['GET', 'POST'],
-    credentials: true
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
+    // Allow all headers
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With', 'Accept'],
+    exposedHeaders: ['set-cookie']
   },
-  path: '/socket.io'
+  path: '/socket.io',
+  // Allow transport failover with longer timeout
+  transports: ['websocket', 'polling'],
+  connectTimeout: 10000,
+  pingTimeout: 10000
 });
 
 // Configure Socket.IO settings

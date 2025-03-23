@@ -22,7 +22,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     storage: typeof window !== 'undefined' ? window.localStorage : undefined,
     autoRefreshToken: true,
     detectSessionInUrl: true,
-    flowType: 'implicit',
+    flowType: 'pkce',
     debug: process.env.NODE_ENV === 'development'
   },
   global: {
@@ -50,6 +50,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 // Helper function to reset auth state and try again with implicit flow if PKCE fails
 export const resetAuthAndSignIn = async () => {
   try {
+    console.log('Resetting auth state before sign-in attempt');
+    
     // First try to sign out to clear any stale state
     await supabase.auth.signOut();
     
@@ -69,11 +71,20 @@ export const resetAuthAndSignIn = async () => {
         }
       });
       
+      // Remove any cookies related to auth
+      document.cookie.split(';').forEach(c => {
+        const cookie = c.trim();
+        if (cookie.startsWith('sb-')) {
+          const name = cookie.split('=')[0];
+          document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+        }
+      });
+      
       console.log('Auth storage cleared, redirecting to sign in');
     }
     
-    // Redirect to sign in page with clean state
-    window.location.href = '/auth/signin';
+    // Add a timestamp to the redirect to prevent caching
+    window.location.href = `/auth/signin?t=${Date.now()}`;
   } catch (error) {
     console.error('Error resetting auth state:', error);
     // Force a page reload as last resort
