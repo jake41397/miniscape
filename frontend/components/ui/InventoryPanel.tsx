@@ -1,13 +1,15 @@
 import { useState, useEffect, CSSProperties } from 'react';
 import { getSocket } from '../../game/network/socket';
 import { Item, ItemType } from '../../types/player';
+import ItemManager from '../../game/world/ItemManager';
 
 interface InventoryPanelProps {
   onDropItem?: (item: Item) => void;
   style?: CSSProperties;
+  itemManager?: ItemManager;
 }
 
-const InventoryPanel: React.FC<InventoryPanelProps> = ({ onDropItem, style }) => {
+const InventoryPanel: React.FC<InventoryPanelProps> = ({ onDropItem, style, itemManager }) => {
   const [inventory, setInventory] = useState<Item[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   
@@ -36,10 +38,17 @@ const InventoryPanel: React.FC<InventoryPanelProps> = ({ onDropItem, style }) =>
   }, []);
   
   const handleDropItem = async (item: Item) => {
+    // First check if we have an itemManager that can handle the drop
+    if (itemManager) {
+      await itemManager.dropItem(item);
+      return;
+    }
+    
+    // Fall back to previous behavior if no itemManager
     if (onDropItem) {
       onDropItem(item);
     } else {
-      // If no callback is provided, send directly to server
+      // If no callback and no itemManager, send directly to server
       const socket = await getSocket();
       if (socket) {
         socket.emit('dropItem', { itemId: item.id, itemType: item.type });

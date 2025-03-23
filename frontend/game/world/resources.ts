@@ -81,36 +81,85 @@ export const createFishingSpotMesh = (): THREE.Mesh => {
 
 // Create a dropped item mesh
 export const createItemMesh = (itemType: string): THREE.Mesh => {
-  const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  let geometry;
+  let material;
+  let mesh;
   
-  let color = 0xCCCCCC; // Default gray
-  
-  // Set color based on item type
+  // Choose geometry and color based on item type
   switch (itemType) {
     case 'log':
-      color = 0x8B4513; // Brown
+      // Create a cylindrical log
+      geometry = new THREE.CylinderGeometry(0.15, 0.15, 0.5, 8);
+      material = new THREE.MeshStandardMaterial({
+        color: 0x8B4513, // Brown
+        roughness: 0.8,
+        metalness: 0.1
+      });
+      mesh = new THREE.Mesh(geometry, material);
+      // Rotate to look like a log lying on the ground
+      mesh.rotation.x = Math.PI / 2;
       break;
+      
     case 'coal':
-      color = 0x36454F; // Dark gray
+      // Create irregular rock-like shape for coal
+      geometry = new THREE.DodecahedronGeometry(0.2, 0);
+      material = new THREE.MeshStandardMaterial({
+        color: 0x36454F, // Dark charcoal gray
+        roughness: 0.9,
+        metalness: 0.2,
+        emissive: 0x222222,
+        emissiveIntensity: 0.1
+      });
+      mesh = new THREE.Mesh(geometry, material);
       break;
+      
     case 'fish':
-      color = 0x6495ED; // Blue
+      // Create flattened ellipsoid for fish
+      geometry = new THREE.SphereGeometry(0.2, 8, 8);
+      // Flatten it a bit
+      const positionAttribute = geometry.getAttribute('position');
+      for (let i = 0; i < positionAttribute.count; i++) {
+        const x = positionAttribute.getX(i);
+        const y = positionAttribute.getY(i) * 0.5; // Scale y to flatten
+        const z = positionAttribute.getZ(i) * 1.5; // Scale z to elongate
+        positionAttribute.setXYZ(i, x, y, z);
+      }
+      geometry.computeVertexNormals();
+      
+      material = new THREE.MeshStandardMaterial({
+        color: 0x6495ED, // Blue with a slight shimmer
+        roughness: 0.3,
+        metalness: 0.8
+      });
+      mesh = new THREE.Mesh(geometry, material);
       break;
+      
+    default:
+      // Default fallback - simple box
+      geometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+      material = new THREE.MeshStandardMaterial({
+        color: 0xCCCCCC, // Default gray
+        emissive: 0xCCCCCC,
+        emissiveIntensity: 0.1
+      });
+      mesh = new THREE.Mesh(geometry, material);
   }
   
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    emissive: color,
-    emissiveIntensity: 0.2
-  });
+  mesh.position.y = 0.15; // Position slightly above ground to avoid z-fighting
   
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.y = 0.25; // Half height
-  
-  // Add slight animation
+  // Add animation properties
   mesh.userData.animateY = true;
-  mesh.userData.baseY = 0.25;
-  mesh.userData.phase = Math.random() * Math.PI * 2; // Random phase
+  mesh.userData.baseY = mesh.position.y;
+  mesh.userData.phase = Math.random() * Math.PI * 2; // Random phase for varied motion
+  mesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2; // Random rotation speed
+  
+  // Add subtle glow/highlight effect
+  const glowColor = new THREE.Color(0xffffff);
+  glowColor.lerp(new THREE.Color(material.color.getHex()), 0.5);
+  
+  // Set shadow casting
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   
   return mesh;
 };
@@ -141,10 +190,35 @@ export const updateDroppedItems = (items: WorldItem[], deltaTime: number) => {
       // Make it hover up and down slightly
       const phase = item.mesh.userData.phase || 0;
       const baseY = item.mesh.userData.baseY || 0.25;
-      item.mesh.position.y = baseY + Math.sin(time * 2 + phase) * 0.1;
       
-      // Also rotate it slowly
-      item.mesh.rotation.y += deltaTime * 0.5;
+      // More dynamic hover animation with variable height based on item type
+      let hoverHeight = 0.1; // Default hover height
+      
+      // Adjust hover height based on item type
+      if (item.itemType === 'fish') {
+        hoverHeight = 0.15; // Fish bob more in "water"
+      } else if (item.itemType === 'log') {
+        hoverHeight = 0.07; // Logs hover less
+      }
+      
+      item.mesh.position.y = baseY + Math.sin(time * 1.5 + phase) * hoverHeight;
+      
+      // Rotate items with their custom rotation speed
+      const rotationSpeed = item.mesh.userData.rotationSpeed || 0.5;
+      
+      // Different rotation based on item type
+      if (item.itemType === 'log') {
+        // Logs roll around their length
+        item.mesh.rotation.z += deltaTime * rotationSpeed * 0.3;
+      } else if (item.itemType === 'fish') {
+        // Fish wiggle side to side
+        item.mesh.rotation.y = Math.sin(time * 3 + phase) * 0.3;
+        // And slightly up and down
+        item.mesh.rotation.x = Math.sin(time * 2 + phase) * 0.1;
+      } else {
+        // Default rotation for other items
+        item.mesh.rotation.y += deltaTime * rotationSpeed;
+      }
     }
   });
 }; 

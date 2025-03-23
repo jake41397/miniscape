@@ -21,6 +21,7 @@ import {
 } from '../game/world/resources';
 import Chat, { ChatRefHandle } from './chat/Chat';
 import WorldManager, { WORLD_BOUNDS } from '../game/world/WorldManager';
+import ItemManager from '../game/world/ItemManager';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -66,6 +67,8 @@ const GameCanvas: React.FC = () => {
   const cleanupIntervalRef = useRef<NodeJS.Timeout | null>(null);
   // Add ref for zone update debouncing
   const zoneUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Add ref for ItemManager
+  const itemManagerRef = useRef<ItemManager | null>(null);
   
   // Add a ref for cleanup functions so they can be accessed outside useEffect
   const cleanupFunctionsRef = useRef<{
@@ -342,6 +345,21 @@ const GameCanvas: React.FC = () => {
     // Add player to scene
     scene.add(playerMesh);
     
+    // Initialize ItemManager for managing dropped items
+    const itemManager = new ItemManager({
+      scene,
+      playerRef,
+      onWorldItemsUpdated: (items) => {
+        worldItemsRef.current = items;
+      }
+    });
+    
+    // Store in ref
+    itemManagerRef.current = itemManager;
+    
+    // Initialize socket listeners for ItemManager
+    itemManager.initSocketListeners();
+    
     // Create name label for player
     const createNameLabel = (name: string, mesh: THREE.Mesh) => {
       // Get player ID
@@ -460,8 +478,11 @@ const GameCanvas: React.FC = () => {
         camera.updateProjectionMatrix();
       }
       
-      // Animate dropped items using the WorldManager
-      if (worldManagerRef.current) {
+      // Animate dropped items using ItemManager instead of WorldManager
+      if (itemManagerRef.current) {
+        itemManagerRef.current.updateItems(delta);
+      } else if (worldManagerRef.current) {
+        // Fallback to WorldManager if ItemManager is not available
         worldManagerRef.current.updateItems(delta);
       }
       
@@ -589,6 +610,11 @@ const GameCanvas: React.FC = () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('wheel', handleMouseWheel);
       
+      // Clean up ItemManager
+      if (itemManagerRef.current) {
+        itemManagerRef.current.cleanup();
+      }
+      
       // End of cleanup
     };
   }, [isConnected, currentZone, soundEnabled]);
@@ -690,7 +716,37 @@ const GameCanvas: React.FC = () => {
     
     raycasterRef.current.setFromCamera(mouseRef.current, camera);
     
-    // Check for intersections with resources
+    // First check for intersections with dropped items (giving them priority over resources)
+    const itemIntersects = raycasterRef.current.intersectObjects(
+      worldItemsRef.current.map(item => item.mesh).filter(Boolean) as THREE.Object3D[]
+    );
+    
+    if (itemIntersects.length > 0) {
+      // Get the first intersection
+      const intersectedObject = itemIntersects[0].object;
+      const dropId = intersectedObject.userData.dropId;
+      const itemType = intersectedObject.userData.itemType;
+      
+      if (dropId) {
+        console.log(`Picking up item: ${itemType} (id: ${dropId})`);
+        
+        // Notify server of item pickup
+        getSocket().then(socket => {
+          if (socket) {
+            // Use type assertion to avoid type errors with socket events
+            (socket as any).emit('pickup', { dropId });
+          }
+        });
+        
+        // Play pickup sound
+        soundManager.play('itemPickup');
+        
+        // Return early so we don't process resource clicks
+        return;
+      }
+    }
+    
+    // Then check for intersections with resources if no item was clicked
     const resourceIntersects = raycasterRef.current.intersectObjects(
       resourceNodesRef.current.map(node => node.mesh).filter(Boolean) as THREE.Object3D[]
     );
@@ -708,8 +764,8 @@ const GameCanvas: React.FC = () => {
         // Notify server of resource interaction
         getSocket().then(socket => {
           if (socket) {
-            // @ts-ignore - temporarily ignore type checking for resource gathering
-            socket.emit('gather', {
+            // Use type assertion to avoid type errors with socket events
+            (socket as any).emit('gather', {
               resourceId,
               resourceType
             });
@@ -733,31 +789,6 @@ const GameCanvas: React.FC = () => {
         setTimeout(() => {
           isGathering.current = false;
         }, 2000);
-      }
-      return;
-    }
-    
-    // Check for intersections with dropped items
-    const itemIntersects = raycasterRef.current.intersectObjects(
-      worldItemsRef.current.map(item => item.mesh).filter(Boolean) as THREE.Object3D[]
-    );
-    
-    if (itemIntersects.length > 0) {
-      // Get the first intersection
-      const intersectedObject = itemIntersects[0].object;
-      const dropId = intersectedObject.userData.dropId;
-      
-      if (dropId) {
-        // Notify server of item pickup
-        getSocket().then(socket => {
-          if (socket) {
-            // @ts-ignore - temporarily ignore type checking for item pickup
-            socket.emit('pickup', { dropId });
-          }
-        });
-        
-        // Play pickup sound
-        soundManager.play('itemPickup');
       }
     }
   };
@@ -1318,7 +1349,10 @@ const GameCanvas: React.FC = () => {
         playerRef={playerRef}
         playersRef={playersRef}
       />
-      <InventoryPanel style={{ top: "100px", right: "20px" }} />
+      <InventoryPanel 
+        style={{ top: "100px", right: "20px" }} 
+        itemManager={itemManagerRef.current || undefined}
+      />
     </div>
   );
 };
