@@ -59,6 +59,13 @@ const GameCanvas: React.FC = () => {
     ArrowRight: false
   });
   
+  // Add camera control state
+  const isMiddleMouseDown = useRef(false);
+  const lastMousePosition = useRef({ x: 0, y: 0 });
+  const cameraDistance = useRef(10);
+  const cameraAngle = useRef(0);
+  const cameraTilt = useRef(0.5); // Add camera tilt angle (0 to 1, where 0.5 is horizontal)
+  
   // Track the player's last sent position to avoid spamming movement updates
   const lastSentPosition = useRef({ x: 0, y: 1, z: 0 });
   const lastSendTime = useRef(0);
@@ -378,14 +385,6 @@ const GameCanvas: React.FC = () => {
     
     // Store the createNameLabel function in the ref so it can be used by other useEffect hooks
     createNameLabelRef.current = createNameLabel;
-    
-    // Make camera follow player
-    camera.position.set(
-      playerMesh.position.x, 
-      playerMesh.position.y + 8, 
-      playerMesh.position.z + 10
-    );
-    camera.lookAt(playerMesh.position);
     
     // Create resource nodes in the world
     const createWorldResources = () => {
@@ -1131,6 +1130,53 @@ const GameCanvas: React.FC = () => {
     window.addEventListener('keyup', handleKeyUp);
     renderer.domElement.addEventListener('click', handleMouseClick);
     
+    // Add mouse event handlers for camera control
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button === 1) { // Middle mouse button
+        console.log('Middle mouse button pressed');
+        isMiddleMouseDown.current = true;
+        lastMousePosition.current = { x: event.clientX, y: event.clientY };
+      }
+    };
+
+    const handleMouseUp = (event: MouseEvent) => {
+      if (event.button === 1) { // Middle mouse button
+        console.log('Middle mouse button released');
+        isMiddleMouseDown.current = false;
+      }
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (isMiddleMouseDown.current) {
+        const deltaX = event.clientX - lastMousePosition.current.x;
+        const deltaY = event.clientY - lastMousePosition.current.y;
+        
+        // Update camera angle based on horizontal mouse movement
+        // Positive deltaX (moving right) rotates clockwise
+        // Negative deltaX (moving left) rotates counter-clockwise
+        cameraAngle.current += deltaX * 0.01;
+
+        // Update camera tilt based on vertical mouse movement
+        // Positive deltaY (moving down) increases tilt
+        // Negative deltaY (moving up) decreases tilt
+        cameraTilt.current = Math.max(0.1, Math.min(0.9, cameraTilt.current + deltaY * 0.01));
+
+        lastMousePosition.current = { x: event.clientX, y: event.clientY };
+      }
+    };
+
+    // Add mouse wheel handler for zoom
+    const handleMouseWheel = (event: WheelEvent) => {
+      // Update camera distance based on wheel movement
+      cameraDistance.current = Math.max(5, Math.min(20, cameraDistance.current + event.deltaY * 0.1));
+    };
+
+    // Add event listeners
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('wheel', handleMouseWheel);
+    
     // Function to handle resource gathering
     const gatherResource = async (resourceId: string) => {
       console.log('Gathering resource:', resourceId);
@@ -1514,12 +1560,20 @@ const GameCanvas: React.FC = () => {
       // Send position updates
       sendPositionUpdate();
       
-      // Update camera to follow player
+      // Always update camera to follow player
       if (playerRef.current) {
-        camera.position.x = playerRef.current.position.x;
-        camera.position.y = playerRef.current.position.y + 8;
-        camera.position.z = playerRef.current.position.z + 10;
-        camera.lookAt(playerRef.current.position);
+        const playerPosition = playerRef.current.position;
+        
+        // Calculate camera position based on angle, tilt, and distance
+        const cameraX = playerPosition.x + Math.sin(cameraAngle.current) * cameraDistance.current;
+        const cameraZ = playerPosition.z + Math.cos(cameraAngle.current) * cameraDistance.current;
+        // Use cameraTilt to adjust height (0.1 to 0.9 maps to roughly 2 to 8 units above player)
+        const cameraY = playerPosition.y + (cameraTilt.current * 6 + 2);
+
+        // Update camera position and look at player
+        camera.position.set(cameraX, cameraY, cameraZ);
+        camera.lookAt(playerPosition);
+        camera.updateProjectionMatrix();
       }
       
       // Animate dropped items
@@ -1667,6 +1721,12 @@ const GameCanvas: React.FC = () => {
       if (cleanupIntervalRef.current) {
         clearInterval(cleanupIntervalRef.current);
       }
+      
+      // Remove mouse event listeners
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('wheel', handleMouseWheel);
     };
   }, [isConnected, currentZone, soundEnabled]);
   
