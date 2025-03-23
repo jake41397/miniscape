@@ -6,16 +6,29 @@ interface SessionStatusProps {
   compact?: boolean;
 }
 
+// Define an interface that matches the shape returned by getSocketStatus
+interface SocketStatusState {
+  connected: boolean;
+  id: string | null;
+  reconnectAttempts: number;
+  connecting: boolean;
+  lastConnected: number;
+  error: Error | null;
+}
+
 const SessionStatus: React.FC<SessionStatusProps> = ({ compact = false }) => {
   const { session, loading } = useAuth();
-  const [socketStatus, setSocketStatus] = useState({
+  const [socketStatus, setSocketStatus] = useState<SocketStatusState>({
     connected: false,
-    id: null as string | null,
+    id: null,
     reconnectAttempts: 0,
-    paused: false
+    connecting: false,
+    lastConnected: 0,
+    error: null
   });
   const [expanded, setExpanded] = useState(!compact);
-  const [refreshCount, setRefreshCount] = useState(0);
+  // Only using the setter function, so no need to track the state
+  const [, setRefreshCount] = useState(0);
   
   // Update socket status periodically
   useEffect(() => {
@@ -144,11 +157,11 @@ const SessionStatus: React.FC<SessionStatusProps> = ({ compact = false }) => {
             width: '10px',
             height: '10px',
             borderRadius: '50%',
-            backgroundColor: socketStatus.connected ? '#4caf50' : socketStatus.paused ? '#f44336' : '#ff9800',
+            backgroundColor: socketStatus.connected ? '#4caf50' : socketStatus.connecting ? '#ff9800' : '#f44336',
             marginRight: '5px'
           }} />
           <span>
-            Socket: {socketStatus.connected ? 'Connected' : socketStatus.paused ? 'Paused' : 'Disconnected'}
+            Socket: {socketStatus.connected ? 'Connected' : socketStatus.connecting ? 'Connecting...' : 'Disconnected'}
           </span>
         </div>
         

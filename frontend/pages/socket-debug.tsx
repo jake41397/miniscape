@@ -1,6 +1,7 @@
 import type { NextPage } from 'next';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 
 // Dynamically import the SocketDebugger component with no SSR
 // Since it uses browser APIs
@@ -31,9 +32,9 @@ const SocketDebugPage: NextPage = () => {
         <DynamicSocketDebugger />
         
         <div style={{ marginTop: '30px', textAlign: 'center' }}>
-          <a href="/" style={{ color: 'blue', textDecoration: 'underline' }}>
+          <Link href="/" style={{ color: 'blue', textDecoration: 'underline' }}>
             Return to Home
-          </a>
+          </Link>
         </div>
       </main>
     </div>

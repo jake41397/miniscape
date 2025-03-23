@@ -40,6 +40,8 @@
     "typescript": "^5.3.3"
   },
   "devDependencies": {
-    "@types/three": "^0.174.0"
+    "@types/three": "^0.174.0",
+    "eslint": "8.57.1",
+    "eslint-config-next": "15.2.3"
   }
 }

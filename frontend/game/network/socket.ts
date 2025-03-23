@@ -47,6 +47,42 @@ let connectionState = {
   error: null as Error | null
 };
 
+// Track if we've added the custom event listeners to prevent duplicates
+let customEventListenersAdded = false;
+
+// Add a new global counter to track total connection attempts (persisted across reconnects)
+let totalConnectionAttempts = 0;
+const MAX_TOTAL_ATTEMPTS = 5;
+
+// Function to handle connection state changes
+const onConnectionChange = (connected: boolean, socketId: string) => {
+  connectionState.connected = connected;
+  connectionState.connecting = false;
+  
+  if (connected) {
+    connectionState.lastConnected = Date.now();
+    reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+  }
+  
+  // Dispatch additional custom event for components that need the connection state
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('socket_state_change', { 
+      detail: { connected, socketId }
+    }));
+  }
+};
+
+// Remove the position caching functions
+const saveLastKnownPosition = (position: {x: number, y: number, z: number}) => {
+  // Removed localStorage functionality
+  console.log('Position update:', position);
+};
+
+const getLastKnownPosition = (): {x: number, y: number, z: number} | null => {
+  // Removed localStorage functionality
+  return null;
+};
+
 // Get the current socket status
 export const getSocketStatus = () => {
   return {
@@ -61,6 +97,8 @@ export const getSocketStatus = () => {
 
 // Initialize socket connection
 export const initializeSocket = async () => {
+  // Remove localStorage reconnection checks
+  
   // If already connecting, don't try again
   if (connectionState.connecting) {
     console.log('Socket already connecting, skipping duplicate initialization');
@@ -84,6 +122,8 @@ export const initializeSocket = async () => {
   connectionState.error = null;
   
   try {
+    console.log('Starting socket initialization process');
+    
     // Add a promise with timeout to handle auth session retrieval
     const getSessionWithTimeout = () => {
       return Promise.race([
@@ -95,30 +135,115 @@ export const initializeSocket = async () => {
     };
     
     // Get the session token for authentication with timeout
-    const { data } = await getSessionWithTimeout();
-    const token = data.session?.access_token;
+    console.log('Retrieving authentication session for socket connection');
+    let sessionResult;
+    try {
+      sessionResult = await getSessionWithTimeout();
+      console.log('Session retrieval complete, session exists:', !!sessionResult.data.session);
+    } catch (authError) {
+      console.error('Authentication error during getSession:', authError);
+      
+      // Check if test mode is enabled (development only)
+      const testModeEnabled = localStorage.getItem('test_mode_enabled') === 'true';
+      if (testModeEnabled) {
+        console.log('TEST MODE ENABLED: Bypassing authentication error and proceeding');
+        
+        // Create a mock session result since we're in test mode
+        sessionResult = {
+          data: {
+            session: null
+          }
+        };
+      } else {
+        // Log the error for debugging and possibly redirect
+        connectionState.connecting = false;
+        connectionState.error = authError instanceof Error ? authError : new Error(String(authError));
+        console.error('Authentication failed and test mode is not enabled. Please enable test mode in settings or fix authentication.');
+        return null;
+      }
+    }
+    
+    let token = sessionResult?.data?.session?.access_token;
     
     // Don't connect if not authenticated
     if (!token) {
-      console.warn('No auth token available, not connecting to socket server');
-      connectionState.connecting = false;
-      connectionState.error = new Error('No auth token available');
-      return null;
+      console.warn('No auth token available, checking for test mode');
+      
+      // Check if test mode is enabled (development only)
+      const testModeEnabled = localStorage.getItem('test_mode_enabled') === 'true';
+      if (testModeEnabled) {
+        console.log('TEST MODE ENABLED: Proceeding without authentication');
+        
+        // Generate a fake token for testing
+        const fakeToken = 'dev-test-token-' + Date.now();
+        token = fakeToken;
+        
+        // Add a visual indicator that we're in test mode
+        if (typeof document !== 'undefined') {
+          const testModeIndicator = document.createElement('div');
+          testModeIndicator.style.position = 'fixed';
+          testModeIndicator.style.top = '5px';
+          testModeIndicator.style.right = '100px';
+          testModeIndicator.style.backgroundColor = 'purple';
+          testModeIndicator.style.color = 'white';
+          testModeIndicator.style.padding = '2px 5px';
+          testModeIndicator.style.fontSize = '10px';
+          testModeIndicator.style.borderRadius = '3px';
+          testModeIndicator.style.zIndex = '9999';
+          testModeIndicator.innerText = 'TEST MODE';
+          document.body.appendChild(testModeIndicator);
+        }
+      } else {
+        connectionState.connecting = false;
+        connectionState.error = new Error('No auth token available');
+        
+        // Log user information from localStorage for debugging
+        try {
+          const authData = localStorage.getItem('supabase.auth.token');
+          console.log('Local auth data exists:', !!authData);
+        } catch (e) {
+          console.error('Error checking local auth data:', e);
+        }
+        
+        return null;
+      }
     }
     
     // Default backend URL for fallback
     let BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
-    
-    // Use same domain for WebSocket connections to avoid CORS issues
-    if (typeof window !== 'undefined') {
-      // Always use the same origin for socket.io connections
-      const protocol = window.location.protocol === 'https:' ? 'https://' : 'http://';
-      const hostname = window.location.hostname;
-      
-      // For production or development server, use the same hostname
-      if (hostname.includes('miniscape.io') || hostname === 'localhost') {
-        BACKEND_URL = `${protocol}${hostname}`;
-        console.log('Using same-origin WebSocket URL:', BACKEND_URL);
+
+    // Add extra debugging for env variable
+    console.log('Environment socket URL:', {
+      envUrl: process.env.NEXT_PUBLIC_SOCKET_SERVER_URL,
+      finalUrl: BACKEND_URL
+    });
+
+    // Check if there's a manually configured backend URL in localStorage for development/testing
+    const manualBackendUrl = localStorage.getItem('manual_backend_url');
+    if (manualBackendUrl) {
+      console.log('Using manually configured backend URL from localStorage:', manualBackendUrl);
+      BACKEND_URL = manualBackendUrl;
+    } else {
+      // Use same domain for WebSocket connections to avoid CORS issues
+      if (typeof window !== 'undefined') {
+        // Check for forced local development mode
+        const forceLocalDev = localStorage.getItem('force_local_dev') === 'true';
+        
+        // Detect if we're in a production environment
+        const isProduction = !window.location.hostname.includes('localhost') && 
+                            !window.location.hostname.includes('127.0.0.1') &&
+                            !forceLocalDev;
+        
+        // For production, add a fallback
+        if (isProduction && !BACKEND_URL) {
+          // Only use this fallback if NEXT_PUBLIC_SOCKET_SERVER_URL is not defined
+          BACKEND_URL = 'https://miniscape.io/api';
+          console.log('Using production WebSocket URL fallback:', BACKEND_URL);
+        } else if (!isProduction && !BACKEND_URL) {
+          // For development, use localhost with the correct port if env var is not set
+          BACKEND_URL = 'http://localhost:4000';
+          console.log('Using development WebSocket URL fallback:', BACKEND_URL);
+        }
       }
     }
     
@@ -133,41 +258,96 @@ export const initializeSocket = async () => {
     }
     
     // Create socket connection with better reconnection and error handling
-    socket = io(BACKEND_URL, {
-      transports: ['websocket', 'polling'],  // Allow both WebSocket and polling for better compatibility
-      path: '/socket.io',
-      auth: {
-        token
-      },
-      reconnectionAttempts: 15,       // Increased from 8 to 15
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,     // Cap the exponential backoff
-      timeout: 20000,                 // Increased from 15s to 20s for slower networks
-      forceNew: true,
-      extraHeaders: {
-        'Authorization': `Bearer ${token}`
+    try {
+      // Ensure BACKEND_URL has protocol
+      if (!BACKEND_URL.startsWith('http://') && !BACKEND_URL.startsWith('https://')) {
+        // Default to https in production, http in development
+        const protocol = typeof window !== 'undefined' && 
+          (window.location.protocol === 'https:' || !window.location.hostname.includes('localhost')) 
+            ? 'https://' 
+            : 'http://';
+        BACKEND_URL = protocol + BACKEND_URL;
+        console.log('Added protocol to backend URL:', BACKEND_URL);
       }
-    });
+      
+      // Extract just the domain (origin) from the URL for Socket.io
+      // This prevents issues with paths like /api in the URL
+      let socketBaseUrl = BACKEND_URL;
+      try {
+        const urlObj = new URL(BACKEND_URL);
+        socketBaseUrl = urlObj.origin; // Just protocol + hostname + port
+        console.log('Using socket base URL (origin only):', socketBaseUrl);
+      } catch (e) {
+        console.error('Failed to parse backend URL, using as-is:', e);
+      }
+      
+      // IMPORTANT: Use WebSocket transport by default instead of polling
+      const transports = ['websocket'];
+      
+      console.log('Creating socket connection with options:', {
+        originalUrl: BACKEND_URL,
+        socketUrl: socketBaseUrl,
+        transports,
+        usingWebsocket: true,
+        tokenExists: !!token,
+        tokenLength: token?.length,
+        currentProtocol: typeof window !== 'undefined' ? window.location.protocol : 'unknown'
+      });
+      
+      socket = io(socketBaseUrl, {
+        transports,  // Default to websocket only
+        path: '/socket.io',
+        auth: {
+          token
+        },
+        reconnectionAttempts: 3,
+        reconnectionDelay: 2000,
+        reconnectionDelayMax: 5000,
+        timeout: 10000,
+        forceNew: true,
+        extraHeaders: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+    } catch (error) {
+      console.error('Error creating socket instance:', error);
+      connectionState.error = error instanceof Error ? error : new Error(String(error));
+      connectionState.connecting = false;
+      return null;
+    }
 
     // Enhanced logging and error handling
     socket.on('connect', () => {
-      console.log(`Socket connected successfully! ID: ${socket?.id}`);
+      console.log('Socket connected successfully! ID:', socket?.id);
       connectionState.connected = true;
       connectionState.connecting = false;
       connectionState.lastConnected = Date.now();
-      reconnectAttempts = 0;
-      
-      // Reset the error state
       connectionState.error = null;
       
-      // Save connection time for debugging
-      localStorage.setItem('socket_connected_at', Date.now().toString());
+      // Reset reconnect attempts on successful connection
+      reconnectAttempts = 0;
       
-      // Broadcast event for components to know the socket is ready
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('socket_connected', { 
-          detail: { socketId: socket?.id }
-        }));
+      // Clear any reconnect timers
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      
+      // Only dispatch the event if we have a valid socket ID to prevent duplicate events
+      if (socket?.id && typeof window !== 'undefined') {
+        // Check if we've already dispatched this connection event (prevent duplicates)
+        const lastDispatchedId = window.localStorage.getItem('last_socket_connection_id');
+        if (lastDispatchedId !== socket.id) {
+          // Store the current socket ID to prevent duplicate events
+          window.localStorage.setItem('last_socket_connection_id', socket.id);
+          
+          // Dispatch the event
+          window.dispatchEvent(new CustomEvent('socket_connected', { 
+            detail: { socketId: socket.id, transport: socket.io.engine.transport.name }
+          }));
+        } else {
+          console.log('Prevented duplicate socket_connected event for ID:', socket.id);
+        }
       }
     });
 
@@ -175,6 +355,8 @@ export const initializeSocket = async () => {
       console.log(`Socket disconnected, reason: ${reason}`);
       connectionState.connected = false;
       
+      // Remove position saving on disconnect
+
       if (reason === 'io server disconnect') {
         // The server has forcefully disconnected the socket
         console.log('Socket was disconnected by the server, attempting manual reconnect in 5s');
@@ -217,11 +399,140 @@ export const initializeSocket = async () => {
       }
     });
 
+    // Only add custom events if not added already
+    if (!customEventListenersAdded && typeof window !== 'undefined' && socket) {
+      // Store current socket ID for listeners
+      const currentSocketId = socket.id || '';
+      
+      // Add custom event listeners for socket state changes
+      const handleSocketConnected = () => {
+        console.log('Socket connected event received');
+        onConnectionChange(true, currentSocketId);
+      };
+      
+      const handleSocketDisconnected = () => {
+        console.log('Socket disconnected event received');
+        onConnectionChange(false, '');
+      };
+      
+      // Clean up existing listeners first (just in case)
+      window.removeEventListener('socket_connected', handleSocketConnected);
+      window.removeEventListener('socket_disconnected', handleSocketDisconnected);
+      
+      // Add new listeners
+      window.addEventListener('socket_connected', handleSocketConnected);
+      window.addEventListener('socket_disconnected', handleSocketDisconnected);
+      
+      customEventListenersAdded = true;
+      
+      // Clean up listeners when window unloads
+      window.addEventListener('beforeunload', () => {
+        window.removeEventListener('socket_connected', handleSocketConnected);
+        window.removeEventListener('socket_disconnected', handleSocketDisconnected);
+        customEventListenersAdded = false;
+      });
+    }
+
     socket.on('connect_error', (err) => {
       console.error('Socket connection error:', err.message);
       connectionState.connecting = false;
       connectionState.connected = false;
       connectionState.error = err;
+      
+      // Circuit breaker: if we've been trying to reconnect too rapidly, stop the loop
+      const now = Date.now();
+      const MIN_RECONNECT_INTERVAL = 2000; // 2 seconds
+      
+      // Check if the last connection was extremely recent (potential loop)
+      if (connectionState.lastConnected > 0 && 
+          now - connectionState.lastConnected < MIN_RECONNECT_INTERVAL) {
+        console.warn('Detected potential reconnection loop, stopping all reconnection attempts');
+        
+        // Disable all further reconnection attempts
+        if (socket) {
+          socket.io.opts.reconnection = false;
+          
+          // Add to localStorage to prevent automatic reconnects on page refresh
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('socket_disable_auto_reconnect', 'true');
+            localStorage.setItem('socket_disable_until', (now + 60000).toString()); // 1 minute cooldown
+          }
+        }
+        
+        // Clear any existing timers
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        
+        // Set reconnect attempts to max to prevent further attempts
+        reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+        
+        // Update UI to show disconnected state that requires manual reconnection
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('socket_failed', { 
+            detail: { 
+              reason: 'Reconnection loop detected, automatic reconnection disabled',
+              requiresManualReconnect: true
+            }
+          }));
+        }
+        
+        return;
+      }
+      
+      // Only attempt reconnection if we're not already in a reconnecting state
+      if (reconnectTimer) {
+        console.log('Already have a pending reconnection, skipping duplicate attempt');
+        return;
+      }
+      
+      // Don't try reconnection if we've exceeded the limit
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        console.error(`Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
+        
+        // Disable automatic reconnects in socket.io
+        if (socket) {
+          socket.io.opts.reconnection = false;
+        }
+        
+        // Broadcast failure event
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('socket_failed', { 
+            detail: { 
+              error: err.message,
+              attempts: reconnectAttempts,
+              requiresManualReconnect: true 
+            }
+          }));
+        }
+        
+        return;
+      }
+      
+      // Check if the error is WebSocket related
+      if (err.message.includes('websocket') || err.message.includes('WebSocket')) {
+        console.log('WebSocket error detected, attempting to reconnect');
+        
+        // Clean up the failed socket
+        if (socket) {
+          socket.removeAllListeners();
+          socket.disconnect();
+          socket = null;
+        }
+        
+        // Instead of falling back to polling, just try reconnecting with websocket
+        reconnectAttempts++;
+        
+        const delay = Math.min(1000 * reconnectAttempts, 10000);
+        console.log(`Will attempt to reconnect in ${delay/1000}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+        
+        reconnectTimer = setTimeout(() => {
+          initializeSocket();
+        }, delay);
+        
+        return;
+      }
       
       // Handle authentication errors specifically
       if (err.message.includes('Authentication') || err.message.includes('auth') || err.message.includes('401')) {
@@ -336,28 +647,13 @@ export const initializeSocket = async () => {
     socket.once('connect', () => clearTimeout(connectTimeout));
     socket.once('connect_error', () => clearTimeout(connectTimeout));
     
+    return socket;
   } catch (error) {
-    console.error('Error initializing socket:', error);
-    connectionState.connecting = false;
-    connectionState.connected = false;
+    console.error('Error creating socket instance:', error);
     connectionState.error = error instanceof Error ? error : new Error(String(error));
-    socket = null;
-    
-    // Try to reconnect after delay
-    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-      const delay = Math.min(1000 * (reconnectAttempts + 1), 10000);
-      console.log(`Will attempt to reconnect in ${delay/1000}s (attempt ${reconnectAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
-      
-      reconnectTimer = setTimeout(() => {
-        reconnectAttempts++;
-        initializeSocket();
-      }, delay);
-    }
-    
+    connectionState.connecting = false;
     return null;
   }
-
-  return socket;
 };
 
 // Get the socket instance with additional validation
@@ -395,16 +691,40 @@ export const isSocketReady = () => {
 export const disconnectSocket = () => {
   if (socket) {
     console.log('Manually disconnecting socket');
-    socket.disconnect();
-    socket = null;
+    
+    // Remove reconnection attempt tracking
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    
+    // Reset connection state
+    reconnectAttempts = 0;
     connectionState.connected = false;
     connectionState.connecting = false;
-  }
-  
-  // Clear any reconnect timers
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
+    connectionState.error = null;
+    
+    // Before disconnecting, remove all listeners to prevent reconnection attempts
+    if (socket.hasListeners('connect_error')) {
+      socket.off('connect_error');
+    }
+    if (socket.hasListeners('disconnect')) {
+      socket.off('disconnect');
+    }
+    
+    // Disconnect the socket
+    socket.disconnect();
+    socket = null;
+    
+    // Reset the last connection ID to prevent duplicate connection handling
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('last_socket_connection_id');
+    }
+    
+    // Reset custom event listener tracking
+    customEventListenersAdded = false;
+    
+    console.log('Socket disconnected and cleaned up');
   }
 };
 
@@ -423,4 +743,8 @@ export const setupSocketCleanup = () => {
     console.log('Component unmounting, disconnecting socket');
     disconnectSocket();
   };
-}; 
+};
+
+// Export the position utility functions with no-op implementations
+export const cachePlayerPosition = saveLastKnownPosition;
+export const getCachedPlayerPosition = getLastKnownPosition; 

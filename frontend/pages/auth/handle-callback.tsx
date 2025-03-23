@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import { supabase, resetAuthAndSignIn } from '../../lib/supabase';
 import Head from 'next/head';
 import Link from 'next/link';
+import { addAuthFailureHandler, enableTestMode, isDevelopmentEnvironment } from '../../utils/auth-helpers';
 
 const HandleCallback: NextPage = () => {
   const router = useRouter();
@@ -222,6 +223,14 @@ const HandleCallback: NextPage = () => {
         // If we get here, we've tried everything and still don't have a session
         clearTimeout(timeoutId);
         addDebugInfo('All auth methods failed');
+        
+        // In development environments, offer test mode
+        if (isDevelopmentEnvironment()) {
+          addDebugInfo('Development environment detected, offering test mode option');
+          // Show the auth failure handler
+          addAuthFailureHandler();
+        }
+        
         setError('Unable to complete authentication. Please try signing in again.');
         setProcessing(false);
         
@@ -334,6 +343,14 @@ const HandleCallback: NextPage = () => {
       setProcessing(false);
     }
   };
+  
+  // Add a useEffect to show the auth failure handler after a timeout
+  useEffect(() => {
+    if (error && isDevelopmentEnvironment()) {
+      // Show the auth failure handler to help with development
+      addAuthFailureHandler();
+    }
+  }, [error]);
   
   return (
     <div style={{ 

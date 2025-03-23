@@ -68,6 +68,7 @@ interface PlayerPosition {
   x: number;
   y: number;
   z: number;
+  timestamp?: number;
 }
 
 interface PlayersStore {
@@ -267,9 +268,13 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       id: socket.id,
       userId: socket.user.id,
       name: profile?.username || `Player-${socket.id.substring(0, 4)}`,
-      x: playerData?.x || 0,
-      y: playerData?.y || 1,
-      z: playerData?.z || 0,
+      
+      // Only use default (0,0,0) if no position exists or if ALL values are null/undefined
+      // This prevents resetting to origin on slight DB errors
+      x: playerData?.x ?? 0,
+      y: playerData?.y ?? 1,
+      z: playerData?.z ?? 0,
+      
       inventory: JSON.parse(playerData?.inventory || '[]')
     };
     
@@ -322,7 +327,8 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           id: socket.id,
           x: validX,
           y: position.y,
-          z: validZ
+          z: validZ,
+          timestamp: position.timestamp || Date.now()
         };
         
         console.log(`Broadcasting playerMoved event`, {

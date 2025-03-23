@@ -138,6 +138,13 @@ const Home: NextPage = () => {
     }
     lastAuthCheck.current = now;
 
+    // Check if this is a forced navigation
+    const isForced = router.query.force === 'true';
+    if (isForced) {
+      addDebugInfo('Forced navigation detected, skipping auth check');
+      return;
+    }
+
     // Set a maximum loading time to avoid getting stuck
     const maxLoadingTime = setTimeout(() => {
       // If we're still loading after 15 seconds, force a navigation to signin page

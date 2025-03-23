@@ -80,6 +80,54 @@ const SignIn: NextPage = () => {
       try {
         // Check if we've been redirected from a failed home page load
         const redirectTime = localStorage.getItem('redirect_to_signin_at');
+        const socketRedirectReason = localStorage.getItem('socket_redirect_reason');
+        
+        if (socketRedirectReason) {
+          addDebugInfo(`Socket redirect detected (reason: ${socketRedirectReason})`);
+          // Clear the redirect reason to prevent duplicate handling
+          localStorage.removeItem('socket_redirect_reason');
+          
+          // Handle different socket redirect reasons
+          if (socketRedirectReason === 'max_attempts_reached' || socketRedirectReason === 'connection_error') {
+            addDebugInfo('Socket connection issue detected, cleaning auth state');
+            // Perform a more thorough cleanup
+            await supabase.auth.signOut();
+            
+            // Clear auth-related storage
+            Object.keys(localStorage).forEach(key => {
+              if (key.startsWith('supabase.auth.') || key.includes('auth_')) {
+                addDebugInfo(`Removing from localStorage: ${key}`);
+                localStorage.removeItem(key);
+              }
+            });
+            
+            Object.keys(sessionStorage).forEach(key => {
+              if (key.startsWith('supabase.auth.') || key.includes('auth_')) {
+                addDebugInfo(`Removing from sessionStorage: ${key}`);
+                sessionStorage.removeItem(key);
+              }
+            });
+            
+            // Clear cookies
+            document.cookie.split(';').forEach(c => {
+              const cookie = c.trim();
+              if (cookie.startsWith('sb-')) {
+                const name = cookie.split('=')[0];
+                addDebugInfo(`Removing cookie: ${name}`);
+                document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+              }
+            });
+            
+            // Wait and reload to get a fresh state
+            setTimeout(() => {
+              addDebugInfo('Reloading page to reset auth state after socket issues');
+              window.location.reload();
+            }, 1000);
+            
+            return;
+          }
+        }
+        
         if (redirectTime) {
           const redirectTimestamp = parseInt(redirectTime, 10);
           const timeSinceRedirect = Date.now() - redirectTimestamp;
@@ -424,6 +472,39 @@ const SignIn: NextPage = () => {
         >
           Reset Authentication State
         </button>
+        
+        {/* Force game button for users experiencing redirect loops */}
+        {session && (
+          <button 
+            onClick={() => {
+              addDebugInfo('Force game button clicked');
+              // Set a flag to bypass socket checks
+              localStorage.setItem('bypass_socket_check', 'true');
+              addDebugInfo('Socket check bypass enabled');
+              
+              // Force navigation to the game
+              addDebugInfo('Forcing direct navigation to game');
+              window.location.href = '/?force=true';
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0.75rem 1.5rem',
+              backgroundColor: '#f44336',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              fontSize: '0.9rem',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              width: '100%',
+              marginBottom: '1rem'
+            }}
+          >
+            Force Game (If Redirect Loop)
+          </button>
+        )}
         
         {/* debug info display */}
         {showDebug && (

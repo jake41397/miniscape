@@ -6,13 +6,51 @@ import { supabase } from '../../lib/supabase';
  * This helps diagnose socket connection issues by checking auth token validity
  * and providing detailed diagnostics about the current environment
  */
+
+// Define interfaces for type safety
+interface AuthInfo {
+  status: string;
+  message: string;
+  tokenReceived: boolean;
+  tokenFormatValid: boolean;
+  tokenVerified: boolean;
+  user?: {
+    id: string;
+    email: string | null;
+    lastSignIn: string | null;
+  };
+}
+
+interface SocketDebugResponse {
+  timestamp: string;
+  environment: string | undefined;
+  socketConfig: {
+    backendSocketUrl: string;
+  };
+  auth: AuthInfo;
+  requestDetails: {
+    method: string | undefined;
+    ip: string | undefined;
+    userAgent: string | undefined;
+    headers: Record<string, string | string[] | undefined>;
+  };
+  diagnostics?: {
+    socketImplementation: {
+      type: string;
+      url: string;
+      message: string;
+    };
+    notes: string[];
+  };
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   
-  const results: Record<string, any> = {
+  const results: SocketDebugResponse = {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
     socketConfig: {
@@ -28,7 +66,7 @@ export default async function handler(
     },
     requestDetails: {
       method: req.method,
-      ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+      ip: req.headers['x-forwarded-for'] as string || req.socket.remoteAddress,
       userAgent: req.headers['user-agent'],
       headers: {
         ...req.headers,
@@ -73,8 +111,8 @@ export default async function handler(
             results.auth.tokenVerified = true;
             results.auth.user = {
               id: data.user.id,
-              email: data.user.email,
-              lastSignIn: data.user.last_sign_in_at,
+              email: data.user.email || null,
+              lastSignIn: data.user.last_sign_in_at || null,
             };
           }
         } catch (verifyError) {
