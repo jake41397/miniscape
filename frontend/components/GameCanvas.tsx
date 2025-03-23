@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer';
-import { initializeSocket, disconnectSocket, getSocket, isSocketReady, getSocketStatus } from '../game/network/socket';
+import { 
+  initializeSocket, 
+  disconnectSocket, 
+  getSocket, 
+  isSocketReady, 
+  getSocketStatus, 
+  cachePlayerPosition, 
+  getCachedPlayerPosition 
+} from '../game/network/socket';
 import { Player } from '../types/player';
 import ChatPanel from './ui/ChatPanel';
 import InventoryPanel from './ui/InventoryPanel';
@@ -16,13 +24,41 @@ import {
 } from '../game/world/resources';
 
 // Player movement speed
-const MOVEMENT_SPEED = 0.15;
+const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
+// Define a constant speed factor to prevent accumulation
+const FIXED_SPEED_FACTOR = 0.02; // Reduced from 0.0375
+// Network settings
+const SEND_INTERVAL = 20; // Reduced from 30ms to 20ms for more frequent updates
+// Position interpolation settings
+const INTERPOLATION_SPEED = 0.4; // Increased from 0.3 for faster position syncing
 // World boundaries
 const WORLD_BOUNDS = {
   minX: -50, 
   maxX: 50,
   minZ: -50,
   maxZ: 50
+};
+
+// Add position prediction settings
+const POSITION_HISTORY_LENGTH = 5; // How many positions to keep for prediction
+const ENABLE_POSITION_PREDICTION = true; // Whether to use prediction for remote players
+// Add a snap threshold for large position discrepancies
+const POSITION_SNAP_THRESHOLD = 5.0; // If discrepancy is larger than this, snap instantly
+
+// Add type definition for player move data
+interface PlayerMoveData {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  timestamp?: number; // Make timestamp optional
+}
+
+// Add debug configuration
+const DEBUG = {
+  showPositionMarkers: false,   // Disable markers for now to fix errors 
+  showVelocityVectors: false,   // Show velocity prediction vectors
+  logNetworkStats: false        // Log network stats periodically
 };
 
 const GameCanvas: React.FC = () => {
@@ -36,6 +72,8 @@ const GameCanvas: React.FC = () => {
   const clockRef = useRef<THREE.Clock>(new THREE.Clock());
   const labelRendererRef = useRef<CSS2DRenderer | null>(null);
   const cleanupIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Add ref for zone update debouncing
+  const zoneUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Add a ref for cleanup functions so they can be accessed outside useEffect
   const cleanupFunctionsRef = useRef<{
@@ -115,6 +153,9 @@ const GameCanvas: React.FC = () => {
   const JUMP_COOLDOWN = 500; // milliseconds
   const lastJumpTime = useRef(0);
   
+  // Add scene ref
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  
   // Keep inversion setting in sync with ref
   useEffect(() => {
     isHorizontalInvertedRef.current = isHorizontalInverted;
@@ -140,6 +181,26 @@ const GameCanvas: React.FC = () => {
         if (playersRef.current.size > 0) {
           console.log('Clearing player references on reconnect to avoid stale data');
           playersRef.current = new Map();
+        }
+        
+        // On reconnection, check for cached position to prevent reset to origin
+        const cachedPosition = getCachedPlayerPosition();
+        if (cachedPosition && playerRef.current) {
+          console.log('Restoring player position from cache:', cachedPosition);
+          // Only apply if significantly different from origin (0,0,0) to avoid overriding server position
+          const isAtOrigin = 
+            Math.abs(playerRef.current.position.x) < 0.1 && 
+            Math.abs(playerRef.current.position.z) < 0.1;
+          
+          if (isAtOrigin) {
+            playerRef.current.position.set(
+              cachedPosition.x, 
+              cachedPosition.y, 
+              cachedPosition.z
+            );
+            // Update last sent position to avoid rubber-banding
+            lastSentPosition.current = { ...cachedPosition };
+          }
         }
       });
       
@@ -206,6 +267,8 @@ const GameCanvas: React.FC = () => {
     
     // Initialize Three.js scene
     const scene = new THREE.Scene();
+    // Store scene in ref
+    sceneRef.current = scene;
     
     // Create camera
     const camera = new THREE.PerspectiveCamera(
@@ -553,6 +616,13 @@ const GameCanvas: React.FC = () => {
         // Store player data in userData
         otherPlayerMesh.userData.playerId = player.id;
         otherPlayerMesh.userData.playerName = player.name;
+        otherPlayerMesh.userData.targetPosition = new THREE.Vector3(player.x, player.y, player.z);
+        otherPlayerMesh.userData.lastUpdateTime = Date.now();
+        
+        // Set disappearance timeout - if we don't hear from this player for 30 seconds, mark for cleanup
+        otherPlayerMesh.userData.disappearanceTimeout = setTimeout(() => {
+          otherPlayerMesh.userData.markedForCleanup = true;
+        }, 30000);
         
         // Add name label
         createNameLabel(player.name, otherPlayerMesh);
@@ -788,14 +858,13 @@ const GameCanvas: React.FC = () => {
       });
       
       // Handle player movements
-      socket.on('playerMoved', (data) => {
+      socket.on('playerMoved', (data: PlayerMoveData) => {
         // Add verbose logging for debugging
         console.log('Received playerMoved event:', {
           playerId: data.id,
           position: { x: data.x, y: data.y, z: data.z },
           playerExists: playersRef.current.has(data.id),
-          totalPlayers: playersRef.current.size,
-          allPlayerIds: Array.from(playersRef.current.keys())
+          totalPlayers: playersRef.current.size
         });
         
         // Skip if this is our own player ID - we shouldn't move ourselves based on server events
@@ -812,34 +881,73 @@ const GameCanvas: React.FC = () => {
           const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, data.x));
           const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, data.z));
           
-          console.log(`Updating position for player ${data.id} to:`, {
-            x: validX,
-            y: data.y,
-            z: validZ
-          });
+          // Get the server timestamp or use current time
+          const serverTime = data.timestamp || Date.now();
           
-          // Calculate distance to new position
-          const currentPos = playerMesh.position;
-          const distanceToNewPos = Math.sqrt(
-            Math.pow(validX - currentPos.x, 2) + 
-            Math.pow(validZ - currentPos.z, 2)
-          );
-          
-          // If distance is very large, smooth the transition
-          const LARGE_MOVEMENT_THRESHOLD = 5; // Units
-          if (distanceToNewPos > LARGE_MOVEMENT_THRESHOLD) {
-            console.warn(`Large position change detected for player ${data.id}: ${distanceToNewPos.toFixed(2)} units`);
-            
-            // Instead of immediate jump, move halfway there
-            // This creates a smoother transition for large changes
-            const midX = currentPos.x + (validX - currentPos.x) * 0.5;
-            const midZ = currentPos.z + (validZ - currentPos.z) * 0.5;
-            
-            playerMesh.position.set(midX, data.y, midZ);
-          } else {
-            // Normal update for reasonable distances
-            playerMesh.position.set(validX, data.y, validZ);
+          // Calculate network latency if timestamp is provided
+          let estimatedLatency = 0;
+          if (data.timestamp) {
+            estimatedLatency = Date.now() - data.timestamp;
+            // Cap latency compensation to reasonable values
+            estimatedLatency = Math.min(estimatedLatency, 200);
           }
+          
+          // Store previous target for velocity calculation if we don't have it
+          if (!playerMesh.userData.prevTargetPosition) {
+            playerMesh.userData.prevTargetPosition = playerMesh.userData.targetPosition 
+              ? playerMesh.userData.targetPosition.clone() 
+              : new THREE.Vector3(validX, data.y, validZ);
+            playerMesh.userData.prevTargetTime = playerMesh.userData.lastUpdateTime || Date.now() - 100;
+          }
+          
+          const newTargetPosition = new THREE.Vector3(validX, data.y, validZ);
+          
+          // Calculate distance to current position to detect large discrepancies
+          const currentPosition = playerMesh.position;
+          const distanceToTarget = currentPosition.distanceTo(newTargetPosition);
+          
+          // If the discrepancy is too large, snap immediately to avoid visible "teleporting"
+          if (distanceToTarget > POSITION_SNAP_THRESHOLD) {
+            console.log(`Large position discrepancy detected for player ${data.id}: ${distanceToTarget} units. Snapping to new position.`);
+            playerMesh.position.copy(newTargetPosition);
+            
+            // Also reset velocity for a fresh start
+            playerMesh.userData.velocity = { x: 0, z: 0 };
+          }
+          
+          // Set target position for interpolation
+          playerMesh.userData.targetPosition = newTargetPosition;
+          playerMesh.userData.lastUpdateTime = Date.now();
+          
+          // Store previous target for next velocity calculation
+          if (playerMesh.userData.prevTargetPosition) {
+            const prevTarget = playerMesh.userData.prevTargetPosition;
+            const timeDelta = (Date.now() - playerMesh.userData.prevTargetTime) / 1000;
+            
+            if (timeDelta > 0) {
+              // Calculate and store velocity based on target positions (not actual positions)
+              // This is more accurate for prediction
+              playerMesh.userData.serverVelocity = {
+                x: (newTargetPosition.x - prevTarget.x) / timeDelta,
+                z: (newTargetPosition.z - prevTarget.z) / timeDelta
+              };
+              
+              // Update previous target data
+              playerMesh.userData.prevTargetPosition = newTargetPosition.clone();
+              playerMesh.userData.prevTargetTime = Date.now();
+            }
+          }
+          
+          // Reset disappearance timer whenever we get a position update
+          if (playerMesh.userData.disappearanceTimeout) {
+            clearTimeout(playerMesh.userData.disappearanceTimeout);
+          }
+          
+          // Set a new disappearance timeout - if we don't hear from this player for 30 seconds,
+          // we'll mark them for cleanup
+          playerMesh.userData.disappearanceTimeout = setTimeout(() => {
+            playerMesh.userData.markedForCleanup = true;
+          }, 30000);
         } else {
           console.warn(`Could not find player mesh for ID: ${data.id}. Attempting to create it.`);
           
@@ -849,11 +957,17 @@ const GameCanvas: React.FC = () => {
             if (playerData) {
               console.log(`Received player data for missing player ${data.id}, creating mesh`);
               const createdMesh = createPlayerMesh(playerData);
-              console.log(`Created mesh for player ${data.id} after getPlayerData response`, {
-                success: !!createdMesh,
-                trackedPlayers: Array.from(playersRef.current.keys()),
-                playerTracked: playersRef.current.has(data.id)
-              });
+              
+              // Set initial target position for the newly created player
+              if (createdMesh) {
+                createdMesh.userData.targetPosition = new THREE.Vector3(data.x, data.y, data.z);
+                createdMesh.userData.lastUpdateTime = Date.now();
+                
+                // Set disappearance timeout
+                createdMesh.userData.disappearanceTimeout = setTimeout(() => {
+                  createdMesh.userData.markedForCleanup = true;
+                }, 30000);
+              }
             } else {
               // If server doesn't respond with player data, create a minimal player object
               const minimalPlayer = {
@@ -866,11 +980,17 @@ const GameCanvas: React.FC = () => {
               };
               console.log(`Creating minimal player object for ${data.id}`);
               const createdMesh = createPlayerMesh(minimalPlayer);
-              console.log(`Created mesh for minimal player ${data.id}`, {
-                success: !!createdMesh,
-                trackedPlayers: Array.from(playersRef.current.keys()),
-                playerTracked: playersRef.current.has(data.id)
-              });
+              
+              // Set initial target position for the newly created player
+              if (createdMesh) {
+                createdMesh.userData.targetPosition = new THREE.Vector3(data.x, data.y, data.z);
+                createdMesh.userData.lastUpdateTime = Date.now();
+                
+                // Set disappearance timeout
+                createdMesh.userData.disappearanceTimeout = setTimeout(() => {
+                  createdMesh.userData.markedForCleanup = true;
+                }, 30000);
+              }
             }
           });
         }
@@ -1078,9 +1198,217 @@ const GameCanvas: React.FC = () => {
       // Set up periodic cleanup to handle any ghost player meshes
       const cleanupInterval = setInterval(() => {
         if (isConnected) {
-          cleanupPlayerMeshes();
+          // Only run full cleanup check every 3 minutes (reduced frequency)
+          const shouldRunFullCheck = Math.random() < 0.1; // 10% chance = every ~10 checks
+          
+          if (shouldRunFullCheck) {
+            console.log('Starting periodic player cleanup check');
+            
+            // Check for players marked for cleanup due to inactivity
+            const inactivePlayers: string[] = [];
+            
+            playersRef.current.forEach((playerMesh, playerId) => {
+              // Only clean up players that have been explicitly marked as inactive
+              if (playerMesh.userData.markedForCleanup === true) {
+                inactivePlayers.push(playerId);
+              }
+            });
+            
+            if (inactivePlayers.length > 0) {
+              console.log(`Found ${inactivePlayers.length} inactive players to clean up:`, inactivePlayers);
+              
+              // Since checkPlayersPresence isn't defined, let's use getPlayerData instead
+              // to check one player at a time - if data comes back, they're still active
+              const checkPlayerStatus = async () => {
+                const disconnectedPlayerIds: string[] = [];
+                
+                // Check each inactive player one by one
+                for (const playerId of inactivePlayers) {
+                  try {
+                    // Try to get the player data - if this succeeds, they're still connected
+                    await new Promise<void>((resolve, reject) => {
+                      socket.emit('getPlayerData', playerId, (playerData: any) => {
+                        if (playerData) {
+                          // Player still exists on server, not disconnected
+                          console.log(`Player ${playerId} still exists on server`);
+                          resolve();
+                        } else {
+                          // Player doesn't exist on server, mark as disconnected
+                          disconnectedPlayerIds.push(playerId);
+                          console.log(`Player ${playerId} not found on server, marking as disconnected`);
+                          resolve();
+                        }
+                      });
+                      
+                      // Set a timeout in case the callback never fires
+                      setTimeout(() => {
+                        disconnectedPlayerIds.push(playerId);
+                        console.log(`Timeout checking player ${playerId}, marking as disconnected`);
+                        resolve();
+                      }, 1000);
+                    });
+                  } catch (error) {
+                    console.error(`Error checking player ${playerId}:`, error);
+                    // In case of error, assume disconnected to be safe
+                    disconnectedPlayerIds.push(playerId);
+                  }
+                }
+                
+                // Now handle the disconnected players
+                if (disconnectedPlayerIds.length > 0) {
+                  console.log(`Confirmed ${disconnectedPlayerIds.length} players are disconnected:`, disconnectedPlayerIds);
+                  
+                  // Remove only the players confirmed disconnected
+                  disconnectedPlayerIds.forEach(playerId => {
+                    const playerMesh = playersRef.current.get(playerId);
+                    if (playerMesh) {
+                      console.log(`Removing confirmed disconnected player: ${playerId}`);
+                      
+                      // Clean up any timeouts
+                      if (playerMesh.userData.disappearanceTimeout) {
+                        clearTimeout(playerMesh.userData.disappearanceTimeout);
+                      }
+                      
+                      // Clean up any child objects
+                      playerMesh.traverse((child) => {
+                        if ((child as any).isCSS2DObject) {
+                          if (child.parent) {
+                            child.parent.remove(child);
+                          }
+                          scene.remove(child);
+                        }
+                      });
+                      
+                      // Clean up resources
+                      if ((playerMesh as THREE.Mesh).geometry) {
+                        (playerMesh as THREE.Mesh).geometry.dispose();
+                      }
+                      if ((playerMesh as THREE.Mesh).material) {
+                        if (Array.isArray((playerMesh as THREE.Mesh).material)) {
+                          ((playerMesh as THREE.Mesh).material as THREE.Material[]).forEach(m => m.dispose());
+                        } else {
+                          ((playerMesh as THREE.Mesh).material as THREE.Material).dispose();
+                        }
+                      }
+                      
+                      // Remove from scene
+                      scene.remove(playerMesh);
+                      playersRef.current.delete(playerId);
+                      
+                      // Also remove from name labels
+                      if (nameLabelsRef.current.has(playerId)) {
+                        const label = nameLabelsRef.current.get(playerId);
+                        if (label) {
+                          if (label.parent) {
+                            label.parent.remove(label);
+                          }
+                          scene.remove(label);
+                          nameLabelsRef.current.delete(playerId);
+                        }
+                      }
+                    }
+                  });
+                } else {
+                  console.log('All players are still connected, keeping them in scene');
+                  
+                  // Reset marked for cleanup for all players since they're still connected
+                  inactivePlayers.forEach(playerId => {
+                    const playerMesh = playersRef.current.get(playerId);
+                    if (playerMesh) {
+                      playerMesh.userData.markedForCleanup = false;
+                      
+                      // Reset disappearance timeout
+                      if (playerMesh.userData.disappearanceTimeout) {
+                        clearTimeout(playerMesh.userData.disappearanceTimeout);
+                      }
+                      playerMesh.userData.disappearanceTimeout = setTimeout(() => {
+                        playerMesh.userData.markedForCleanup = true;
+                      }, 30000);
+                    }
+                  });
+                }
+              };
+              
+              // Run the check
+              checkPlayerStatus();
+            } else {
+              console.log('No inactive players found during cleanup');
+            }
+            
+            // Check for duplicate player meshes in the scene as a second cleanup step
+            const playerIdCounts = new Map<string, number>();
+            const duplicatePlayerIds = new Set<string>();
+            
+            // Count how many meshes exist per player ID
+            scene.traverse((object) => {
+              if (object.userData && object.userData.playerId && object.type === 'Mesh') {
+                const playerId = object.userData.playerId;
+                playerIdCounts.set(playerId, (playerIdCounts.get(playerId) || 0) + 1);
+                
+                // If we found more than one mesh for this player, it's a duplicate
+                if (playerIdCounts.get(playerId)! > 1) {
+                  duplicatePlayerIds.add(playerId);
+                }
+              }
+            });
+            
+            // Handle any duplicates found
+            if (duplicatePlayerIds.size > 0) {
+              console.log(`Found ${duplicatePlayerIds.size} players with duplicate meshes`);
+              
+              // For each player with duplicates, keep only the one in our tracking map
+              duplicatePlayerIds.forEach(playerId => {
+                const trackedMesh = playersRef.current.get(playerId);
+                if (!trackedMesh) return; // Skip if we don't have this player tracked anymore
+                
+                const duplicateMeshes: THREE.Object3D[] = [];
+                
+                // Find all meshes with this player ID
+                scene.traverse((object) => {
+                  if (object.userData && 
+                      object.userData.playerId === playerId && 
+                      object.type === 'Mesh' && 
+                      object !== trackedMesh) {
+                    duplicateMeshes.push(object);
+                  }
+                });
+                
+                // Remove the duplicates
+                if (duplicateMeshes.length > 0) {
+                  console.log(`Removing ${duplicateMeshes.length} duplicate meshes for player ${playerId}`);
+                  
+                  duplicateMeshes.forEach(mesh => {
+                    // Clean up any child objects
+                    mesh.traverse((child) => {
+                      if ((child as any).isCSS2DObject) {
+                        if (child.parent) {
+                          child.parent.remove(child);
+                        }
+                        scene.remove(child);
+                      }
+                    });
+                    
+                    // Clean up resources
+                    if ((mesh as THREE.Mesh).geometry) {
+                      (mesh as THREE.Mesh).geometry.dispose();
+                    }
+                    if ((mesh as THREE.Mesh).material) {
+                      if (Array.isArray((mesh as THREE.Mesh).material)) {
+                        ((mesh as THREE.Mesh).material as THREE.Material[]).forEach(m => m.dispose());
+                      } else {
+                        ((mesh as THREE.Mesh).material as THREE.Material).dispose();
+                      }
+                    }
+                    
+                    // Remove from scene
+                    scene.remove(mesh);
+                  });
+                }
+              });
+            }
+          }
         }
-      }, 30000); // Run cleanup every 30 seconds
+      }, 180000); // Run cleanup check every 3 minutes
       
       // Store the interval for cleanup
       cleanupIntervalRef.current = cleanupInterval;
@@ -1282,6 +1610,12 @@ const GameCanvas: React.FC = () => {
       const deltaTime = currentTime - lastUpdateTime.current;
       lastUpdateTime.current = currentTime;
       
+      // Get key states at the beginning of the update
+      const isW = keysPressed.current.w || keysPressed.current.ArrowUp;
+      const isS = keysPressed.current.s || keysPressed.current.ArrowDown;
+      const isD = keysPressed.current.d || keysPressed.current.ArrowRight;
+      const isA = keysPressed.current.a || keysPressed.current.ArrowLeft;
+      
       // Calculate movement direction based on camera angle (horizontal only)
       const forward = new THREE.Vector3(
         Math.sin(cameraAngle.current),
@@ -1296,14 +1630,21 @@ const GameCanvas: React.FC = () => {
       
       // Calculate movement vector
       const movement = new THREE.Vector3(0, 0, 0);
-      if (keysPressed.current.w || keysPressed.current.ArrowUp) movement.sub(forward);
-      if (keysPressed.current.s || keysPressed.current.ArrowDown) movement.add(forward);
-      if (keysPressed.current.d || keysPressed.current.ArrowRight) movement.add(right);
-      if (keysPressed.current.a || keysPressed.current.ArrowLeft) movement.sub(right);
       
-      // Normalize movement vector if moving diagonally
+      // Apply movement based on keys (use the captured states)
+      if (isW) movement.sub(forward);
+      if (isS) movement.add(forward);
+      if (isD) movement.add(right);
+      if (isA) movement.sub(right);
+      
+      // Only process movement if there is any
       if (movement.length() > 0) {
+        // Normalize movement vector for consistent speed in all directions
         movement.normalize();
+        
+        // Apply reduced speed (now 0.02)
+        const fixedSpeed = 0.02; // Hardcoded value to guarantee consistency
+        movement.multiplyScalar(fixedSpeed);
         
         // Rotate player to face movement direction
         if (playerRef.current) {
@@ -1312,16 +1653,43 @@ const GameCanvas: React.FC = () => {
           // Set player rotation to face movement direction
           playerRef.current.rotation.y = angle;
         }
+        
+        // Calculate new position with the fixed movement
+        const newX = playerRef.current.position.x + movement.x;
+        const newZ = playerRef.current.position.z + movement.z;
+        
+        // Apply boundary checks
+        const boundedX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, newX));
+        const boundedZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, newZ));
+        
+        // Only update if we're actually moving
+        if (Math.abs(boundedX - playerRef.current.position.x) > 0.0001 || 
+            Math.abs(boundedZ - playerRef.current.position.z) > 0.0001) {
+          
+          // Update player position
+          playerRef.current.position.x = boundedX;
+          playerRef.current.position.z = boundedZ;
+          
+          // Flag that movement has changed for network updates
+          movementChanged.current = true;
+          
+          // Check if we need to update the zone (use a function that doesn't trigger re-renders)
+          checkAndUpdateZone(boundedX, boundedZ);
+          
+          // Position history update for anomaly detection
+          positionHistory.current.push({x: boundedX, z: boundedZ, time: currentTime});
+          if (positionHistory.current.length > MAX_HISTORY_LENGTH) {
+            positionHistory.current.shift();
+          }
+          
+          // Check for anomalous speed if we have enough history
+          if (positionHistory.current.length >= 2) {
+            detectAnomalousMovement();
+          }
+        }
       }
       
-      // Apply movement speed
-      movement.multiplyScalar(MOVEMENT_SPEED);
-      
-      // Update player position
-      playerRef.current.position.x += movement.x;
-      playerRef.current.position.z += movement.z;
-      
-      // Handle jumping
+      // Handle jumping - unchanged from before
       if (isJumping.current) {
         playerRef.current.position.y += jumpVelocity.current;
         jumpVelocity.current -= GRAVITY;
@@ -1332,6 +1700,39 @@ const GameCanvas: React.FC = () => {
           isJumping.current = false;
           jumpVelocity.current = 0;
         }
+      }
+    };
+    
+    // Function to check and update zone without triggering immediate re-renders
+    const checkAndUpdateZone = (x: number, z: number) => {
+      // Simple zone detection based on position
+      let newZone = 'Lumbridge';
+      
+      if (x < -10 && z < -10) {
+        newZone = 'Barbarian Village';
+      } else if (x > 25 && z < 0) {
+        newZone = 'Fishing Spot';
+      } else if (x > 0 && z > 25) {
+        newZone = 'Grand Exchange';
+      } else if (x < -30 || z < -30 || x > 30 || z > 30) {
+        newZone = 'Wilderness';
+      }
+      
+      // Only update the zone if it's different, using a debounced approach
+      if (newZone !== currentZone) {
+        console.log(`Zone transition: ${currentZone} -> ${newZone}`);
+        
+        // Clear any pending zone update
+        if (zoneUpdateTimeoutRef.current) {
+          clearTimeout(zoneUpdateTimeoutRef.current);
+        }
+        
+        // Set a timeout to update the zone (debounce zone changes)
+        // This prevents multiple rapid zone updates from disrupting movement
+        zoneUpdateTimeoutRef.current = setTimeout(() => {
+          setCurrentZone(newZone);
+          zoneUpdateTimeoutRef.current = null;
+        }, 500); // 500ms debounce time
       }
     };
     
@@ -1387,26 +1788,6 @@ const GameCanvas: React.FC = () => {
       }
     };
     
-    // Update the player's current zone
-    const updatePlayerZone = (x: number, z: number) => {
-      // Simple zone detection based on position
-      let newZone = 'Lumbridge';
-      
-      if (x < -10 && z < -10) {
-        newZone = 'Barbarian Village';
-      } else if (x > 25 && z < 0) {
-        newZone = 'Fishing Spot';
-      } else if (x > 0 && z > 25) {
-        newZone = 'Grand Exchange';
-      } else if (x < -30 || z < -30 || x > 30 || z > 30) {
-        newZone = 'Wilderness';
-      }
-      
-      if (newZone !== currentZone) {
-        setCurrentZone(newZone);
-      }
-    };
-    
     // Send position to server at throttled rate
     const sendPositionUpdate = async () => {
       // Make sure we're really connected by checking both state and socket.connected
@@ -1442,14 +1823,16 @@ const GameCanvas: React.FC = () => {
         const position = {
           x: playerRef.current.position.x,
           y: playerRef.current.position.y,
-          z: playerRef.current.position.z
+          z: playerRef.current.position.z,
+          timestamp: Date.now() // Add timestamp for latency calculation
         };
         
-        // Check if position has changed significantly
+        // Check if position has changed significantly - use smaller threshold
         const dx = Math.abs(position.x - lastSentPosition.current.x);
         const dz = Math.abs(position.z - lastSentPosition.current.z);
         
-        if (dx > 0.01 || dz > 0.01) {
+        // Lower threshold for detecting movement (from 0.01 to 0.005)
+        if (dx > 0.003 || dz > 0.003) {
           // Ensure position is still within bounds before sending
           const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, position.x));
           const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, position.z));
@@ -1457,7 +1840,8 @@ const GameCanvas: React.FC = () => {
           const validatedPosition = {
             x: validX,
             y: position.y,
-            z: validZ
+            z: validZ,
+            timestamp: position.timestamp
           };
           
           try {
@@ -1491,7 +1875,7 @@ const GameCanvas: React.FC = () => {
         } else {
           console.log('Position change too small, not sending update', {
             dx, dz,
-            minChangeRequired: 0.01
+            minChangeRequired: 0.003
           });
         }
       }
@@ -1557,12 +1941,89 @@ const GameCanvas: React.FC = () => {
     // Store createChatBubble in a ref for use in other effects
     const createChatBubbleRef = { current: createChatBubble };
     
+    // Add a function to create or update position markers for players
+    const updateDebugVisuals = () => {
+      if (!DEBUG.showPositionMarkers && !DEBUG.showVelocityVectors) return;
+      
+      // Process each player
+      playersRef.current.forEach((playerMesh, playerId) => {
+        // Skip if no target position
+        if (!playerMesh.userData.targetPosition) return;
+        
+        // Create position marker if it doesn't exist
+        if (DEBUG.showPositionMarkers) {
+          if (!playerMesh.userData.positionMarker) {
+            const markerGeometry = new THREE.SphereGeometry(0.2);
+            const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true });
+            const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+            marker.position.copy(playerMesh.userData.targetPosition);
+            scene.add(marker);
+            playerMesh.userData.positionMarker = marker;
+          } else {
+            // Update position marker to show server-reported position
+            playerMesh.userData.positionMarker.position.copy(playerMesh.userData.targetPosition);
+          }
+          
+          // Add line connecting player to marker to visualize discrepancy
+          if (!playerMesh.userData.discrepancyLine) {
+            const lineGeometry = new THREE.BufferGeometry();
+            const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
+            const line = new THREE.Line(lineGeometry, lineMaterial);
+            scene.add(line);
+            playerMesh.userData.discrepancyLine = line;
+          }
+          
+          // Update line to connect player mesh with position marker
+          const points = [
+            playerMesh.position.clone(),
+            playerMesh.userData.positionMarker.position.clone()
+          ];
+          playerMesh.userData.discrepancyLine.geometry.setFromPoints(points);
+          
+          // Calculate and display discrepancy distance
+          const distance = playerMesh.position.distanceTo(playerMesh.userData.positionMarker.position);
+          if (!playerMesh.userData.discrepancyLabel) {
+            const discDiv = document.createElement('div');
+            discDiv.className = 'debug-label';
+            discDiv.style.color = 'red';
+            discDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+            discDiv.style.padding = '2px 5px';
+            discDiv.style.fontSize = '10px';
+            discDiv.style.userSelect = 'none';
+            discDiv.style.pointerEvents = 'none';
+            
+            const discLabel = new CSS2DObject(discDiv);
+            discLabel.position.set(0, 3, 0);
+            playerMesh.add(discLabel);
+            playerMesh.userData.discrepancyLabel = discLabel;
+          }
+          
+          // Update label with current discrepancy
+          const discDiv = playerMesh.userData.discrepancyLabel.element as HTMLDivElement;
+          discDiv.textContent = `Diff: ${distance.toFixed(2)}`;
+          discDiv.style.color = distance > 1 ? 'red' : distance > 0.5 ? 'yellow' : 'green';
+        }
+        
+        // Update velocity vectors if enabled
+        if (DEBUG.showVelocityVectors && playerMesh.userData.serverVelocity) {
+          // Similar code for velocity vectors would go here
+          // Omitted for brevity
+        }
+      });
+    };
+    
     // Animation loop
     const animate = () => {
       requestAnimationFrame(animate);
       
+      // Get delta time for frame-rate independent updates
+      const delta = clockRef.current.getDelta();
+      
       // Update player movement (delta time is calculated inside updatePlayerMovement)
       updatePlayerMovement();
+      
+      // Update remote player positions with interpolation
+      updateRemotePlayerPositions(delta);
       
       // Send position updates
       sendPositionUpdate();
@@ -1584,7 +2045,7 @@ const GameCanvas: React.FC = () => {
       }
       
       // Animate dropped items
-      updateDroppedItems(worldItemsRef.current, clockRef.current.getDelta());
+      updateDroppedItems(worldItemsRef.current, delta);
       
       // Check for expired chat bubbles
       const now = Date.now();
@@ -1611,6 +2072,34 @@ const GameCanvas: React.FC = () => {
       // Render scene and labels
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
+      
+      // Add debug visuals
+      if (DEBUG.showPositionMarkers || DEBUG.showVelocityVectors) {
+        updateDebugVisuals();
+      }
+      
+      // Add this to the animate function or in a separate useEffect
+      // Update player position data attribute for the caching system
+      if (playerRef.current) {
+        // Create or update a hidden data element to store position
+        let positionEl = document.querySelector('[data-player-position]') as HTMLDivElement | null;
+        if (!positionEl) {
+          positionEl = document.createElement('div');
+          positionEl.style.display = 'none';
+          positionEl.setAttribute('data-player-position', 'true');
+          document.body.appendChild(positionEl);
+        }
+        
+        // Update the position data
+        const currentPos = playerRef.current.position;
+        const positionData = { x: currentPos.x, y: currentPos.y, z: currentPos.z };
+        positionEl.setAttribute('data-position', JSON.stringify(positionData));
+        
+        // Periodically cache the position (every ~5 seconds)
+        if (Math.random() < 0.01) { // ~1% chance per frame at 60fps = ~once every 2 seconds
+          cachePlayerPosition(positionData);
+        }
+      }
     };
     animate();
     
@@ -1734,6 +2223,8 @@ const GameCanvas: React.FC = () => {
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('wheel', handleMouseWheel);
+      
+      // End of cleanup
     };
   }, [isConnected, currentZone, soundEnabled]);
   
@@ -1747,6 +2238,110 @@ const GameCanvas: React.FC = () => {
       }
       setIsCleaningUp(false);
     }, 100);
+  };
+  
+  // Add a function for updating remote player positions with interpolation
+  const updateRemotePlayerPositions = (delta: number) => {
+    // Update positions of all players with interpolation for smoother movement
+    playersRef.current.forEach((playerMesh, playerId) => {
+      if (!playerMesh.userData.targetPosition) return;
+      
+      // Get target position
+      const target = playerMesh.userData.targetPosition;
+      const current = playerMesh.position;
+      
+      // Calculate distance to target
+      const distance = Math.sqrt(
+        Math.pow(target.x - current.x, 2) + 
+        Math.pow(target.z - current.z, 2)
+      );
+      
+      // Improved interpolation logic - only interpolate if there's a significant distance
+      // Use a reduced threshold of 0.005 (was 0.01) to improve precision
+      if (distance > 0.005) {
+        // Store previous position for velocity calculation if we don't have it yet
+        if (!playerMesh.userData.prevPosition) {
+          playerMesh.userData.prevPosition = current.clone();
+          playerMesh.userData.prevUpdateTime = Date.now() - 16; // Assume 60fps
+        }
+        
+        // Calculate time since last target position update
+        const timeDelta = (Date.now() - playerMesh.userData.lastUpdateTime) / 1000;
+        
+        // Enhanced aggressive interpolation logic
+        let finalFactor = INTERPOLATION_SPEED;
+        
+        // Use ultra-aggressive catch-up for larger distances
+        if (distance > 3.0) {
+          // For very large distances, use extremely aggressive catch-up (80% of the way each frame)
+          finalFactor = 0.8;
+        } else if (distance > 1.0) {
+          // For large distances, use very aggressive catch-up (60% of the way each frame)
+          finalFactor = 0.6;
+        } else if (distance > 0.5) {
+          // For medium distances, use moderately aggressive catch-up
+          finalFactor = 0.5;
+        } else {
+          // Use distance-based scaling for smaller distances
+          const distanceFactor = Math.min(1, distance * 0.9); // Scale more by distance, capped at 1
+          finalFactor = Math.min(1, INTERPOLATION_SPEED * (1 + distanceFactor * 5));
+        }
+        
+        // Apply position update with calculated factor
+        playerMesh.position.x += (target.x - current.x) * finalFactor;
+        playerMesh.position.y += (target.y - current.y) * finalFactor;
+        playerMesh.position.z += (target.z - current.z) * finalFactor;
+        
+        // Apply prediction based on server-calculated velocity
+        // This is more accurate than client-side velocity calculation
+        if (ENABLE_POSITION_PREDICTION && playerMesh.userData.serverVelocity) {
+          // Enhanced prediction logic
+          // Prediction strength grows with time since last update, but caps at a maximum
+          // Reduced from 0.5 to 0.3 to prevent overshooting
+          const predictionFactor = Math.min(0.3, timeDelta * 0.6);
+          
+          // Apply prediction only for small distances to avoid making large discrepancies worse
+          if (distance < 0.8) {
+            playerMesh.position.x += playerMesh.userData.serverVelocity.x * timeDelta * predictionFactor;
+            playerMesh.position.z += playerMesh.userData.serverVelocity.z * timeDelta * predictionFactor;
+          }
+        }
+        
+        // Update player rotation to face movement direction
+        if (distance > 0.05) { // Only update rotation if there's meaningful movement
+          const angle = Math.atan2(target.x - current.x, target.z - current.z);
+          // Smooth rotation transition
+          const rotationDiff = angle - playerMesh.rotation.y;
+          // Normalize rotation difference to [-PI, PI]
+          const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
+          playerMesh.rotation.y += normalizedDiff * 0.3; // Increased from 0.2 for smoother rotation
+        }
+        
+        // Enhanced snap logic - If we're very close to the target, snap to it
+        if (distance < 0.02) { // Reduced from 0.03 to be even more precise
+          playerMesh.position.copy(target);
+        }
+        
+        // Store current position and time for next velocity calculation
+        if (playerMesh.userData.prevPosition) {
+          // Calculate velocity (units per second)
+          const currentTime = Date.now();
+          const dt = (currentTime - playerMesh.userData.prevUpdateTime) / 1000;
+          
+          if (dt > 0) {
+            // Client-side velocity calculation as backup
+            playerMesh.userData.velocity = {
+              x: (playerMesh.position.x - playerMesh.userData.prevPosition.x) / dt,
+              z: (playerMesh.position.z - playerMesh.userData.prevPosition.z) / dt
+            };
+            
+            // Store position for next calculation
+            playerMesh.userData.prevPosition = playerMesh.position.clone();
+            playerMesh.userData.prevUpdateTime = currentTime;
+          }
+        }
+      }
+    });
   };
   
   return (

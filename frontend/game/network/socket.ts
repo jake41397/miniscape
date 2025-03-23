@@ -47,6 +47,30 @@ let connectionState = {
   error: null as Error | null
 };
 
+// Add caching for last known position to prevent position resets
+const saveLastKnownPosition = (position: {x: number, y: number, z: number}) => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('last_player_position', JSON.stringify(position));
+    console.log('Saved last known position:', position);
+  }
+};
+
+const getLastKnownPosition = (): {x: number, y: number, z: number} | null => {
+  if (typeof localStorage !== 'undefined') {
+    const positionStr = localStorage.getItem('last_player_position');
+    if (positionStr) {
+      try {
+        const position = JSON.parse(positionStr);
+        console.log('Retrieved cached position:', position);
+        return position;
+      } catch (e) {
+        console.error('Failed to parse cached position:', e);
+      }
+    }
+  }
+  return null;
+};
+
 // Get the current socket status
 export const getSocketStatus = () => {
   return {
@@ -174,6 +198,17 @@ export const initializeSocket = async () => {
     socket.on('disconnect', (reason) => {
       console.log(`Socket disconnected, reason: ${reason}`);
       connectionState.connected = false;
+      
+      // Save current player position before disconnection
+      const playerPosition = document.querySelector('[data-player-position]')?.getAttribute('data-position');
+      if (playerPosition) {
+        try {
+          const position = JSON.parse(playerPosition);
+          saveLastKnownPosition(position);
+        } catch (e) {
+          console.error('Failed to save position on disconnect:', e);
+        }
+      }
       
       if (reason === 'io server disconnect') {
         // The server has forcefully disconnected the socket
@@ -423,4 +458,8 @@ export const setupSocketCleanup = () => {
     console.log('Component unmounting, disconnecting socket');
     disconnectSocket();
   };
-}; 
+};
+
+// Export the position utility functions
+export const cachePlayerPosition = saveLastKnownPosition;
+export const getCachedPlayerPosition = getLastKnownPosition; 
