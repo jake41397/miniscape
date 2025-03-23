@@ -407,22 +407,6 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       }
     });
     
-    // Handle getPlayerData requests
-    socket.on('getPlayerData', (playerId: string, callback) => {
-      console.log(`Player ${socket.id} requested data for player ${playerId}`);
-      
-      // Find the requested player
-      const player = players[playerId];
-      
-      if (player) {
-        console.log(`Returning player data for ${playerId}`);
-        callback(player);
-      } else {
-        console.log(`Player ${playerId} not found`);
-        callback(null);
-      }
-    });
-    
     // Handle chat messages
     socket.on('chat', async (text: string) => {
       // Get player info or use defaults if somehow not found
@@ -442,18 +426,39 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       
       console.log('Emitting chat message to all clients:', messageObj);
       
-      // Emit to all clients including sender
-      io.emit('chatMessage', messageObj);
-      
-      // Log the number of clients that should receive this
       try {
-        // Use proper Socket.IO v4 method to get connected sockets
-        console.log(`Active socket rooms:`, Array.from(io.sockets.adapter.rooms.keys()));
+        // More reliable approach: use io.emit to ensure ALL clients get the message at once
+        // This includes both the sender and all other clients
+        io.emit('chatMessage', messageObj);
+        
+        // Log confirmation
+        console.log(`Chat message "${text}" from ${playerName} broadcast to all clients`);
+        
+        // Log the active clients that should receive this message
         const connectedSockets = await io.fetchSockets();
         console.log(`Message sent to ${connectedSockets.length} connected clients:`, 
           connectedSockets.map(s => s.id).join(', '));
       } catch (error) {
-        console.error('Error getting socket clients:', error);
+        console.error('Error broadcasting chat message:', error);
+        
+        // Fallback approach if the broadcast fails
+        console.log('Using fallback approach for message delivery');
+        socket.emit('chatMessage', messageObj);
+        socket.broadcast.emit('chatMessage', messageObj);
+      }
+    });
+    
+    // Add a handler for getting player data (used for chat bubbles and other player-specific features)
+    socket.on('getPlayerData', (playerId: string, callback) => {
+      console.log(`Request for player data for player ${playerId}`);
+      
+      // Find the player data
+      if (players[playerId]) {
+        console.log(`Found player data for ${playerId}, sending back`);
+        callback(players[playerId]);
+      } else {
+        console.log(`Player ${playerId} not found in server players list`);
+        callback(null);
       }
     });
     

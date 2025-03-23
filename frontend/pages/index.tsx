@@ -42,18 +42,8 @@ const DynamicGameCanvas = dynamic(() => import('../components/GameCanvas'), {
   ),
 });
 
-// Dynamically import the DebugButton component with no SSR
-const DynamicDebugButton = dynamic(() => import('../components/DebugButton'), {
-  ssr: false,
-});
-
 // Dynamically import the SessionStatus component with no SSR
 const DynamicSessionStatus = dynamic(() => import('../components/SessionStatus'), {
-  ssr: false,
-});
-
-// Dynamically import the DebugViewLogs component with no SSR
-const DynamicDebugViewLogs = dynamic(() => import('../components/DebugViewLogs'), {
   ssr: false,
 });
 
@@ -399,9 +389,6 @@ const Home: NextPage = () => {
           </div>
         )}
         
-        {/* Add the diagnostic button regardless of showDebugPanel */}
-        <DynamicDebugButton />
-        
         {/* Always show SessionStatus in compact mode */}
         <DynamicSessionStatus compact={true} />
       </div>
@@ -463,9 +450,6 @@ const Home: NextPage = () => {
             </button>
           </div>
         )}
-        
-        {/* Add the diagnostic button regardless of showDebugPanel */}
-        <DynamicDebugButton />
         
         {/* Always show SessionStatus in compact mode */}
         <DynamicSessionStatus compact={true} />
@@ -568,9 +552,6 @@ const Home: NextPage = () => {
               </div>
             )}
             
-            {/* Add the diagnostic button */}
-            <DynamicDebugButton />
-            
             {/* Always show SessionStatus in compact mode during loading */}
             <DynamicSessionStatus compact={true} />
           </div>
@@ -624,14 +605,8 @@ const Home: NextPage = () => {
               </div>
             )}
             
-            {/* Always show diagnostic button in game view */}
-            <DynamicDebugButton />
-            
             {/* Show SessionStatus in game view */}
             <DynamicSessionStatus compact={true} />
-            
-            {/* Add logs viewer component */}
-            {showDebugPanel && <DynamicDebugViewLogs />}
           </>
         )}
       </main>

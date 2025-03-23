@@ -6,11 +6,6 @@ import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import { supabase } from '../../lib/supabase';
 
-// Dynamically import the debug button to prevent SSR issues
-const DynamicDebugButton = dynamic(() => import('../../components/DebugButton'), {
-  ssr: false
-});
-
 // Dynamically import the SessionStatus component
 const DynamicSessionStatus = dynamic(() => import('../../components/SessionStatus'), {
   ssr: false
@@ -205,9 +200,6 @@ const SignIn: NextPage = () => {
           </div>
         )}
         
-        {/* Add the diagnostics button */}
-        {showDebug && <DynamicDebugButton />}
-        
         {/* Show session status */}
         <DynamicSessionStatus compact={true} />
       </div>
@@ -249,9 +241,6 @@ const SignIn: NextPage = () => {
             ))}
           </div>
         )}
-        
-        {/* Add the diagnostics button */}
-        {showDebug && <DynamicDebugButton />}
         
         {/* Show session status */}
         <DynamicSessionStatus compact={true} />
@@ -454,9 +443,6 @@ const SignIn: NextPage = () => {
           By signing in, you agree to our Terms of Service and Privacy Policy.
         </p>
       </div>
-      
-      {/* Add the diagnostics button */}
-      {showDebug && <DynamicDebugButton />}
       
       {/* Show session status */}
       <DynamicSessionStatus compact={true} />

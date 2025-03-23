@@ -184,6 +184,32 @@ const ChatPanel: React.FC = () => {
     // Send to the server - it will broadcast to all clients including us
     socket.emit('chat', inputValue);
     
+    // Create chat bubble immediately (don't wait for server echo)
+    // This dispatches an event for GameCanvas to handle
+    try {
+      console.log('Dispatching local chat bubble event');
+      window.dispatchEvent(new CustomEvent('create_local_chat_bubble', { 
+        detail: { 
+          text: inputValue,
+          playerId: socket.id
+        }
+      }));
+      
+      // For extra reliability, try dispatching the event again after a short delay
+      // This helps if the first event didn't get processed properly
+      setTimeout(() => {
+        console.log('Dispatching delayed local chat bubble event (backup)');
+        window.dispatchEvent(new CustomEvent('create_local_chat_bubble', { 
+          detail: { 
+            text: inputValue,
+            playerId: socket.id
+          }
+        }));
+      }, 300);
+    } catch (error) {
+      console.error('Error dispatching chat bubble event:', error);
+    }
+    
     // Clear input
     setInputValue('');
   };
