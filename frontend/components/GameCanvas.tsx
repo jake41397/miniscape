@@ -11,17 +11,15 @@ import {
   getCachedPlayerPosition 
 } from '../game/network/socket';
 import { Player } from '../types/player';
-import ChatPanel from './ui/ChatPanel';
 import InventoryPanel from './ui/InventoryPanel';
 import soundManager from '../game/audio/soundManager';
 import { 
   ResourceNode, 
   ResourceType, 
-  WorldItem, 
-  createResourceMesh, 
-  createItemMesh,
-  updateDroppedItems
+  WorldItem
 } from '../game/world/resources';
+import Chat, { ChatRefHandle } from './chat/Chat';
+import WorldManager, { WORLD_BOUNDS } from '../game/world/WorldManager';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -31,13 +29,6 @@ const FIXED_SPEED_FACTOR = 0.02; // Reduced from 0.0375
 const SEND_INTERVAL = 20; // Reduced from 30ms to 20ms for more frequent updates
 // Position interpolation settings
 const INTERPOLATION_SPEED = 0.4; // Increased from 0.3 for faster position syncing
-// World boundaries
-const WORLD_BOUNDS = {
-  minX: -50, 
-  maxX: 50,
-  minZ: -50,
-  maxZ: 50
-};
 
 // Add position prediction settings
 const POSITION_HISTORY_LENGTH = 5; // How many positions to keep for prediction
@@ -107,7 +98,6 @@ const GameCanvas: React.FC = () => {
   // Track the player's last sent position to avoid spamming movement updates
   const lastSentPosition = useRef({ x: 0, y: 1, z: 0 });
   const lastSendTime = useRef(0);
-  const SEND_INTERVAL = 100; // Send updates at most every 100ms
   
   // Track if player movement has changed since last send
   const movementChanged = useRef(false);
@@ -125,8 +115,8 @@ const GameCanvas: React.FC = () => {
   
   // Add settings state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isHorizontalInverted, setIsHorizontalInverted] = useState(true);
-  const isHorizontalInvertedRef = useRef(true);
+  const [isHorizontalInverted, setIsHorizontalInverted] = useState(false);
+  const isHorizontalInvertedRef = useRef(false);
   
   // Create a ref to store the createNameLabel function
   const createNameLabelRef = useRef<((name: string, mesh: THREE.Mesh) => CSS2DObject) | null>(null);
@@ -136,9 +126,6 @@ const GameCanvas: React.FC = () => {
   
   // Add state to track if cleanup is in progress
   const [isCleaningUp, setIsCleaningUp] = useState(false);
-  
-  // Game references
-  const chatBubblesRef = useRef<Map<string, { object: CSS2DObject, expiry: number }>>(new Map());
   
   // Add movement state
   const moveForward = useRef(false);
@@ -155,6 +142,12 @@ const GameCanvas: React.FC = () => {
   
   // Add scene ref
   const sceneRef = useRef<THREE.Scene | null>(null);
+  
+  // Add a ref for the WorldManager
+  const worldManagerRef = useRef<WorldManager | null>(null);
+  
+  // Create a ref for the Chat component with the proper type
+  const chatRef = useRef<ChatRefHandle>(null);
   
   // Keep inversion setting in sync with ref
   useEffect(() => {
@@ -174,19 +167,16 @@ const GameCanvas: React.FC = () => {
       
       // Track socket connection state
       socket.on('connect', () => {
-        console.log('Socket connected with ID:', socket.id);
         setIsConnected(true);
         
         // Clear player refs on reconnect to avoid stale references
         if (playersRef.current.size > 0) {
-          console.log('Clearing player references on reconnect to avoid stale data');
           playersRef.current = new Map();
         }
         
         // On reconnection, check for cached position to prevent reset to origin
         const cachedPosition = getCachedPlayerPosition();
         if (cachedPosition && playerRef.current) {
-          console.log('Restoring player position from cache:', cachedPosition);
           // Only apply if significantly different from origin (0,0,0) to avoid overriding server position
           const isAtOrigin = 
             Math.abs(playerRef.current.position.x) < 0.1 && 
@@ -205,18 +195,15 @@ const GameCanvas: React.FC = () => {
       });
       
       socket.on('disconnect', () => {
-        console.log('Socket disconnected, updating connection state');
         setIsConnected(false);
       });
 
       // Add custom event listeners for socket state changes
       const handleSocketConnected = () => {
-        console.log('Socket connected event received');
         setIsConnected(true);
       };
       
       const handleSocketDisconnected = () => {
-        console.log('Socket disconnected event received');
         setIsConnected(false);
       };
       
@@ -230,7 +217,6 @@ const GameCanvas: React.FC = () => {
       const connectionMonitor = setInterval(() => {
         const status = getSocketStatus();
         if (status.connected !== isConnected) {
-          console.log(`Connection state mismatch - status: ${status.connected}, state: ${isConnected}`);
           setIsConnected(status.connected);
         }
       }, 5000);
@@ -310,6 +296,15 @@ const GameCanvas: React.FC = () => {
     };
     window.addEventListener('resize', handleResize);
     
+    // Add keyboard and mouse event listeners
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    renderer.domElement.addEventListener('click', handleMouseClick);
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('wheel', handleMouseWheel);
+    
     // Add ambient light
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     scene.add(ambientLight);
@@ -319,75 +314,16 @@ const GameCanvas: React.FC = () => {
     directionalLight.position.set(10, 20, 10);
     scene.add(directionalLight);
     
-    // Create a ground plane
-    const groundGeometry = new THREE.PlaneGeometry(100, 100);
-    const groundMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0x4caf50,  // Green color for grass
-      roughness: 0.8,
-      metalness: 0.2
+    // Use WorldManager to create and manage world objects
+    // This handles creating the ground, grid, boundaries, and resources
+    const worldManager = new WorldManager({
+      scene,
+      onResourceNodesCreated: handleResourceNodesCreated,
+      onWorldItemsCreated: handleWorldItemsCreated
     });
-    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
     
-    // Rotate the ground to be horizontal (x-z plane)
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = 0;
-    scene.add(ground);
-    
-    // Create a simple grid for reference
-    const gridHelper = new THREE.GridHelper(100, 20);
-    scene.add(gridHelper);
-    
-    // Add boundary visualizers for debugging
-    const createBoundaryMarkers = () => {
-      // Use a bright color for visibility
-      const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-      const markerGeometry = new THREE.SphereGeometry(0.5);
-      
-      // Place markers at corners and midpoints of the world boundaries
-      const boundaryPoints = [
-        // Corners
-        { x: WORLD_BOUNDS.minX, z: WORLD_BOUNDS.minZ },
-        { x: WORLD_BOUNDS.minX, z: WORLD_BOUNDS.maxZ },
-        { x: WORLD_BOUNDS.maxX, z: WORLD_BOUNDS.minZ },
-        { x: WORLD_BOUNDS.maxX, z: WORLD_BOUNDS.maxZ },
-        // Midpoints of edges
-        { x: WORLD_BOUNDS.minX, z: 0 },
-        { x: WORLD_BOUNDS.maxX, z: 0 },
-        { x: 0, z: WORLD_BOUNDS.minZ },
-        { x: 0, z: WORLD_BOUNDS.maxZ },
-      ];
-      
-      // Create and add markers to scene
-      boundaryPoints.forEach(point => {
-        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        marker.position.set(point.x, 1, point.z); // Position at y=1 to be visible above ground
-        scene.add(marker);
-      });
-      
-      // Create visible lines along the boundaries
-      const lineGeometry = new THREE.BufferGeometry();
-      const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
-      
-      // Define the outline of the world boundary box (on ground level)
-      const linePoints = [
-        // Bottom square
-        new THREE.Vector3(WORLD_BOUNDS.minX, 0.1, WORLD_BOUNDS.minZ),
-        new THREE.Vector3(WORLD_BOUNDS.maxX, 0.1, WORLD_BOUNDS.minZ),
-        new THREE.Vector3(WORLD_BOUNDS.maxX, 0.1, WORLD_BOUNDS.maxZ),
-        new THREE.Vector3(WORLD_BOUNDS.minX, 0.1, WORLD_BOUNDS.maxZ),
-        new THREE.Vector3(WORLD_BOUNDS.minX, 0.1, WORLD_BOUNDS.minZ)
-      ];
-      
-      lineGeometry.setFromPoints(linePoints);
-      const boundaryLine = new THREE.Line(lineGeometry, lineMaterial);
-      scene.add(boundaryLine);
-      
-      console.log('Boundary markers created at world bounds', WORLD_BOUNDS);
-    };
-    
-    // Enable boundary markers for debugging
-    // Comment out in production if not needed
-    createBoundaryMarkers();
+    // Store the worldManager in a ref for access in event handlers
+    worldManagerRef.current = worldManager;
     
     // Create player avatar (a simple box for now)
     const playerGeometry = new THREE.BoxGeometry(1, 2, 1);
@@ -472,53 +408,6 @@ const GameCanvas: React.FC = () => {
     // Store the createNameLabel function in the ref so it can be used by other useEffect hooks
     createNameLabelRef.current = createNameLabel;
     
-    // Create resource nodes in the world
-    const createWorldResources = () => {
-      // Clear existing resources
-      resourceNodesRef.current.forEach(node => {
-        if (node.mesh) {
-          scene.remove(node.mesh);
-        }
-      });
-      resourceNodesRef.current = [];
-      
-      // Define resource nodes
-      const resources: ResourceNode[] = [
-        // Trees in Lumbridge area
-        { id: 'tree-1', type: ResourceType.TREE, x: 10, y: 0, z: 10 },
-        { id: 'tree-2', type: ResourceType.TREE, x: 15, y: 0, z: 15 },
-        { id: 'tree-3', type: ResourceType.TREE, x: 20, y: 0, z: 10 },
-        
-        // Rocks in Barbarian Village
-        { id: 'rock-1', type: ResourceType.ROCK, x: -20, y: 0, z: -20 },
-        { id: 'rock-2', type: ResourceType.ROCK, x: -25, y: 0, z: -15 },
-        
-        // Fishing spots
-        { id: 'fish-1', type: ResourceType.FISH, x: 30, y: 0, z: -30 },
-      ];
-      
-      // Create meshes for each resource and add to scene
-      resources.forEach(resource => {
-        const mesh = createResourceMesh(resource.type);
-        mesh.position.set(resource.x, resource.y, resource.z);
-        
-        // Store resource ID in userData for raycasting identification
-        mesh.userData.resourceId = resource.id;
-        mesh.userData.resourceType = resource.type;
-        
-        scene.add(mesh);
-        
-        // Store reference to mesh in resource node
-        resourceNodesRef.current.push({
-          ...resource,
-          mesh: mesh as THREE.Mesh
-        });
-      });
-    };
-    
-    // Initialize resources
-    createWorldResources();
-    
     // Set up socket event listeners
     const setupSocketListeners = async () => {
       const socket = await getSocket();
@@ -528,7 +417,6 @@ const GameCanvas: React.FC = () => {
       const createPlayerMesh = (player: Player) => {
         // First check if this is the player's own character
         if (socket.id === player.id) {
-          console.log('Attempted to create mesh for own player, skipping:', player);
           return null;
         }
         
@@ -645,8 +533,6 @@ const GameCanvas: React.FC = () => {
       
       // Handle initial players
       socket.on('initPlayers', (players) => {
-        console.log('Received initial players:', players);
-        
         // Run cleanup to remove any potential duplicates before adding new players
         cleanupPlayerMeshes();
         
@@ -673,7 +559,6 @@ const GameCanvas: React.FC = () => {
         players.forEach(player => {
           // Skip creating a mesh for the current player to avoid duplication
           if (player.id === socket.id) {
-            console.log('Skipping creating mesh for own player:', player);
             // Position the local player at their saved position
             if (playerRef.current) {
               playerRef.current.position.set(player.x, player.y, player.z);
@@ -685,7 +570,7 @@ const GameCanvas: React.FC = () => {
             return;
           }
           
-          console.log(`Creating mesh for player: ${player.id} (${player.name})`);
+          // Create player mesh
           createPlayerMesh(player);
         });
         
@@ -698,15 +583,11 @@ const GameCanvas: React.FC = () => {
       
       // Handle new player joins
       socket.on('playerJoined', (player) => {
-        console.log('Player joined:', player);
-        
         // Play sound for new player joining
         soundManager.play('playerJoin');
         
         // Check if this is the local player (shouldn't happen but as a safety measure)
         if (player.id === socket.id) {
-          console.log('Received playerJoined for self, adjusting local player:', player);
-          
           // Update local player position instead of creating a new mesh
           if (playerRef.current) {
             playerRef.current.position.set(player.x, player.y, player.z);
@@ -729,7 +610,7 @@ const GameCanvas: React.FC = () => {
         
         // Check if we already have this player in our map and remove it first
         if (playersRef.current.has(player.id)) {
-          console.log(`Player ${player.id} already exists in tracker, cleaning up first`);
+          // Remove any CSS2DObjects first
           const existingMesh = playersRef.current.get(player.id);
           if (existingMesh) {
             // Remove any CSS2DObjects first
@@ -773,8 +654,6 @@ const GameCanvas: React.FC = () => {
       
       // Handle player disconnects
       socket.on('playerLeft', (playerId) => {
-        console.log('Player left:', playerId);
-        
         // Skip if this is the local player ID (we shouldn't remove ourselves)
         if (playerId === socket.id) {
           console.warn('Received playerLeft for local player, ignoring');
@@ -851,8 +730,6 @@ const GameCanvas: React.FC = () => {
         // Find players that we're missing locally (on server but not tracked locally)
         const missingPlayerIds = playerIds.filter(id => !playersRef.current.has(id));
         
-        console.log(`Client is missing ${missingPlayerIds.length} players:`, missingPlayerIds);
-        
         // Send back the list of missing players
         callback(missingPlayerIds);
       });
@@ -870,7 +747,6 @@ const GameCanvas: React.FC = () => {
         // Skip if this is our own player ID - we shouldn't move ourselves based on server events
         // This is a fallback in case we broadcast to all instead of socket.broadcast
         if (data.id === socket.id || data.id === 'TEST-' + socket.id) {
-          console.log('Skipping movement update for own player');
           return;
         }
         
@@ -908,7 +784,6 @@ const GameCanvas: React.FC = () => {
           
           // If the discrepancy is too large, snap immediately to avoid visible "teleporting"
           if (distanceToTarget > POSITION_SNAP_THRESHOLD) {
-            console.log(`Large position discrepancy detected for player ${data.id}: ${distanceToTarget} units. Snapping to new position.`);
             playerMesh.position.copy(newTargetPosition);
             
             // Also reset velocity for a fresh start
@@ -955,7 +830,6 @@ const GameCanvas: React.FC = () => {
           // Try to fetch the player from the server to create the mesh
           socket.emit('getPlayerData', data.id, (playerData) => {
             if (playerData) {
-              console.log(`Received player data for missing player ${data.id}, creating mesh`);
               const createdMesh = createPlayerMesh(playerData);
               
               // Set initial target position for the newly created player
@@ -978,7 +852,6 @@ const GameCanvas: React.FC = () => {
                 z: data.z,
                 userId: ''
               };
-              console.log(`Creating minimal player object for ${data.id}`);
               const createdMesh = createPlayerMesh(minimalPlayer);
               
               // Set initial target position for the newly created player
@@ -998,82 +871,25 @@ const GameCanvas: React.FC = () => {
       
       // Handle item drops in the world
       socket.on('itemDropped', (data) => {
-        console.log('Item dropped:', data);
-        
         // Play drop sound
         soundManager.play('itemDrop');
         
-        // Create a mesh for the dropped item
-        const itemMesh = createItemMesh(data.itemType);
-        itemMesh.position.set(data.x, data.y, data.z);
-        
-        // Store the item ID in userData for raycasting identification
-        itemMesh.userData.dropId = data.dropId;
-        
-        // Add to scene
-        scene.add(itemMesh);
-        
-        // Store reference in worldItems
-        worldItemsRef.current.push({
-          ...data,
-          mesh: itemMesh
-        });
+        // Use worldManager to add the item to the world
+        if (worldManagerRef.current) {
+          worldManagerRef.current.addWorldItem(data);
+        }
       });
       
       // Handle item removals
       socket.on('itemRemoved', (dropId) => {
-        console.log('Item removed:', dropId);
-        
-        // Find the item in our world items
-        const itemIndex = worldItemsRef.current.findIndex(item => item.dropId === dropId);
-        
-        if (itemIndex !== -1) {
-          const item = worldItemsRef.current[itemIndex];
-          
-          // Remove from scene if it has a mesh
-          if (item.mesh) {
-            scene.remove(item.mesh);
-            if (item.mesh.geometry) item.mesh.geometry.dispose();
-            if (Array.isArray(item.mesh.material)) {
-              item.mesh.material.forEach(material => material.dispose());
-            } else if (item.mesh.material) {
-              item.mesh.material.dispose();
-            }
-          }
-          
-          // Remove from our list
-          worldItemsRef.current.splice(itemIndex, 1);
+        // Use worldManager to remove the item
+        if (worldManagerRef.current) {
+          worldManagerRef.current.removeWorldItem(dropId);
         }
-      });
-      
-      // Listen for chat messages
-      socket.on('chatMessage', (message: { 
-        name: string; 
-        text: string; 
-        playerId: string; 
-        timestamp: number;
-      }) => {
-        console.log('Chat message received for bubble creation:', message);
-        
-        // If this is our own message, add a chat bubble above our player
-        if (message.playerId === socket.id && playerRef.current) {
-          createChatBubble(message.playerId, message.text, playerRef.current);
-        } 
-        // If it's another player's message, find their mesh and add a bubble
-        else if (message.playerId && playersRef.current.has(message.playerId)) {
-          const playerMesh = playersRef.current.get(message.playerId);
-          if (playerMesh) {
-            createChatBubble(message.playerId, message.text, playerMesh);
-          }
-        }
-        
-        // Sound is now handled exclusively by ChatPanel component
       });
       
       // Add a function to perform thorough player mesh cleanup to prevent duplicates
       const cleanupPlayerMeshes = () => {
-        console.log('Running aggressive player mesh cleanup');
-        
         // Helper function to remove a player object and clean up resources
         const removePlayerObject = (object: THREE.Object3D) => {
           // Remove any CSS2DObjects first
@@ -1111,8 +927,6 @@ const GameCanvas: React.FC = () => {
         // Always consider our own player ID valid
         if (socket.id) validPlayerIds.add(socket.id);
         
-        console.log('Valid player IDs:', Array.from(validPlayerIds));
-        
         // First, do a full scene traversal to find ALL player-related objects
         const allPlayerObjects: THREE.Object3D[] = [];
         const playerIdToObjects = new Map<string, THREE.Object3D[]>();
@@ -1131,13 +945,10 @@ const GameCanvas: React.FC = () => {
           }
         });
         
-        console.log(`Found ${allPlayerObjects.length} total player-related objects in scene`);
-        
         // Process objects by player ID to handle cleanup
         playerIdToObjects.forEach((objects, playerId) => {
           // If this player ID is no longer valid, remove ALL its objects
           if (!validPlayerIds.has(playerId)) {
-            console.log(`Removing all objects for invalid player ${playerId}`);
             objects.forEach(removePlayerObject);
             
             // Also make sure it's removed from our playersRef
@@ -1156,25 +967,17 @@ const GameCanvas: React.FC = () => {
             }
           } else if (playerId === socket.id) {
             // This is our own player, we should only have our main player mesh
-            console.log(`Processing own player objects, found ${objects.length}`);
-            
-            // Keep only the original playerRef
             objects.forEach(obj => {
               if (obj !== playerRef.current) {
-                console.log('Removing duplicate of own player');
                 removePlayerObject(obj);
               }
             });
           } else {
             // This is another player, we should only have one main mesh per player
-            console.log(`Processing player ${playerId}, found ${objects.length} objects`);
-            
-            // Keep only the one tracked in playersRef
             const trackedMesh = playersRef.current.get(playerId);
             if (trackedMesh) {
               objects.forEach(obj => {
                 if (obj !== trackedMesh && obj.type === 'Mesh') {
-                  console.log(`Removing duplicate mesh for player ${playerId}`);
                   removePlayerObject(obj);
                 }
               });
@@ -1185,7 +988,6 @@ const GameCanvas: React.FC = () => {
         // Check for orphaned name labels (not attached to any player)
         nameLabelsRef.current.forEach((label, playerId) => {
           if (!playerIdToObjects.has(playerId)) {
-            console.log(`Removing orphaned name label for player ${playerId}`);
             if (label.parent) {
               label.parent.remove(label);
             }
@@ -1202,8 +1004,6 @@ const GameCanvas: React.FC = () => {
           const shouldRunFullCheck = Math.random() < 0.1; // 10% chance = every ~10 checks
           
           if (shouldRunFullCheck) {
-            console.log('Starting periodic player cleanup check');
-            
             // Check for players marked for cleanup due to inactivity
             const inactivePlayers: string[] = [];
             
@@ -1215,8 +1015,6 @@ const GameCanvas: React.FC = () => {
             });
             
             if (inactivePlayers.length > 0) {
-              console.log(`Found ${inactivePlayers.length} inactive players to clean up:`, inactivePlayers);
-              
               // Since checkPlayersPresence isn't defined, let's use getPlayerData instead
               // to check one player at a time - if data comes back, they're still active
               const checkPlayerStatus = async () => {
@@ -1230,12 +1028,10 @@ const GameCanvas: React.FC = () => {
                       socket.emit('getPlayerData', playerId, (playerData: any) => {
                         if (playerData) {
                           // Player still exists on server, not disconnected
-                          console.log(`Player ${playerId} still exists on server`);
                           resolve();
                         } else {
                           // Player doesn't exist on server, mark as disconnected
                           disconnectedPlayerIds.push(playerId);
-                          console.log(`Player ${playerId} not found on server, marking as disconnected`);
                           resolve();
                         }
                       });
@@ -1243,7 +1039,6 @@ const GameCanvas: React.FC = () => {
                       // Set a timeout in case the callback never fires
                       setTimeout(() => {
                         disconnectedPlayerIds.push(playerId);
-                        console.log(`Timeout checking player ${playerId}, marking as disconnected`);
                         resolve();
                       }, 1000);
                     });
@@ -1256,14 +1051,9 @@ const GameCanvas: React.FC = () => {
                 
                 // Now handle the disconnected players
                 if (disconnectedPlayerIds.length > 0) {
-                  console.log(`Confirmed ${disconnectedPlayerIds.length} players are disconnected:`, disconnectedPlayerIds);
-                  
-                  // Remove only the players confirmed disconnected
                   disconnectedPlayerIds.forEach(playerId => {
                     const playerMesh = playersRef.current.get(playerId);
                     if (playerMesh) {
-                      console.log(`Removing confirmed disconnected player: ${playerId}`);
-                      
                       // Clean up any timeouts
                       if (playerMesh.userData.disappearanceTimeout) {
                         clearTimeout(playerMesh.userData.disappearanceTimeout);
@@ -1309,8 +1099,6 @@ const GameCanvas: React.FC = () => {
                     }
                   });
                 } else {
-                  console.log('All players are still connected, keeping them in scene');
-                  
                   // Reset marked for cleanup for all players since they're still connected
                   inactivePlayers.forEach(playerId => {
                     const playerMesh = playersRef.current.get(playerId);
@@ -1332,7 +1120,6 @@ const GameCanvas: React.FC = () => {
               // Run the check
               checkPlayerStatus();
             } else {
-              console.log('No inactive players found during cleanup');
             }
             
             // Check for duplicate player meshes in the scene as a second cleanup step
@@ -1354,9 +1141,6 @@ const GameCanvas: React.FC = () => {
             
             // Handle any duplicates found
             if (duplicatePlayerIds.size > 0) {
-              console.log(`Found ${duplicatePlayerIds.size} players with duplicate meshes`);
-              
-              // For each player with duplicates, keep only the one in our tracking map
               duplicatePlayerIds.forEach(playerId => {
                 const trackedMesh = playersRef.current.get(playerId);
                 if (!trackedMesh) return; // Skip if we don't have this player tracked anymore
@@ -1375,8 +1159,6 @@ const GameCanvas: React.FC = () => {
                 
                 // Remove the duplicates
                 if (duplicateMeshes.length > 0) {
-                  console.log(`Removing ${duplicateMeshes.length} duplicate meshes for player ${playerId}`);
-                  
                   duplicateMeshes.forEach(mesh => {
                     // Clean up any child objects
                     mesh.traverse((child) => {
@@ -1416,602 +1198,6 @@ const GameCanvas: React.FC = () => {
     
     setupSocketListeners();
     
-    // Handle keyboard input
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if the key is one we track for movement
-      if (keysPressed.current.hasOwnProperty(event.key)) {
-        keysPressed.current[event.key] = true;
-      }
-    };
-    
-    const handleKeyUp = (event: KeyboardEvent) => {
-      // Check if the key is one we track for movement
-      if (keysPressed.current.hasOwnProperty(event.key)) {
-        keysPressed.current[event.key] = false;
-      }
-    };
-    
-    // Handle mouse click for resource gathering and item pickup
-    const handleMouseClick = (event: MouseEvent) => {
-      // Get mouse position in normalized device coordinates (-1 to +1)
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      
-      // Update the raycaster
-      raycasterRef.current.setFromCamera(mouseRef.current, camera);
-      
-      // Create a list of objects to check for intersection
-      const interactables = [
-        ...resourceNodesRef.current.map(node => node.mesh),
-        ...worldItemsRef.current.map(item => item.mesh)
-      ].filter(Boolean) as THREE.Object3D[];
-      
-      // Perform raycasting
-      const intersects = raycasterRef.current.intersectObjects(interactables);
-      
-      if (intersects.length > 0) {
-        const intersected = intersects[0].object;
-        
-        // Calculate distance to player
-        const playerPosition = playerRef.current?.position || new THREE.Vector3();
-        const distanceToPlayer = playerPosition.distanceTo(intersected.position);
-        
-        // Check if it's a resource node
-        if (intersected.userData.resourceId && distanceToPlayer <= 5) {
-          // Gather resource if not already gathering
-          if (!isGathering.current) {
-            gatherResource(intersected.userData.resourceId);
-          }
-        }
-        // Check if it's a dropped item
-        else if (intersected.userData.dropId && distanceToPlayer <= 5) {
-          // Pick up item
-          pickupItem(intersected.userData.dropId);
-        }
-        // Too far away
-        else if (distanceToPlayer > 5) {
-          console.log('Too far away to interact!');
-        }
-      }
-    };
-    
-    // Add event listeners for keyboard and mouse
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    renderer.domElement.addEventListener('click', handleMouseClick);
-    
-    // Add mouse event handlers for camera control
-    const handleMouseDown = (event: MouseEvent) => {
-      if (event.button === 1) { // Middle mouse button
-        console.log('Middle mouse button pressed');
-        isMiddleMouseDown.current = true;
-        lastMousePosition.current = { x: event.clientX, y: event.clientY };
-      }
-    };
-
-    const handleMouseUp = (event: MouseEvent) => {
-      if (event.button === 1) { // Middle mouse button
-        console.log('Middle mouse button released');
-        isMiddleMouseDown.current = false;
-      }
-    };
-
-    const handleMouseMove = (event: MouseEvent) => {
-      if (isMiddleMouseDown.current) {
-        const deltaX = event.clientX - lastMousePosition.current.x;
-        const deltaY = event.clientY - lastMousePosition.current.y;
-        
-        // Update camera angle based on horizontal mouse movement
-        // Positive deltaX (moving right) rotates clockwise
-        // Negative deltaX (moving left) rotates counter-clockwise
-        const invertFactor = isHorizontalInvertedRef.current ? -1 : 1;
-        const angleChange = invertFactor * deltaX * 0.01;
-        cameraAngle.current += angleChange;
-        
-        // Debug log every ~1 second (not every frame to avoid console spam)
-        if (Math.random() < 0.01) {
-          console.log(`Camera angle update: delta=${deltaX}, inverted=${isHorizontalInvertedRef.current}, factor=${invertFactor}`);
-        }
-
-        // Update camera tilt based on vertical mouse movement
-        // Positive deltaY (moving down) increases tilt
-        // Negative deltaY (moving up) decreases tilt
-        cameraTilt.current = Math.max(0.1, Math.min(0.9, cameraTilt.current + deltaY * 0.01));
-
-        lastMousePosition.current = { x: event.clientX, y: event.clientY };
-      }
-    };
-
-    // Add mouse wheel handler for zoom
-    const handleMouseWheel = (event: WheelEvent) => {
-      // Update camera distance based on wheel movement
-      cameraDistance.current = Math.max(5, Math.min(20, cameraDistance.current + event.deltaY * 0.1));
-    };
-
-    // Add event listeners
-    window.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('mouseup', handleMouseUp);
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('wheel', handleMouseWheel);
-    
-    // Function to handle resource gathering
-    const gatherResource = async (resourceId: string) => {
-      console.log('Gathering resource:', resourceId);
-      
-      // Set gathering flag to prevent spam
-      isGathering.current = true;
-      
-      // Find the resource to play appropriate sound
-      const resourceNode = resourceNodesRef.current.find(node => node.id === resourceId);
-      if (resourceNode) {
-        // Play sound based on resource type
-        switch (resourceNode.type) {
-          case ResourceType.TREE:
-            soundManager.play('woodcutting');
-            break;
-          case ResourceType.ROCK:
-            soundManager.play('mining');
-            break;
-          case ResourceType.FISH:
-            soundManager.play('fishing');
-            break;
-        }
-      }
-      
-      // Send gather event to server
-      const socket = await getSocket();
-      if (socket) {
-        socket.emit('gather', resourceId);
-      }
-      
-      // Visual feedback (could be improved)
-      if (resourceNode && resourceNode.mesh) {
-        const originalColor = (resourceNode.mesh.material as THREE.MeshStandardMaterial).color.clone();
-        
-        // Flash the resource
-        (resourceNode.mesh.material as THREE.MeshStandardMaterial).color.set(0xffff00);
-        
-        // Reset after delay
-        setTimeout(() => {
-          if (resourceNode.mesh) {
-            (resourceNode.mesh.material as THREE.MeshStandardMaterial).color.copy(originalColor);
-          }
-          // Reset gathering flag after cooldown
-          isGathering.current = false;
-        }, 2000);
-      } else {
-        // Reset gathering flag after cooldown if no resource found
-        setTimeout(() => {
-          isGathering.current = false;
-        }, 2000);
-      }
-    };
-    
-    // Function to pick up items
-    const pickupItem = async (dropId: string) => {
-      console.log('Picking up item:', dropId);
-      
-      // Play sound
-      soundManager.play('itemPickup');
-      
-      // Send pickup event to server
-      const socket = await getSocket();
-      if (socket) {
-        socket.emit('pickup', dropId);
-      }
-    };
-    
-    // Update player movement
-    const updatePlayerMovement = () => {
-      if (!playerRef.current) return;
-      
-      const currentTime = Date.now();
-      const deltaTime = currentTime - lastUpdateTime.current;
-      lastUpdateTime.current = currentTime;
-      
-      // Get key states at the beginning of the update
-      const isW = keysPressed.current.w || keysPressed.current.ArrowUp;
-      const isS = keysPressed.current.s || keysPressed.current.ArrowDown;
-      const isD = keysPressed.current.d || keysPressed.current.ArrowRight;
-      const isA = keysPressed.current.a || keysPressed.current.ArrowLeft;
-      
-      // Calculate movement direction based on camera angle (horizontal only)
-      const forward = new THREE.Vector3(
-        Math.sin(cameraAngle.current),
-        0,
-        Math.cos(cameraAngle.current)
-      );
-      const right = new THREE.Vector3(
-        Math.sin(cameraAngle.current + Math.PI / 2),
-        0,
-        Math.cos(cameraAngle.current + Math.PI / 2)
-      );
-      
-      // Calculate movement vector
-      const movement = new THREE.Vector3(0, 0, 0);
-      
-      // Apply movement based on keys (use the captured states)
-      if (isW) movement.sub(forward);
-      if (isS) movement.add(forward);
-      if (isD) movement.add(right);
-      if (isA) movement.sub(right);
-      
-      // Only process movement if there is any
-      if (movement.length() > 0) {
-        // Normalize movement vector for consistent speed in all directions
-        movement.normalize();
-        
-        // Apply reduced speed (now 0.02)
-        const fixedSpeed = 0.02; // Hardcoded value to guarantee consistency
-        movement.multiplyScalar(fixedSpeed);
-        
-        // Rotate player to face movement direction
-        if (playerRef.current) {
-          // Calculate the angle of movement in the XZ plane
-          const angle = Math.atan2(movement.x, movement.z);
-          // Set player rotation to face movement direction
-          playerRef.current.rotation.y = angle;
-        }
-        
-        // Calculate new position with the fixed movement
-        const newX = playerRef.current.position.x + movement.x;
-        const newZ = playerRef.current.position.z + movement.z;
-        
-        // Apply boundary checks
-        const boundedX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, newX));
-        const boundedZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, newZ));
-        
-        // Only update if we're actually moving
-        if (Math.abs(boundedX - playerRef.current.position.x) > 0.0001 || 
-            Math.abs(boundedZ - playerRef.current.position.z) > 0.0001) {
-          
-          // Update player position
-          playerRef.current.position.x = boundedX;
-          playerRef.current.position.z = boundedZ;
-          
-          // Flag that movement has changed for network updates
-          movementChanged.current = true;
-          
-          // Check if we need to update the zone (use a function that doesn't trigger re-renders)
-          checkAndUpdateZone(boundedX, boundedZ);
-          
-          // Position history update for anomaly detection
-          positionHistory.current.push({x: boundedX, z: boundedZ, time: currentTime});
-          if (positionHistory.current.length > MAX_HISTORY_LENGTH) {
-            positionHistory.current.shift();
-          }
-          
-          // Check for anomalous speed if we have enough history
-          if (positionHistory.current.length >= 2) {
-            detectAnomalousMovement();
-          }
-        }
-      }
-      
-      // Handle jumping - unchanged from before
-      if (isJumping.current) {
-        playerRef.current.position.y += jumpVelocity.current;
-        jumpVelocity.current -= GRAVITY;
-        
-        // Check if landed
-        if (playerRef.current.position.y <= 1) {
-          playerRef.current.position.y = 1;
-          isJumping.current = false;
-          jumpVelocity.current = 0;
-        }
-      }
-    };
-    
-    // Function to check and update zone without triggering immediate re-renders
-    const checkAndUpdateZone = (x: number, z: number) => {
-      // Simple zone detection based on position
-      let newZone = 'Lumbridge';
-      
-      if (x < -10 && z < -10) {
-        newZone = 'Barbarian Village';
-      } else if (x > 25 && z < 0) {
-        newZone = 'Fishing Spot';
-      } else if (x > 0 && z > 25) {
-        newZone = 'Grand Exchange';
-      } else if (x < -30 || z < -30 || x > 30 || z > 30) {
-        newZone = 'Wilderness';
-      }
-      
-      // Only update the zone if it's different, using a debounced approach
-      if (newZone !== currentZone) {
-        console.log(`Zone transition: ${currentZone} -> ${newZone}`);
-        
-        // Clear any pending zone update
-        if (zoneUpdateTimeoutRef.current) {
-          clearTimeout(zoneUpdateTimeoutRef.current);
-        }
-        
-        // Set a timeout to update the zone (debounce zone changes)
-        // This prevents multiple rapid zone updates from disrupting movement
-        zoneUpdateTimeoutRef.current = setTimeout(() => {
-          setCurrentZone(newZone);
-          zoneUpdateTimeoutRef.current = null;
-        }, 500); // 500ms debounce time
-      }
-    };
-    
-    // Function to detect anomalous movement (sudden jumps)
-    const detectAnomalousMovement = () => {
-      const history = positionHistory.current;
-      const latest = history[history.length - 1];
-      const previous = history[history.length - 2];
-      
-      // Calculate distance and time between points
-      const distance = Math.sqrt(
-        Math.pow(latest.x - previous.x, 2) + 
-        Math.pow(latest.z - previous.z, 2)
-      );
-      const timeDiff = (latest.time - previous.time) / 1000; // Convert to seconds
-      
-      if (timeDiff > 0) {
-        const speed = distance / timeDiff;
-        
-        // If speed exceeds threshold, adjust position
-        if (speed > ANOMALOUS_SPEED_THRESHOLD && playerRef.current) {
-          console.warn(`Anomalous speed detected: ${speed.toFixed(2)} units/sec`);
-          
-          // Instead of immediate position correction, apply a smooth transition
-          // For now, just cap the movement to a reasonable distance
-          const maxAllowedDistance = MOVEMENT_SPEED * 2; // Allow some acceleration but cap it
-          
-          if (distance > maxAllowedDistance && playerRef.current) {
-            // Calculate direction vector
-            const dirX = (latest.x - previous.x) / distance;
-            const dirZ = (latest.z - previous.z) / distance;
-            
-            // Limit the movement to max allowed distance
-            const cappedX = previous.x + (dirX * maxAllowedDistance);
-            const cappedZ = previous.z + (dirZ * maxAllowedDistance);
-            
-            // Apply clamping again to ensure we're within bounds
-            const boundedX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, cappedX));
-            const boundedZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, cappedZ));
-            
-            // Update position
-            playerRef.current.position.x = boundedX;
-            playerRef.current.position.z = boundedZ;
-            
-            // Update last position in history
-            positionHistory.current[positionHistory.current.length - 1] = {
-              x: boundedX, 
-              z: boundedZ, 
-              time: latest.time
-            };
-          }
-        }
-      }
-    };
-    
-    // Send position to server at throttled rate
-    const sendPositionUpdate = async () => {
-      // Make sure we're really connected by checking both state and socket.connected
-      if (!playerRef.current || !isConnected) {
-        // Debug why we're not sending position
-        if (!playerRef.current) {
-          console.warn('Not sending position - playerRef.current is null');
-        }
-        if (!isConnected) {
-          console.warn('Not sending position - isConnected state is false');
-        }
-        if (!movementChanged.current) {
-          // Don't log this as it would spam the console
-        }
-        return;
-      }
-      
-      // Double-check actual socket connectivity to catch any state mismatches
-      if (!isSocketReady()) {
-        console.warn('Not sending position - socket exists but is not really connected');
-        return;
-      }
-      
-      // Immediately reset movement flag if we're not going to send an update
-      // This prevents movement from getting "stuck" if we miss an update window
-      if (!movementChanged.current) {
-        return;
-      }
-      
-      const now = Date.now();
-      // Check if we should send an update (throttle)
-      if (now - lastSendTime.current >= SEND_INTERVAL) {
-        const position = {
-          x: playerRef.current.position.x,
-          y: playerRef.current.position.y,
-          z: playerRef.current.position.z,
-          timestamp: Date.now() // Add timestamp for latency calculation
-        };
-        
-        // Check if position has changed significantly - use smaller threshold
-        const dx = Math.abs(position.x - lastSentPosition.current.x);
-        const dz = Math.abs(position.z - lastSentPosition.current.z);
-        
-        // Lower threshold for detecting movement (from 0.01 to 0.005)
-        if (dx > 0.003 || dz > 0.003) {
-          // Ensure position is still within bounds before sending
-          const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, position.x));
-          const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, position.z));
-          
-          const validatedPosition = {
-            x: validX,
-            y: position.y,
-            z: validZ,
-            timestamp: position.timestamp
-          };
-          
-          try {
-            // Send position to server
-            const socket = await getSocket();
-            if (socket && socket.connected) {
-              console.log('Sending playerMove event:', {
-                position: validatedPosition,
-                socketId: socket.id,
-                connected: socket.connected,
-                distance: { dx, dz },
-                timeSinceLastSend: now - lastSendTime.current
-              });
-              
-              socket.emit('playerMove', validatedPosition);
-              
-              // Update last sent position and time with validated coordinates
-              lastSentPosition.current = { ...validatedPosition };
-              lastSendTime.current = now;
-            } else {
-              // If socket isn't connected despite our state thinking it is, update state
-              if (isConnected && (!socket || !socket.connected)) {
-                console.warn('Socket not connected despite state saying it is, updating isConnected');
-                setIsConnected(false);
-              }
-              console.warn('Could not send movement - socket is null or disconnected');
-            }
-          } catch (error) {
-            console.error('Error sending position update:', error);
-          }
-        } else {
-          console.log('Position change too small, not sending update', {
-            dx, dz,
-            minChangeRequired: 0.003
-          });
-        }
-      }
-      
-      // Reset movement flag
-      movementChanged.current = false;
-    };
-    
-    // Create chat bubble above player
-    const createChatBubble = (playerId: string, message: string, mesh: THREE.Mesh) => {
-      // Remove any existing chat bubble for this player
-      if (chatBubblesRef.current.has(playerId)) {
-        const existingBubble = chatBubblesRef.current.get(playerId);
-        if (existingBubble && existingBubble.object) {
-          // Remove from parent if it has one
-          if (existingBubble.object.parent) {
-            existingBubble.object.parent.remove(existingBubble.object);
-          }
-          // Also remove from scene directly to be sure
-          scene.remove(existingBubble.object);
-        }
-        // Remove from tracking map
-        chatBubblesRef.current.delete(playerId);
-      }
-      
-      // Create bubble div
-      const bubbleDiv = document.createElement('div');
-      bubbleDiv.className = 'chat-bubble';
-      bubbleDiv.textContent = message;
-      bubbleDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-      bubbleDiv.style.color = 'white';
-      bubbleDiv.style.padding = '5px 10px';
-      bubbleDiv.style.borderRadius = '10px';
-      bubbleDiv.style.fontSize = '12px';
-      bubbleDiv.style.fontFamily = 'Arial, sans-serif';
-      bubbleDiv.style.maxWidth = '150px';
-      bubbleDiv.style.textAlign = 'center';
-      bubbleDiv.style.wordWrap = 'break-word';
-      bubbleDiv.style.userSelect = 'none';
-      bubbleDiv.style.pointerEvents = 'none'; // Make sure bubbles don't interfere with clicks
-      
-      // Create the bubble object
-      const chatBubble = new CSS2DObject(bubbleDiv);
-      chatBubble.position.set(0, 3.2, 0); // Position above the player name
-      chatBubble.userData.bubbleType = 'chatBubble';
-      chatBubble.userData.forPlayer = playerId;
-      
-      // Add to mesh
-      mesh.add(chatBubble);
-      
-      // Store in our ref with expiry time (10 seconds from now)
-      const expiryTime = Date.now() + 10000; // 10 seconds
-      chatBubblesRef.current.set(playerId, { 
-        object: chatBubble, 
-        expiry: expiryTime 
-      });
-      
-      console.log(`Created chat bubble for player ${playerId}, expires at ${new Date(expiryTime).toLocaleTimeString()}`);
-      
-      return chatBubble;
-    };
-    
-    // Store createChatBubble in a ref for use in other effects
-    const createChatBubbleRef = { current: createChatBubble };
-    
-    // Add a function to create or update position markers for players
-    const updateDebugVisuals = () => {
-      if (!DEBUG.showPositionMarkers && !DEBUG.showVelocityVectors) return;
-      
-      // Process each player
-      playersRef.current.forEach((playerMesh, playerId) => {
-        // Skip if no target position
-        if (!playerMesh.userData.targetPosition) return;
-        
-        // Create position marker if it doesn't exist
-        if (DEBUG.showPositionMarkers) {
-          if (!playerMesh.userData.positionMarker) {
-            const markerGeometry = new THREE.SphereGeometry(0.2);
-            const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true });
-            const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-            marker.position.copy(playerMesh.userData.targetPosition);
-            scene.add(marker);
-            playerMesh.userData.positionMarker = marker;
-          } else {
-            // Update position marker to show server-reported position
-            playerMesh.userData.positionMarker.position.copy(playerMesh.userData.targetPosition);
-          }
-          
-          // Add line connecting player to marker to visualize discrepancy
-          if (!playerMesh.userData.discrepancyLine) {
-            const lineGeometry = new THREE.BufferGeometry();
-            const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
-            const line = new THREE.Line(lineGeometry, lineMaterial);
-            scene.add(line);
-            playerMesh.userData.discrepancyLine = line;
-          }
-          
-          // Update line to connect player mesh with position marker
-          const points = [
-            playerMesh.position.clone(),
-            playerMesh.userData.positionMarker.position.clone()
-          ];
-          playerMesh.userData.discrepancyLine.geometry.setFromPoints(points);
-          
-          // Calculate and display discrepancy distance
-          const distance = playerMesh.position.distanceTo(playerMesh.userData.positionMarker.position);
-          if (!playerMesh.userData.discrepancyLabel) {
-            const discDiv = document.createElement('div');
-            discDiv.className = 'debug-label';
-            discDiv.style.color = 'red';
-            discDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-            discDiv.style.padding = '2px 5px';
-            discDiv.style.fontSize = '10px';
-            discDiv.style.userSelect = 'none';
-            discDiv.style.pointerEvents = 'none';
-            
-            const discLabel = new CSS2DObject(discDiv);
-            discLabel.position.set(0, 3, 0);
-            playerMesh.add(discLabel);
-            playerMesh.userData.discrepancyLabel = discLabel;
-          }
-          
-          // Update label with current discrepancy
-          const discDiv = playerMesh.userData.discrepancyLabel.element as HTMLDivElement;
-          discDiv.textContent = `Diff: ${distance.toFixed(2)}`;
-          discDiv.style.color = distance > 1 ? 'red' : distance > 0.5 ? 'yellow' : 'green';
-        }
-        
-        // Update velocity vectors if enabled
-        if (DEBUG.showVelocityVectors && playerMesh.userData.serverVelocity) {
-          // Similar code for velocity vectors would go here
-          // Omitted for brevity
-        }
-      });
-    };
-    
     // Animation loop
     const animate = () => {
       requestAnimationFrame(animate);
@@ -2044,30 +1230,15 @@ const GameCanvas: React.FC = () => {
         camera.updateProjectionMatrix();
       }
       
-      // Animate dropped items
-      updateDroppedItems(worldItemsRef.current, delta);
+      // Animate dropped items using the WorldManager
+      if (worldManagerRef.current) {
+        worldManagerRef.current.updateItems(delta);
+      }
       
-      // Check for expired chat bubbles
-      const now = Date.now();
-      const expiredBubbles: string[] = [];
-      
-      chatBubblesRef.current.forEach((bubble, playerId) => {
-        if (now > bubble.expiry) {
-          expiredBubbles.push(playerId);
-        }
-      });
-      
-      // Remove expired bubbles
-      expiredBubbles.forEach(playerId => {
-        const bubble = chatBubblesRef.current.get(playerId);
-        if (bubble && bubble.object) {
-          if (bubble.object.parent) {
-            bubble.object.parent.remove(bubble.object);
-          }
-          scene.remove(bubble.object);
-        }
-        chatBubblesRef.current.delete(playerId);
-      });
+      // Update chat bubbles with the Chat component
+      if (chatRef.current) {
+        chatRef.current.updateChatBubbles();
+      }
       
       // Render scene and labels
       renderer.render(scene, camera);
@@ -2124,6 +1295,9 @@ const GameCanvas: React.FC = () => {
       window.removeEventListener('keyup', handleKeyUp);
       renderer.domElement.removeEventListener('click', handleMouseClick);
       
+      // Clean up worldManager
+      worldManager.cleanup();
+      
       // Remove socket event listeners
       const cleanup = async () => {
         const socket = await getSocket();
@@ -2134,15 +1308,12 @@ const GameCanvas: React.FC = () => {
           socket.off('playerMoved');
           socket.off('itemDropped');
           socket.off('itemRemoved');
-          socket.off('chatMessage');
         }
       };
       
       cleanup();
       
       // Dispose of geometries and materials
-      groundGeometry.dispose();
-      groundMaterial.dispose();
       playerGeometry.dispose();
       playerMaterial.dispose();
       
@@ -2173,32 +1344,6 @@ const GameCanvas: React.FC = () => {
           mesh.material.forEach(material => material.dispose());
         } else if (mesh.material) {
           mesh.material.dispose();
-        }
-      });
-      
-      // Dispose of resource meshes
-      resourceNodesRef.current.forEach((node) => {
-        if (node.mesh) {
-          scene.remove(node.mesh);
-          if (node.mesh.geometry) node.mesh.geometry.dispose();
-          if (Array.isArray(node.mesh.material)) {
-            node.mesh.material.forEach(material => material.dispose());
-          } else if (node.mesh.material) {
-            node.mesh.material.dispose();
-          }
-        }
-      });
-      
-      // Dispose of world item meshes
-      worldItemsRef.current.forEach((item) => {
-        if (item.mesh) {
-          scene.remove(item.mesh);
-          if (item.mesh.geometry) item.mesh.geometry.dispose();
-          if (Array.isArray(item.mesh.material)) {
-            item.mesh.material.forEach(material => material.dispose());
-          } else if (item.mesh.material) {
-            item.mesh.material.dispose();
-          }
         }
       });
       
@@ -2238,6 +1383,418 @@ const GameCanvas: React.FC = () => {
       }
       setIsCleaningUp(false);
     }, 100);
+  };
+  
+  // Add event handlers for keyboard and mouse
+  const handleKeyDown = (e: KeyboardEvent) => {
+    // Ignore key events when user is typing in chat or other input fields
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      return;
+    }
+    
+    // Update keys pressed object
+    keysPressed.current[e.key] = true;
+    
+    // Update movement state based on WASD and arrow keys
+    if (e.key === 'w' || e.key === 'ArrowUp') {
+      moveForward.current = true;
+      movementChanged.current = true;
+    }
+    if (e.key === 's' || e.key === 'ArrowDown') {
+      moveBackward.current = true;
+      movementChanged.current = true;
+    }
+    if (e.key === 'a' || e.key === 'ArrowLeft') {
+      moveLeft.current = true;
+      movementChanged.current = true;
+    }
+    if (e.key === 'd' || e.key === 'ArrowRight') {
+      moveRight.current = true;
+      movementChanged.current = true;
+    }
+    
+    // Handle jump with space bar
+    if (e.key === ' ' && !isJumping.current) {
+      const currentTime = Date.now();
+      if (currentTime - lastJumpTime.current > JUMP_COOLDOWN) {
+        isJumping.current = true;
+        jumpVelocity.current = JUMP_FORCE;
+        lastJumpTime.current = currentTime;
+        movementChanged.current = true;
+      }
+    }
+  };
+  
+  const handleKeyUp = (e: KeyboardEvent) => {
+    // Ignore key events when user is typing in chat or other input fields
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      return;
+    }
+    
+    // Update keys pressed object
+    keysPressed.current[e.key] = false;
+    
+    // Update movement state based on WASD and arrow keys
+    if (e.key === 'w' || e.key === 'ArrowUp') {
+      moveForward.current = false;
+      movementChanged.current = true;
+    }
+    if (e.key === 's' || e.key === 'ArrowDown') {
+      moveBackward.current = false;
+      movementChanged.current = true;
+    }
+    if (e.key === 'a' || e.key === 'ArrowLeft') {
+      moveLeft.current = false;
+      movementChanged.current = true;
+    }
+    if (e.key === 'd' || e.key === 'ArrowRight') {
+      moveRight.current = false;
+      movementChanged.current = true;
+    }
+  };
+  
+  const handleMouseClick = (e: MouseEvent) => {
+    // Only process left clicks
+    if (e.button !== 0) return;
+    
+    // Get normalized device coordinates
+    const canvas = e.target as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    
+    // Set up raycaster from camera through mouse position
+    if (!raycasterRef.current || !sceneRef.current) return;
+    const camera = sceneRef.current.children.find(child => child instanceof THREE.PerspectiveCamera) as THREE.PerspectiveCamera;
+    if (!camera) return;
+    
+    raycasterRef.current.setFromCamera(mouseRef.current, camera);
+    
+    // Check for intersections with resources
+    const resourceIntersects = raycasterRef.current.intersectObjects(
+      resourceNodesRef.current.map(node => node.mesh).filter(Boolean) as THREE.Object3D[]
+    );
+    
+    if (resourceIntersects.length > 0) {
+      // Get the first intersection
+      const intersectedObject = resourceIntersects[0].object;
+      const resourceId = intersectedObject.userData.resourceId;
+      const resourceType = intersectedObject.userData.resourceType;
+      
+      // Handle resource interaction based on type
+      if (resourceId && resourceType && !isGathering.current) {
+        isGathering.current = true;
+        
+        // Notify server of resource interaction
+        getSocket().then(socket => {
+          if (socket) {
+            // @ts-ignore - temporarily ignore type checking for resource gathering
+            socket.emit('gather', {
+              resourceId,
+              resourceType
+            });
+          }
+        });
+        
+        // Play appropriate sound based on resource type
+        switch (resourceType) {
+          case 'TREE':
+            soundManager.play('woodcutting');
+            break;
+          case 'ROCK':
+            soundManager.play('mining');
+            break;
+          case 'FISH':
+            soundManager.play('fishing');
+            break;
+        }
+        
+        // Reset gathering cooldown after 2 seconds
+        setTimeout(() => {
+          isGathering.current = false;
+        }, 2000);
+      }
+      return;
+    }
+    
+    // Check for intersections with dropped items
+    const itemIntersects = raycasterRef.current.intersectObjects(
+      worldItemsRef.current.map(item => item.mesh).filter(Boolean) as THREE.Object3D[]
+    );
+    
+    if (itemIntersects.length > 0) {
+      // Get the first intersection
+      const intersectedObject = itemIntersects[0].object;
+      const dropId = intersectedObject.userData.dropId;
+      
+      if (dropId) {
+        // Notify server of item pickup
+        getSocket().then(socket => {
+          if (socket) {
+            // @ts-ignore - temporarily ignore type checking for item pickup
+            socket.emit('pickup', { dropId });
+          }
+        });
+        
+        // Play pickup sound
+        soundManager.play('itemPickup');
+      }
+    }
+  };
+  
+  // Add mouse event handlers for camera control
+  const handleMouseDown = (e: MouseEvent) => {
+    // Middle mouse button for camera rotation
+    if (e.button === 1) {
+      isMiddleMouseDown.current = true;
+      lastMousePosition.current = { x: e.clientX, y: e.clientY };
+      e.preventDefault(); // Prevent default scrolling behavior
+    }
+  };
+  
+  const handleMouseUp = (e: MouseEvent) => {
+    // Middle mouse button release
+    if (e.button === 1) {
+      isMiddleMouseDown.current = false;
+    }
+  };
+  
+  const handleMouseMove = (e: MouseEvent) => {
+    // Handle camera rotation with middle mouse button
+    if (isMiddleMouseDown.current) {
+      const deltaX = e.clientX - lastMousePosition.current.x;
+      const deltaY = e.clientY - lastMousePosition.current.y;
+      
+      // Apply horizontal camera rotation (invert based on setting)
+      if (isHorizontalInvertedRef.current) {
+        cameraAngle.current += deltaX * 0.005;
+      } else {
+        cameraAngle.current -= deltaX * 0.005;
+      }
+      
+      // Apply vertical camera tilt (limit to reasonable range 0.1 to 0.9)
+      cameraTilt.current = Math.max(0.1, Math.min(0.9, cameraTilt.current + deltaY * 0.003));
+      
+      lastMousePosition.current = { x: e.clientX, y: e.clientY };
+    }
+  };
+  
+  const handleMouseWheel = (e: WheelEvent) => {
+    // Adjust camera distance with scroll wheel
+    const zoomSpeed = 0.5;
+    cameraDistance.current = Math.max(3, Math.min(20, cameraDistance.current + Math.sign(e.deltaY) * zoomSpeed));
+  };
+  
+  // Main player movement update function
+  const updatePlayerMovement = () => {
+    if (!playerRef.current) return;
+    
+    const currentTime = Date.now();
+    const deltaTime = (currentTime - lastUpdateTime.current) / 1000;
+    lastUpdateTime.current = currentTime;
+    
+    // Cap delta time to avoid large jumps when tab was inactive
+    const cappedDelta = Math.min(deltaTime, 0.1);
+    
+    // Handle jumping and gravity
+    if (isJumping.current) {
+      // Apply jump velocity
+      playerRef.current.position.y += jumpVelocity.current;
+      
+      // Apply gravity to jump velocity
+      jumpVelocity.current -= GRAVITY;
+      
+      // Check if player has landed
+      if (playerRef.current.position.y <= 1) {
+        playerRef.current.position.y = 1;
+        isJumping.current = false;
+        jumpVelocity.current = 0;
+      }
+    }
+    
+    // Get current position
+    const currentPosition = playerRef.current.position.clone();
+    
+    // Calculate movement direction relative to camera angle
+    let moveX = 0;
+    let moveZ = 0;
+    
+    // Calculate forward/backward movement (rotated by camera angle)
+    if (moveForward.current) {
+      moveX -= Math.sin(cameraAngle.current) * FIXED_SPEED_FACTOR;
+      moveZ -= Math.cos(cameraAngle.current) * FIXED_SPEED_FACTOR;
+    }
+    if (moveBackward.current) {
+      moveX += Math.sin(cameraAngle.current) * FIXED_SPEED_FACTOR;
+      moveZ += Math.cos(cameraAngle.current) * FIXED_SPEED_FACTOR;
+    }
+    
+    // Calculate left/right strafing (perpendicular to camera angle)
+    if (moveLeft.current) {
+      moveX -= Math.sin(cameraAngle.current + Math.PI/2) * FIXED_SPEED_FACTOR;
+      moveZ -= Math.cos(cameraAngle.current + Math.PI/2) * FIXED_SPEED_FACTOR;
+    }
+    if (moveRight.current) {
+      moveX += Math.sin(cameraAngle.current + Math.PI/2) * FIXED_SPEED_FACTOR;
+      moveZ += Math.cos(cameraAngle.current + Math.PI/2) * FIXED_SPEED_FACTOR;
+    }
+    
+    // If player is moving, update the mesh position
+    if (moveX !== 0 || moveZ !== 0) {
+      // Update player position
+      const newX = currentPosition.x + moveX;
+      const newZ = currentPosition.z + moveZ;
+      
+      // Apply world boundaries
+      const boundedX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, newX));
+      const boundedZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, newZ));
+      
+      // Apply the final position
+      playerRef.current.position.x = boundedX;
+      playerRef.current.position.z = boundedZ;
+      
+      // Update movement direction for player orientation
+      if (moveX !== 0 || moveZ !== 0) {
+        // Calculate angle based on movement direction
+        const moveAngle = Math.atan2(moveX, moveZ);
+        
+        // Apply smooth rotation - only adjust part of the way each frame
+        const rotationDiff = moveAngle - playerRef.current.rotation.y;
+        // Normalize rotation difference to [-PI, PI]
+        const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
+        playerRef.current.rotation.y += normalizedDiff * 0.15;
+      }
+      
+      // Add current position to history for anomaly detection
+      positionHistory.current.push({
+        x: playerRef.current.position.x,
+        z: playerRef.current.position.z,
+        time: Date.now()
+      });
+      
+      // Keep history length in check
+      if (positionHistory.current.length > MAX_HISTORY_LENGTH) {
+        positionHistory.current.shift();
+      }
+      
+      // Mark that movement has changed so we send update to server
+      movementChanged.current = true;
+    }
+  };
+  
+  // Function to send position updates to server
+  const sendPositionUpdate = () => {
+    // Only send updates if connected and player exists
+    if (!isConnected || !playerRef.current) return;
+    
+    // Get current position
+    const position = playerRef.current.position;
+    const x = position.x;
+    const y = position.y;
+    const z = position.z;
+    
+    // Calculate distance from last sent position
+    const distanceFromLast = Math.sqrt(
+      Math.pow(x - lastSentPosition.current.x, 2) + 
+      Math.pow(z - lastSentPosition.current.z, 2)
+    );
+    
+    const currentTime = Date.now();
+    const timeSinceLastSend = currentTime - lastSendTime.current;
+    
+    // Send position update if we've moved substantially or it's been a while since our last update
+    if ((movementChanged.current && timeSinceLastSend >= SEND_INTERVAL) || 
+        (distanceFromLast > 0.1 && timeSinceLastSend >= SEND_INTERVAL) ||
+        timeSinceLastSend >= 1000) { // Send at least every second even if not moving
+      
+      getSocket().then(socket => {
+        if (socket) {
+          socket.emit('playerMove', {
+            x, 
+            y, 
+            z
+            // timestamp removed to fix type error
+          });
+        }
+      });
+      
+      // Update last sent position
+      lastSentPosition.current = { x, y, z };
+      lastSendTime.current = currentTime;
+      movementChanged.current = false;
+    }
+  };
+  
+  // Function to render debug visuals
+  const updateDebugVisuals = () => {
+    if (!sceneRef.current) return;
+    
+    const scene = sceneRef.current; // Create a local reference to ensure it's not null
+    
+    // Clear any existing debug visuals
+    scene.children.forEach(child => {
+      if (child.userData && child.userData.isDebugObject) {
+        scene.remove(child);
+      }
+    });
+    
+    if (DEBUG.showPositionMarkers) {
+      // Add markers for player positions
+      const markerGeometry = new THREE.SphereGeometry(0.1);
+      const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+      
+      // Add marker for local player
+      if (playerRef.current) {
+        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        marker.position.copy(playerRef.current.position);
+        marker.position.y += 2.5; // Place above player
+        marker.userData.isDebugObject = true;
+        scene.add(marker);
+      }
+      
+      // Add markers for remote players
+      playersRef.current.forEach(playerMesh => {
+        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        marker.position.copy(playerMesh.position);
+        marker.position.y += 2.5; // Place above player
+        marker.userData.isDebugObject = true;
+        scene.add(marker);
+      });
+    }
+    
+    if (DEBUG.showVelocityVectors) {
+      // Visualize velocity vectors
+      const arrowMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+      
+      // Show predicted velocity for remote players
+      playersRef.current.forEach(playerMesh => {
+        if (playerMesh.userData.velocity) {
+          const velocity = playerMesh.userData.velocity;
+          const velocityLength = Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+          
+          if (velocityLength > 0.001) {
+            // Scale the vector for visibility
+            const scale = 2.0;
+            const arrowGeometry = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(
+                playerMesh.position.x, 
+                playerMesh.position.y + 1.5, 
+                playerMesh.position.z
+              ),
+              new THREE.Vector3(
+                playerMesh.position.x + velocity.x * scale, 
+                playerMesh.position.y + 1.5, 
+                playerMesh.position.z + velocity.z * scale
+              )
+            ]);
+            
+            const arrow = new THREE.Line(arrowGeometry, arrowMaterial);
+            arrow.userData.isDebugObject = true;
+            scene.add(arrow);
+          }
+        }
+      });
+    }
   };
   
   // Add a function for updating remote player positions with interpolation
@@ -2344,6 +1901,16 @@ const GameCanvas: React.FC = () => {
     });
   };
   
+  // Handler for when WorldManager creates resource nodes
+  const handleResourceNodesCreated = (nodes: ResourceNode[]) => {
+    resourceNodesRef.current = nodes;
+  };
+
+  // Handler for when WorldManager initializes world items
+  const handleWorldItemsCreated = (items: WorldItem[]) => {
+    worldItemsRef.current = items;
+  };
+  
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <div ref={canvasRef} style={{ width: '100%', height: '100%' }} />
@@ -2440,7 +2007,6 @@ const GameCanvas: React.FC = () => {
               checked={isHorizontalInverted}
               onChange={() => {
                 const newValue = !isHorizontalInverted;
-                console.log(`Camera horizontal inversion set to: ${newValue}`);
                 setIsHorizontalInverted(newValue);
               }}
               style={{ cursor: 'pointer' }}
@@ -2483,9 +2049,7 @@ const GameCanvas: React.FC = () => {
       {!isConnected && (
         <button
           onClick={() => {
-            console.log('Manual reconnect requested');
             initializeSocket().then(() => {
-              console.log('Manual reconnect attempt completed');
             });
           }}
           style={{
@@ -2527,10 +2091,16 @@ const GameCanvas: React.FC = () => {
         {isCleaningUp ? 'Cleaning...' : '👻 Remove Ghosts'}
       </button>
       
-      <ChatPanel />
+      {/* Use Chat component with proper forwardRef */}
+      <Chat
+        ref={chatRef}
+        scene={sceneRef.current}
+        playerRef={playerRef}
+        playersRef={playersRef}
+      />
       <InventoryPanel style={{ top: "100px", right: "20px" }} />
     </div>
   );
 };
 
-export default GameCanvas; 
+export default GameCanvas;
