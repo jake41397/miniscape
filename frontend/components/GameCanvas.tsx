@@ -85,6 +85,11 @@ const GameCanvas: React.FC = () => {
   // Add sound toggle state
   const [soundEnabled, setSoundEnabled] = useState(true);
   
+  // Add settings state
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isHorizontalInverted, setIsHorizontalInverted] = useState(true);
+  const isHorizontalInvertedRef = useRef(true);
+  
   // Create a ref to store the createNameLabel function
   const createNameLabelRef = useRef<((name: string, mesh: THREE.Mesh) => CSS2DObject) | null>(null);
   
@@ -109,6 +114,11 @@ const GameCanvas: React.FC = () => {
   const GRAVITY = 0.015;
   const JUMP_COOLDOWN = 500; // milliseconds
   const lastJumpTime = useRef(0);
+  
+  // Keep inversion setting in sync with ref
+  useEffect(() => {
+    isHorizontalInvertedRef.current = isHorizontalInverted;
+  }, [isHorizontalInverted]);
   
   useEffect(() => {
     // Init socket on component mount
@@ -1167,7 +1177,14 @@ const GameCanvas: React.FC = () => {
         // Update camera angle based on horizontal mouse movement
         // Positive deltaX (moving right) rotates clockwise
         // Negative deltaX (moving left) rotates counter-clockwise
-        cameraAngle.current += deltaX * 0.01;
+        const invertFactor = isHorizontalInvertedRef.current ? -1 : 1;
+        const angleChange = invertFactor * deltaX * 0.01;
+        cameraAngle.current += angleChange;
+        
+        // Debug log every ~1 second (not every frame to avoid console spam)
+        if (Math.random() < 0.01) {
+          console.log(`Camera angle update: delta=${deltaX}, inverted=${isHorizontalInvertedRef.current}, factor=${invertFactor}`);
+        }
 
         // Update camera tilt based on vertical mouse movement
         // Positive deltaY (moving down) increases tilt
@@ -1777,10 +1794,10 @@ const GameCanvas: React.FC = () => {
         }}></div>
         {isConnected ? 'Connected' : 'Disconnected'}
       </div>
-
-      {/* Sound toggle button */}
+      
+      {/* Settings button */}
       <button
-        onClick={() => setSoundEnabled(!soundEnabled)}
+        onClick={() => setIsSettingsOpen(!isSettingsOpen)}
         style={{
           position: 'absolute',
           top: '10px',
@@ -1795,8 +1812,77 @@ const GameCanvas: React.FC = () => {
           zIndex: 100
         }}
       >
-        {soundEnabled ? '🔊 Sound On' : '🔇 Sound Off'}
+        ⚙️ Settings
       </button>
+      
+      {/* Settings panel */}
+      {isSettingsOpen && (
+        <div style={{
+          position: 'absolute',
+          top: '45px',
+          right: '10px',
+          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          color: 'white',
+          border: '1px solid #333',
+          borderRadius: '5px',
+          padding: '10px',
+          width: '250px',
+          zIndex: 101,
+          fontFamily: 'sans-serif',
+          fontSize: '14px'
+        }}>
+          <div style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #555', paddingBottom: '5px' }}>
+            Game Settings
+          </div>
+          
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <label htmlFor="invertHorizontal" style={{ cursor: 'pointer' }}>
+              Invert Camera Horizontal
+            </label>
+            <input
+              id="invertHorizontal"
+              type="checkbox"
+              checked={isHorizontalInverted}
+              onChange={() => {
+                const newValue = !isHorizontalInverted;
+                console.log(`Camera horizontal inversion set to: ${newValue}`);
+                setIsHorizontalInverted(newValue);
+              }}
+              style={{ cursor: 'pointer' }}
+            />
+          </div>
+          
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <label htmlFor="soundToggle" style={{ cursor: 'pointer' }}>
+              Sound Effects
+            </label>
+            <input
+              id="soundToggle"
+              type="checkbox"
+              checked={soundEnabled}
+              onChange={() => setSoundEnabled(!soundEnabled)}
+              style={{ cursor: 'pointer' }}
+            />
+          </div>
+          
+          <div style={{ marginTop: '15px', textAlign: 'right' }}>
+            <button
+              onClick={() => setIsSettingsOpen(false)}
+              style={{
+                backgroundColor: '#555',
+                color: 'white',
+                border: 'none',
+                borderRadius: '3px',
+                padding: '3px 8px',
+                cursor: 'pointer',
+                fontSize: '12px'
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
       
       {/* Reconnect button */}
       {!isConnected && (
@@ -1847,7 +1933,7 @@ const GameCanvas: React.FC = () => {
       </button>
       
       <ChatPanel />
-      <InventoryPanel />
+      <InventoryPanel style={{ top: "100px", right: "20px" }} />
     </div>
   );
 };

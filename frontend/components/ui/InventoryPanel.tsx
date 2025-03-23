@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, CSSProperties } from 'react';
 import { getSocket } from '../../game/network/socket';
 import { Item, ItemType } from '../../types/player';
 
 interface InventoryPanelProps {
   onDropItem?: (item: Item) => void;
+  style?: CSSProperties;
 }
 
-const InventoryPanel: React.FC<InventoryPanelProps> = ({ onDropItem }) => {
+const InventoryPanel: React.FC<InventoryPanelProps> = ({ onDropItem, style }) => {
   const [inventory, setInventory] = useState<Item[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   
@@ -79,7 +80,7 @@ const InventoryPanel: React.FC<InventoryPanelProps> = ({ onDropItem }) => {
   };
   
   return (
-    <div className="inventory-panel">
+    <div className="inventory-panel" style={style}>
       <div className="inventory-button" onClick={toggleInventory}>
         <span>Inventory ({inventory.length})</span>
       </div>
