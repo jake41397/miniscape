@@ -97,6 +97,19 @@ const GameCanvas: React.FC = () => {
   // Game references
   const chatBubblesRef = useRef<Map<string, { object: CSS2DObject, expiry: number }>>(new Map());
   
+  // Add movement state
+  const moveForward = useRef(false);
+  const moveBackward = useRef(false);
+  const moveLeft = useRef(false);
+  const moveRight = useRef(false);
+  const isJumping = useRef(false);
+  const jumpVelocity = useRef(0);
+  const lastUpdateTime = useRef(0);
+  const JUMP_FORCE = 0.3;
+  const GRAVITY = 0.015;
+  const JUMP_COOLDOWN = 500; // milliseconds
+  const lastJumpTime = useRef(0);
+  
   useEffect(() => {
     // Init socket on component mount
     async function connectSocket() {
@@ -1244,86 +1257,63 @@ const GameCanvas: React.FC = () => {
       }
     };
     
-    // Function to update player position based on key presses
+    // Update player movement
     const updatePlayerMovement = () => {
       if (!playerRef.current) return;
       
       const currentTime = Date.now();
+      const deltaTime = currentTime - lastUpdateTime.current;
+      lastUpdateTime.current = currentTime;
       
-      // Debug keypress state every second
-      if (currentTime % 1000 < 20) { // Log approximately once per second
-        const activeKeys = Object.entries(keysPressed.current)
-          .filter(([_, pressed]) => pressed)
-          .map(([key]) => key);
-          
-        if (activeKeys.length > 0) {
-          console.log('Active movement keys:', activeKeys);
+      // Calculate movement direction based on camera angle (horizontal only)
+      const forward = new THREE.Vector3(
+        Math.sin(cameraAngle.current),
+        0,
+        Math.cos(cameraAngle.current)
+      );
+      const right = new THREE.Vector3(
+        Math.sin(cameraAngle.current + Math.PI / 2),
+        0,
+        Math.cos(cameraAngle.current + Math.PI / 2)
+      );
+      
+      // Calculate movement vector
+      const movement = new THREE.Vector3(0, 0, 0);
+      if (keysPressed.current.w || keysPressed.current.ArrowUp) movement.sub(forward);
+      if (keysPressed.current.s || keysPressed.current.ArrowDown) movement.add(forward);
+      if (keysPressed.current.d || keysPressed.current.ArrowRight) movement.add(right);
+      if (keysPressed.current.a || keysPressed.current.ArrowLeft) movement.sub(right);
+      
+      // Normalize movement vector if moving diagonally
+      if (movement.length() > 0) {
+        movement.normalize();
+        
+        // Rotate player to face movement direction
+        if (playerRef.current) {
+          // Calculate the angle of movement in the XZ plane
+          const angle = Math.atan2(movement.x, movement.z);
+          // Set player rotation to face movement direction
+          playerRef.current.rotation.y = angle;
         }
       }
       
-      const player = playerRef.current;
-      let moveX = 0;
-      let moveZ = 0;
+      // Apply movement speed
+      movement.multiplyScalar(MOVEMENT_SPEED);
       
-      // Forward (W or Up arrow)
-      if (keysPressed.current.w || keysPressed.current.ArrowUp) {
-        moveZ -= MOVEMENT_SPEED;
-      }
+      // Update player position
+      playerRef.current.position.x += movement.x;
+      playerRef.current.position.z += movement.z;
       
-      // Left (A or Left arrow)
-      if (keysPressed.current.a || keysPressed.current.ArrowLeft) {
-        moveX -= MOVEMENT_SPEED;
-      }
-      
-      // Backward (S or Down arrow)
-      if (keysPressed.current.s || keysPressed.current.ArrowDown) {
-        moveZ += MOVEMENT_SPEED;
-      }
-      
-      // Right (D or Right arrow)
-      if (keysPressed.current.d || keysPressed.current.ArrowRight) {
-        moveX += MOVEMENT_SPEED;
-      }
-      
-      // Only update if there's actual movement
-      if (moveX !== 0 || moveZ !== 0) {
-        // Get delta time for frame-rate independent movement
-        const delta = clockRef.current.getDelta();
-        // Apply frame-rate independent movement with bounds checking
-        const newX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, player.position.x + (moveX * delta * 60))); // Normalize to 60fps
-        const newZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, player.position.z + (moveZ * delta * 60)));
+      // Handle jumping
+      if (isJumping.current) {
+        playerRef.current.position.y += jumpVelocity.current;
+        jumpVelocity.current -= GRAVITY;
         
-        // Only set position and flag changes if there's an actual difference
-        if (Math.abs(newX - player.position.x) > 0.0001 || Math.abs(newZ - player.position.z) > 0.0001) {
-          // Log movement for debugging once every few seconds
-          if (currentTime % 3000 < 20) { // Log approximately once every 3 seconds
-            console.log('Player moving:', {
-              from: { x: player.position.x, z: player.position.z },
-              to: { x: newX, z: newZ },
-              delta: { x: newX - player.position.x, z: newZ - player.position.z }
-            });
-          }
-          
-          // Update player position
-          player.position.x = newX;
-          player.position.z = newZ;
-          
-          // Flag that movement has changed
-          movementChanged.current = true;
-          
-          // Update current zone based on position
-          updatePlayerZone(newX, newZ);
-          
-          // Add to position history for anomaly detection
-          positionHistory.current.push({x: newX, z: newZ, time: currentTime});
-          if (positionHistory.current.length > MAX_HISTORY_LENGTH) {
-            positionHistory.current.shift();
-          }
-          
-          // Check for anomalous speed if we have enough history
-          if (positionHistory.current.length >= 2) {
-            detectAnomalousMovement();
-          }
+        // Check if landed
+        if (playerRef.current.position.y <= 1) {
+          playerRef.current.position.y = 1;
+          isJumping.current = false;
+          jumpVelocity.current = 0;
         }
       }
     };
