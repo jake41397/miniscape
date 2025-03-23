@@ -228,8 +228,6 @@ const SignIn: NextPage = () => {
     );
   }
   
-  // Add this useEffect to the SignIn component:
-
   useEffect(() => {
     // Check for a stuck state and force a clean auth state if needed
     const checkStuckState = async () => {

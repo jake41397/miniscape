@@ -60,13 +60,13 @@ npm run export
 cd ..
 
 # Start each application individually
-echo "Starting development frontend..."
+echo "Starting development frontend with file watching enabled..."
 cd frontend
-pm2 start npm --name miniscape-dev-frontend -- run dev -- --port 3001
+pm2 start npm --name miniscape-dev-frontend --watch --ignore-watch="node_modules .next .git .vscode" --watch-delay=1000 -- run dev -- --port 3001
 
-echo "Starting development backend..."
+echo "Starting development backend with file watching enabled..."
 cd ../backend
-pm2 start npm --name miniscape-dev-backend -- run dev -- --port 4001
+pm2 start npm --name miniscape-dev-backend --watch --ignore-watch="node_modules dist .git .vscode" --watch-delay=1000 -- run dev -- --port 4001
 
 echo "Starting production backend..."
 cd ../backend
