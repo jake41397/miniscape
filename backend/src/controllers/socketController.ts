@@ -59,6 +59,7 @@ interface ExtendedSocket extends Socket {
   };
   data: {
     lastPositionUpdate?: number;
+    movementCount?: number;
     [key: string]: any;
   };
 }
@@ -297,6 +298,14 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     
     // Handle player movement
     socket.on('playerMove', async (position: PlayerPosition) => {
+      // Add detailed logging
+      console.log(`Player ${socket.id} moved to position:`, {
+        position,
+        username: players[socket.id]?.name || 'Unknown',
+        totalPlayers: Object.keys(players).length,
+        otherPlayerIds: Object.keys(players).filter(id => id !== socket.id)
+      });
+      
       // Update player position in server state
       if (players[socket.id]) {
         // Ensure position is within world boundaries
@@ -309,12 +318,61 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         players[socket.id].z = validZ;
         
         // Broadcast new position to all other clients
-        socket.broadcast.emit('playerMoved', {
+        const moveEvent = {
           id: socket.id,
           x: validX,
           y: position.y,
           z: validZ
+        };
+        
+        console.log(`Broadcasting playerMoved event`, {
+          targetPlayers: Object.keys(players).filter(id => id !== socket.id).length,
+          event: moveEvent,
+          toSocketID: socket.id
         });
+        
+        // Debug this broadcast to ensure it's working
+        try {
+          // Broadcast to all EXCEPT the current socket
+          socket.broadcast.emit('playerMoved', moveEvent);
+          
+          // For debugging purposes, log info about who we're sending it to
+          const otherPlayerIds = Object.keys(players).filter(id => id !== socket.id);
+          if (otherPlayerIds.length > 0) {
+            console.log(`Broadcasting movement to ${otherPlayerIds.length} players:`, otherPlayerIds);
+          } else {
+            console.log('No other players to broadcast movement to');
+          }
+          
+          // Every 10th movement, proactively sync player list to ensure all clients have the same data
+          const movementCount = socket.data.movementCount || 0;
+          socket.data.movementCount = movementCount + 1;
+          
+          if (movementCount % 10 === 0) {
+            console.log('Proactively syncing player list to ensure consistency');
+            
+            // Get all players except the current player
+            const otherPlayers = Object.values(players).filter(p => p.id !== socket.id);
+            
+            // First check if the client even knows about all players
+            socket.emit('checkPlayersSync', otherPlayers.map(p => p.id), (missingPlayerIds: string[]) => {
+              if (missingPlayerIds && missingPlayerIds.length > 0) {
+                console.log(`Client ${socket.id} is missing ${missingPlayerIds.length} players:`, missingPlayerIds);
+                
+                // Send the missing players one by one
+                missingPlayerIds.forEach(playerId => {
+                  const player = players[playerId];
+                  if (player) {
+                    console.log(`Sending missing player ${playerId} to ${socket.id}`);
+                    socket.emit('playerJoined', player);
+                  }
+                });
+              }
+            });
+          }
+        } catch (error) {
+          console.error('Error broadcasting player movement:', error);
+        }
         
         // Update position in database (throttled)
         // We don't want to update the database on every movement event
@@ -332,6 +390,30 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
             console.error('Failed to update player position in DB:', error instanceof Error ? error : new Error(String(error)));
           }
         }
+      }
+    });
+    
+    // Handle ping events for connection monitoring
+    socket.on('ping', (callback) => {
+      // Simple ping-pong to verify connection is alive
+      if (typeof callback === 'function') {
+        callback();
+      }
+    });
+    
+    // Handle getPlayerData requests
+    socket.on('getPlayerData', (playerId: string, callback) => {
+      console.log(`Player ${socket.id} requested data for player ${playerId}`);
+      
+      // Find the requested player
+      const player = players[playerId];
+      
+      if (player) {
+        console.log(`Returning player data for ${playerId}`);
+        callback(player);
+      } else {
+        console.log(`Player ${playerId} not found`);
+        callback(null);
       }
     });
     

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer';
-import { initializeSocket, disconnectSocket, getSocket } from '../game/network/socket';
+import { initializeSocket, disconnectSocket, getSocket, isSocketReady, getSocketStatus } from '../game/network/socket';
 import { Player } from '../types/player';
 import ChatPanel from './ui/ChatPanel';
 import InventoryPanel from './ui/InventoryPanel';
@@ -100,20 +100,60 @@ const GameCanvas: React.FC = () => {
       
       // Track socket connection state
       socket.on('connect', () => {
+        console.log('Socket connected with ID:', socket.id);
         setIsConnected(true);
+        
+        // Clear player refs on reconnect to avoid stale references
+        if (playersRef.current.size > 0) {
+          console.log('Clearing player references on reconnect to avoid stale data');
+          playersRef.current = new Map();
+        }
       });
       
       socket.on('disconnect', () => {
+        console.log('Socket disconnected, updating connection state');
         setIsConnected(false);
       });
+
+      // Add custom event listeners for socket state changes
+      const handleSocketConnected = () => {
+        console.log('Socket connected event received');
+        setIsConnected(true);
+      };
+      
+      const handleSocketDisconnected = () => {
+        console.log('Socket disconnected event received');
+        setIsConnected(false);
+      };
+      
+      window.addEventListener('socket_connected', handleSocketConnected);
+      window.addEventListener('socket_disconnected', handleSocketDisconnected);
+      
+      // Initial connection state
+      setIsConnected(socket.connected);
+
+      // Monitor actual connection state periodically
+      const connectionMonitor = setInterval(() => {
+        const status = getSocketStatus();
+        if (status.connected !== isConnected) {
+          console.log(`Connection state mismatch - status: ${status.connected}, state: ${isConnected}`);
+          setIsConnected(status.connected);
+        }
+      }, 5000);
+      
+      return () => {
+        // Disconnect socket on unmount
+        disconnectSocket();
+        
+        // Clean up event listeners
+        window.removeEventListener('socket_connected', handleSocketConnected);
+        window.removeEventListener('socket_disconnected', handleSocketDisconnected);
+        
+        clearInterval(connectionMonitor);
+      };
     }
     
     connectSocket();
-    
-    return () => {
-      // Disconnect socket on unmount
-      disconnectSocket();
-    };
   }, []);
   
   // Update sound manager when sound enabled state changes
@@ -404,6 +444,11 @@ const GameCanvas: React.FC = () => {
           return null;
         }
         
+        console.log(`Creating mesh for player ${player.id}`, {
+          playerExists: playersRef.current.has(player.id),
+          position: { x: player.x, y: player.y, z: player.z }
+        });
+        
         // Find any existing meshes for this player to ensure proper cleanup
         const existingMeshes: THREE.Object3D[] = [];
         
@@ -493,6 +538,13 @@ const GameCanvas: React.FC = () => {
         // Store in players map
         playersRef.current.set(player.id, otherPlayerMesh);
         
+        console.log(`Player mesh created and added to tracking for ${player.id}`, {
+          meshCreated: !!otherPlayerMesh,
+          position: otherPlayerMesh.position,
+          inTrackingMap: playersRef.current.has(player.id),
+          trackedMeshId: playersRef.current.get(player.id)?.id
+        });
+        
         return otherPlayerMesh;
       };
       
@@ -515,6 +567,13 @@ const GameCanvas: React.FC = () => {
           }
         }
         
+        // Log all players for debugging
+        console.log('All players in initPlayers:', {
+          count: players.length,
+          ids: players.map(p => p.id),
+          socketId: socket.id
+        });
+        
         // Add each existing player to the scene
         players.forEach(player => {
           // Skip creating a mesh for the current player to avoid duplication
@@ -531,7 +590,14 @@ const GameCanvas: React.FC = () => {
             return;
           }
           
+          console.log(`Creating mesh for player: ${player.id} (${player.name})`);
           createPlayerMesh(player);
+        });
+        
+        // Log player tracking state after initialization
+        console.log('Player tracking state after init:', {
+          trackedPlayers: Array.from(playersRef.current.keys()),
+          count: playersRef.current.size
         });
       });
       
@@ -560,8 +626,54 @@ const GameCanvas: React.FC = () => {
           return;
         }
         
+        // Log current players before adding new one for debugging
+        console.log('Player tracking BEFORE adding new player:', {
+          trackedPlayers: Array.from(playersRef.current.keys()),
+          count: playersRef.current.size
+        });
+        
+        // Check if we already have this player in our map and remove it first
+        if (playersRef.current.has(player.id)) {
+          console.log(`Player ${player.id} already exists in tracker, cleaning up first`);
+          const existingMesh = playersRef.current.get(player.id);
+          if (existingMesh) {
+            // Remove any CSS2DObjects first
+            existingMesh.traverse((child) => {
+              if ((child as any).isCSS2DObject) {
+                if (child.parent) {
+                  child.parent.remove(child);
+                }
+                scene.remove(child);
+              }
+            });
+            
+            // Clean up resources
+            if ((existingMesh as THREE.Mesh).geometry) {
+              (existingMesh as THREE.Mesh).geometry.dispose();
+            }
+            if ((existingMesh as THREE.Mesh).material) {
+              if (Array.isArray((existingMesh as THREE.Mesh).material)) {
+                ((existingMesh as THREE.Mesh).material as THREE.Material[]).forEach(m => m.dispose());
+              } else {
+                ((existingMesh as THREE.Mesh).material as THREE.Material).dispose();
+              }
+            }
+            
+            // Remove from scene
+            scene.remove(existingMesh);
+            playersRef.current.delete(player.id);
+          }
+        }
+        
         // Always use createPlayerMesh which handles existing players properly
-        createPlayerMesh(player);
+        const createdMesh = createPlayerMesh(player);
+        
+        // Verify the player was properly added
+        console.log('Player tracking AFTER adding new player:', {
+          trackedPlayers: Array.from(playersRef.current.keys()),
+          playerAdded: playersRef.current.has(player.id),
+          meshCreated: !!createdMesh
+        });
       });
       
       // Handle player disconnects
@@ -634,14 +746,52 @@ const GameCanvas: React.FC = () => {
         });
       });
       
+      // Handle player sync request from server - compare local tracking to server's list of player IDs
+      socket.on('checkPlayersSync', (playerIds, callback) => {
+        console.log('Received checkPlayersSync request:', {
+          serverPlayerIds: playerIds,
+          localPlayerIds: Array.from(playersRef.current.keys())
+        });
+        
+        // Find players that we're missing locally (on server but not tracked locally)
+        const missingPlayerIds = playerIds.filter(id => !playersRef.current.has(id));
+        
+        console.log(`Client is missing ${missingPlayerIds.length} players:`, missingPlayerIds);
+        
+        // Send back the list of missing players
+        callback(missingPlayerIds);
+      });
+      
       // Handle player movements
       socket.on('playerMoved', (data) => {
+        // Add verbose logging for debugging
+        console.log('Received playerMoved event:', {
+          playerId: data.id,
+          position: { x: data.x, y: data.y, z: data.z },
+          playerExists: playersRef.current.has(data.id),
+          totalPlayers: playersRef.current.size,
+          allPlayerIds: Array.from(playersRef.current.keys())
+        });
+        
+        // Skip if this is our own player ID - we shouldn't move ourselves based on server events
+        // This is a fallback in case we broadcast to all instead of socket.broadcast
+        if (data.id === socket.id || data.id === 'TEST-' + socket.id) {
+          console.log('Skipping movement update for own player');
+          return;
+        }
+        
         // Update the position of the moved player
         const playerMesh = playersRef.current.get(data.id);
         if (playerMesh) {
           // Ensure received positions are within bounds before applying
           const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, data.x));
           const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, data.z));
+          
+          console.log(`Updating position for player ${data.id} to:`, {
+            x: validX,
+            y: data.y,
+            z: validZ
+          });
           
           // Calculate distance to new position
           const currentPos = playerMesh.position;
@@ -665,12 +815,39 @@ const GameCanvas: React.FC = () => {
             // Normal update for reasonable distances
             playerMesh.position.set(validX, data.y, validZ);
           }
-        }
-        
-        // Occasionally run a cleanup after movement updates (every ~5 seconds)
-        // This helps catch any ghosts that might have appeared
-        if (Math.random() < 0.05) { // ~5% chance each update
-          cleanupPlayerMeshes();
+        } else {
+          console.warn(`Could not find player mesh for ID: ${data.id}. Attempting to create it.`);
+          
+          // This case can happen if we receive a playerMoved event before playerJoined
+          // Try to fetch the player from the server to create the mesh
+          socket.emit('getPlayerData', data.id, (playerData) => {
+            if (playerData) {
+              console.log(`Received player data for missing player ${data.id}, creating mesh`);
+              const createdMesh = createPlayerMesh(playerData);
+              console.log(`Created mesh for player ${data.id} after getPlayerData response`, {
+                success: !!createdMesh,
+                trackedPlayers: Array.from(playersRef.current.keys()),
+                playerTracked: playersRef.current.has(data.id)
+              });
+            } else {
+              // If server doesn't respond with player data, create a minimal player object
+              const minimalPlayer = {
+                id: data.id,
+                name: `Player-${data.id.substring(0, 4)}`,
+                x: data.x,
+                y: data.y,
+                z: data.z,
+                userId: ''
+              };
+              console.log(`Creating minimal player object for ${data.id}`);
+              const createdMesh = createPlayerMesh(minimalPlayer);
+              console.log(`Created mesh for minimal player ${data.id}`, {
+                success: !!createdMesh,
+                trackedPlayers: Array.from(playersRef.current.keys()),
+                playerTracked: playersRef.current.has(data.id)
+              });
+            }
+          });
         }
       });
       
@@ -728,6 +905,36 @@ const GameCanvas: React.FC = () => {
       const cleanupPlayerMeshes = () => {
         console.log('Running aggressive player mesh cleanup');
         
+        // Helper function to remove a player object and clean up resources
+        const removePlayerObject = (object: THREE.Object3D) => {
+          // Remove any CSS2DObjects first
+          object.traverse((child) => {
+            if ((child as any).isCSS2DObject) {
+              if (child.parent) {
+                child.parent.remove(child);
+              }
+              scene.remove(child);
+            }
+          });
+          
+          // Clean up geometry and materials if it's a mesh
+          if ((object as THREE.Mesh).geometry) {
+            (object as THREE.Mesh).geometry.dispose();
+          }
+          if ((object as THREE.Mesh).material) {
+            if (Array.isArray((object as THREE.Mesh).material)) {
+              ((object as THREE.Mesh).material as THREE.Material[]).forEach(
+                (material: THREE.Material) => material.dispose()
+              );
+            } else {
+              ((object as THREE.Mesh).material as THREE.Material).dispose();
+            }
+          }
+          
+          // Remove from scene
+          scene.remove(object);
+        };
+        
         // Get a list of valid player IDs we should keep (all players currently in the game)
         const validPlayerIds = new Set<string>();
         // Add IDs from our player reference map
@@ -757,16 +964,17 @@ const GameCanvas: React.FC = () => {
         
         console.log(`Found ${allPlayerObjects.length} total player-related objects in scene`);
         
-        // Now handle each player ID case separately
+        // Process objects by player ID to handle cleanup
         playerIdToObjects.forEach((objects, playerId) => {
-          // Case 1: This is an invalid player ID (player no longer in the game)
+          // If this player ID is no longer valid, remove ALL its objects
           if (!validPlayerIds.has(playerId)) {
             console.log(`Removing all objects for invalid player ${playerId}`);
-            // Remove all objects for this invalid player
-            objects.forEach(obj => removePlayerObject(obj));
-            // Also make sure it's removed from our references
+            objects.forEach(removePlayerObject);
+            
+            // Also make sure it's removed from our playersRef
             playersRef.current.delete(playerId);
-            // Remove from name labels ref
+            
+            // And from name labels
             if (nameLabelsRef.current.has(playerId)) {
               const label = nameLabelsRef.current.get(playerId);
               if (label) {
@@ -777,173 +985,55 @@ const GameCanvas: React.FC = () => {
                 nameLabelsRef.current.delete(playerId);
               }
             }
-          } 
-          // Case 2: This is our own player ID
-          else if (playerId === socket.id) {
+          } else if (playerId === socket.id) {
+            // This is our own player, we should only have our main player mesh
             console.log(`Processing own player objects, found ${objects.length}`);
             
-            // Keep only playerRef.current, remove all others
+            // Keep only the original playerRef
             objects.forEach(obj => {
               if (obj !== playerRef.current) {
                 console.log('Removing duplicate of own player');
                 removePlayerObject(obj);
               }
             });
-          }
-          // Case 3: This is another valid player
-          else {
+          } else {
+            // This is another player, we should only have one main mesh per player
             console.log(`Processing player ${playerId}, found ${objects.length} objects`);
             
-            // If we have multiple objects, keep only the most appropriate one
-            if (objects.length > 1) {
-              // First, check if we have a reference in playersRef
-              const knownMesh = playersRef.current.get(playerId);
-              // If we don't have a known mesh, just keep the last one added
-              const toKeep = knownMesh && objects.includes(knownMesh) 
-                ? knownMesh 
-                : objects[objects.length - 1];
-              
-              // Remove all except the one to keep
+            // Keep only the one tracked in playersRef
+            const trackedMesh = playersRef.current.get(playerId);
+            if (trackedMesh) {
               objects.forEach(obj => {
-                if (obj !== toKeep) {
+                if (obj !== trackedMesh && obj.type === 'Mesh') {
                   console.log(`Removing duplicate mesh for player ${playerId}`);
                   removePlayerObject(obj);
                 }
               });
-              
-              // Make sure our reference is up to date
-              playersRef.current.set(playerId, toKeep as THREE.Mesh);
             }
           }
         });
         
-        // Additional safety check for any orphaned name labels
-        scene.traverse((object) => {
-          if ((object as any).isCSS2DObject && 
-              object.userData && 
-              object.userData.labelType === 'playerName') {
-            
-            const playerId = object.userData.forPlayer;
-            // If this label is for a player not in our valid set, or the object has no parent
-            if (!playerId || !validPlayerIds.has(playerId) || !object.parent) {
-              console.log(`Removing orphaned name label for player ${playerId}`);
-              if (object.parent) {
-                object.parent.remove(object);
-              }
-              scene.remove(object);
-              if (playerId) nameLabelsRef.current.delete(playerId);
+        // Check for orphaned name labels (not attached to any player)
+        nameLabelsRef.current.forEach((label, playerId) => {
+          if (!playerIdToObjects.has(playerId)) {
+            console.log(`Removing orphaned name label for player ${playerId}`);
+            if (label.parent) {
+              label.parent.remove(label);
             }
+            scene.remove(label);
+            nameLabelsRef.current.delete(playerId);
           }
         });
       };
       
-      // Helper function to remove a player object and clean up resources
-      const removePlayerObject = (object: THREE.Object3D) => {
-        // Remove any CSS2DObjects first
-        object.traverse((child) => {
-          if ((child as any).isCSS2DObject) {
-            if (child.parent) {
-              child.parent.remove(child);
-            }
-            scene.remove(child);
-          }
-        });
-        
-        // Clean up geometry and materials if it's a mesh
-        if ((object as THREE.Mesh).geometry) {
-          (object as THREE.Mesh).geometry.dispose();
-        }
-        if ((object as THREE.Mesh).material) {
-          if (Array.isArray((object as THREE.Mesh).material)) {
-            ((object as THREE.Mesh).material as THREE.Material[]).forEach(
-              (material: THREE.Material) => material.dispose()
-            );
-          } else {
-            ((object as THREE.Mesh).material as THREE.Material).dispose();
-          }
-        }
-        
-        // Remove from scene
-        scene.remove(object);
-      };
-      
-      // Add an initial thorough cleanup function that's more aggressive
-      const initialCleanup = () => {
-        console.log('Performing VERY aggressive initial cleanup');
-        
-        // First, collect all player-related objects
-        const playerObjects: THREE.Object3D[] = [];
-        
-        // Do a full scene traversal
-        scene.traverse((object) => {
-          // Check if this has any player-related userData
-          if (object.userData && (
-              object.userData.playerId || 
-              (object.userData.labelType === 'playerName') ||
-              (object as any).isCSS2DObject
-          )) {
-            // Skip our own player reference
-            if (object !== playerRef.current) {
-              playerObjects.push(object);
-            }
-          }
-        });
-        
-        console.log(`Initial cleanup found ${playerObjects.length} objects to check`);
-        
-        // Clean up every player object except our own playerRef
-        playerObjects.forEach(object => {
-          // Skip if this is our own player mesh (should be preserved)
-          if (object === playerRef.current) return;
-          
-          // Handle CSS2D objects
-          if ((object as any).isCSS2DObject) {
-            if (object.parent) {
-              object.parent.remove(object);
-            }
-            scene.remove(object);
-          } else {
-            // For meshes, clean up resources
-            removePlayerObject(object);
-          }
-        });
-        
-        // Clear our tracking references (except our own player)
-        const ownId = socket.id;
-        playersRef.current.forEach((mesh, id) => {
-          if (id !== ownId) {
-            playersRef.current.delete(id);
-          }
-        });
-        
-        // Clear name labels (except our own)
-        nameLabelsRef.current.forEach((label, id) => {
-          if (id !== ownId) {
-            nameLabelsRef.current.delete(id);
-          }
-        });
-        
-        console.log('Initial cleanup complete');
-      };
-      
-      // Store cleanup functions in ref so they can be accessed outside useEffect
-      cleanupFunctionsRef.current = {
-        initialCleanup,
-        cleanupPlayerMeshes
-      };
-      
-      // Call this aggressive cleanup when socket connects
-      socket.on('connect', () => {
-        console.log('Socket connected, performing thorough cleanup');
-        initialCleanup();
-      });
-      
-      // Add periodic cleanup to catch any ghosts that might have slipped through
+      // Set up periodic cleanup to handle any ghost player meshes
       const cleanupInterval = setInterval(() => {
-        cleanupPlayerMeshes();
-      }, 10000); // Run every 10 seconds
+        if (isConnected) {
+          cleanupPlayerMeshes();
+        }
+      }, 30000); // Run cleanup every 30 seconds
       
-      // Store the cleanup interval in the ref
+      // Store the interval for cleanup
       cleanupIntervalRef.current = cleanupInterval;
     };
     
@@ -1080,6 +1170,19 @@ const GameCanvas: React.FC = () => {
     const updatePlayerMovement = () => {
       if (!playerRef.current) return;
       
+      const currentTime = Date.now();
+      
+      // Debug keypress state every second
+      if (currentTime % 1000 < 20) { // Log approximately once per second
+        const activeKeys = Object.entries(keysPressed.current)
+          .filter(([_, pressed]) => pressed)
+          .map(([key]) => key);
+          
+        if (activeKeys.length > 0) {
+          console.log('Active movement keys:', activeKeys);
+        }
+      }
+      
       const player = playerRef.current;
       let moveX = 0;
       let moveZ = 0;
@@ -1114,6 +1217,15 @@ const GameCanvas: React.FC = () => {
         
         // Only set position and flag changes if there's an actual difference
         if (Math.abs(newX - player.position.x) > 0.0001 || Math.abs(newZ - player.position.z) > 0.0001) {
+          // Log movement for debugging once every few seconds
+          if (currentTime % 3000 < 20) { // Log approximately once every 3 seconds
+            console.log('Player moving:', {
+              from: { x: player.position.x, z: player.position.z },
+              to: { x: newX, z: newZ },
+              delta: { x: newX - player.position.x, z: newZ - player.position.z }
+            });
+          }
+          
           // Update player position
           player.position.x = newX;
           player.position.z = newZ;
@@ -1125,8 +1237,7 @@ const GameCanvas: React.FC = () => {
           updatePlayerZone(newX, newZ);
           
           // Add to position history for anomaly detection
-          const now = Date.now();
-          positionHistory.current.push({x: newX, z: newZ, time: now});
+          positionHistory.current.push({x: newX, z: newZ, time: currentTime});
           if (positionHistory.current.length > MAX_HISTORY_LENGTH) {
             positionHistory.current.shift();
           }
@@ -1213,7 +1324,32 @@ const GameCanvas: React.FC = () => {
     
     // Send position to server at throttled rate
     const sendPositionUpdate = async () => {
-      if (!playerRef.current || !isConnected || !movementChanged.current) return;
+      // Make sure we're really connected by checking both state and socket.connected
+      if (!playerRef.current || !isConnected) {
+        // Debug why we're not sending position
+        if (!playerRef.current) {
+          console.warn('Not sending position - playerRef.current is null');
+        }
+        if (!isConnected) {
+          console.warn('Not sending position - isConnected state is false');
+        }
+        if (!movementChanged.current) {
+          // Don't log this as it would spam the console
+        }
+        return;
+      }
+      
+      // Double-check actual socket connectivity to catch any state mismatches
+      if (!isSocketReady()) {
+        console.warn('Not sending position - socket exists but is not really connected');
+        return;
+      }
+      
+      // Immediately reset movement flag if we're not going to send an update
+      // This prevents movement from getting "stuck" if we miss an update window
+      if (!movementChanged.current) {
+        return;
+      }
       
       const now = Date.now();
       // Check if we should send an update (throttle)
@@ -1239,20 +1375,44 @@ const GameCanvas: React.FC = () => {
             z: validZ
           };
           
-          // Send position to server
-          const socket = await getSocket();
-          if (socket) {
-            socket.emit('playerMove', validatedPosition);
+          try {
+            // Send position to server
+            const socket = await getSocket();
+            if (socket && socket.connected) {
+              console.log('Sending playerMove event:', {
+                position: validatedPosition,
+                socketId: socket.id,
+                connected: socket.connected,
+                distance: { dx, dz },
+                timeSinceLastSend: now - lastSendTime.current
+              });
+              
+              socket.emit('playerMove', validatedPosition);
+              
+              // Update last sent position and time with validated coordinates
+              lastSentPosition.current = { ...validatedPosition };
+              lastSendTime.current = now;
+            } else {
+              // If socket isn't connected despite our state thinking it is, update state
+              if (isConnected && (!socket || !socket.connected)) {
+                console.warn('Socket not connected despite state saying it is, updating isConnected');
+                setIsConnected(false);
+              }
+              console.warn('Could not send movement - socket is null or disconnected');
+            }
+          } catch (error) {
+            console.error('Error sending position update:', error);
           }
-          
-          // Update last sent position and time with validated coordinates
-          lastSentPosition.current = { ...validatedPosition };
-          lastSendTime.current = now;
+        } else {
+          console.log('Position change too small, not sending update', {
+            dx, dz,
+            minChangeRequired: 0.01
+          });
         }
-        
-        // Reset movement flag
-        movementChanged.current = false;
       }
+      
+      // Reset movement flag
+      movementChanged.current = false;
     };
     
     // Add event listeners
@@ -1286,6 +1446,20 @@ const GameCanvas: React.FC = () => {
       labelRenderer.render(scene, camera);
     };
     animate();
+    
+    // Just before the animate function, add a diagnostic console log to regularly check player tracking
+    setInterval(() => {
+      // Get current socket reference
+      getSocket().then(currentSocket => {
+        console.log('PERIODIC PLAYER TRACKING CHECK:', {
+          connectedToSocket: !!currentSocket?.connected,
+          socketId: currentSocket?.id,
+          trackedPlayers: Array.from(playersRef.current.keys()),
+          trackedPlayersCount: playersRef.current.size,
+          ownPlayerId: currentSocket?.id
+        });
+      });
+    }, 10000); // Check every 10 seconds
     
     // Clean up on unmount
     return () => {
@@ -1422,6 +1596,31 @@ const GameCanvas: React.FC = () => {
         {currentZone}
       </div>
 
+      {/* Connection status indicator */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        left: '10px',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '5px 10px',
+        backgroundColor: isConnected ? 'rgba(0, 128, 0, 0.5)' : 'rgba(255, 0, 0, 0.5)',
+        color: 'white',
+        borderRadius: '5px',
+        fontFamily: 'sans-serif',
+        fontSize: '12px',
+        zIndex: 100
+      }}>
+        <div style={{
+          width: '8px',
+          height: '8px',
+          borderRadius: '50%',
+          backgroundColor: isConnected ? '#0f0' : '#f00',
+          marginRight: '5px'
+        }}></div>
+        {isConnected ? 'Connected' : 'Disconnected'}
+      </div>
+
       {/* Sound toggle button */}
       <button
         onClick={() => setSoundEnabled(!soundEnabled)}
@@ -1441,6 +1640,33 @@ const GameCanvas: React.FC = () => {
       >
         {soundEnabled ? '🔊 Sound On' : '🔇 Sound Off'}
       </button>
+      
+      {/* Reconnect button */}
+      {!isConnected && (
+        <button
+          onClick={() => {
+            console.log('Manual reconnect requested');
+            initializeSocket().then(() => {
+              console.log('Manual reconnect attempt completed');
+            });
+          }}
+          style={{
+            position: 'absolute',
+            top: '40px',
+            left: '10px',
+            backgroundColor: 'rgba(0, 0, 255, 0.5)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            padding: '5px 10px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            zIndex: 100
+          }}
+        >
+          Reconnect
+        </button>
+      )}
       
       {/* Ghost cleanup button */}
       <button
