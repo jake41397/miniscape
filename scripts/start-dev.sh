@@ -86,7 +86,7 @@ pm2 start npm --name miniscape-dev-frontend --watch --ignore-watch="node_modules
 
 echo "Starting development backend with file watching enabled..."
 cd ../backend
-pm2 start npm --name miniscape-dev-backend --watch --ignore-watch="node_modules dist .git .vscode" --watch-delay=1000 -- run dev -- --port 4001
+pm2 start npm --name miniscape-dev-backend --watch --ignore-watch="node_modules dist .git .vscode logs" --watch-delay=1000 -- run dev -- --port 4001
 
 cd ..
 

@@ -598,5 +598,3 @@ const Home: NextPage = () => {
 };
 
 export default Home;
-
-// Test comment to verify hot reloading is working - added on March 23, 2025
