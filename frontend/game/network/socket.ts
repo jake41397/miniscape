@@ -8,7 +8,13 @@ export interface ServerToClientEvents {
   playerJoined: (player: Player) => void;
   playerLeft: (playerId: string) => void;
   playerMoved: (player: { id: string, x: number, y: number, z: number }) => void;
-  chatMessage: (message: { name: string, text: string }) => void;
+  chatMessage: (message: { 
+    name: string, 
+    text: string,
+    playerId: string,
+    timestamp: number,
+    sender?: string // For backward compatibility
+  }) => void;
   inventoryUpdate: (inventory: Item[]) => void;
   itemDropped: (drop: { dropId: string, itemType: string, x: number, y: number, z: number }) => void;
   itemRemoved: (dropId: string) => void;

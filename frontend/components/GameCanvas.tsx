@@ -79,13 +79,16 @@ const GameCanvas: React.FC = () => {
   const [soundEnabled, setSoundEnabled] = useState(true);
   
   // Create a ref to store the createNameLabel function
-  const createNameLabelRef = useRef<((name: string, mesh: THREE.Mesh) => void) | null>(null);
+  const createNameLabelRef = useRef<((name: string, mesh: THREE.Mesh) => CSS2DObject) | null>(null);
   
   // Add a ref to track all name labels in the scene for proper cleanup
   const nameLabelsRef = useRef<Map<string, CSS2DObject>>(new Map());
   
   // Add state to track if cleanup is in progress
   const [isCleaningUp, setIsCleaningUp] = useState(false);
+  
+  // Game references
+  const chatBubblesRef = useRef<Map<string, { object: CSS2DObject, expiry: number }>>(new Map());
   
   useEffect(() => {
     // Init socket on component mount
@@ -901,6 +904,30 @@ const GameCanvas: React.FC = () => {
         }
       });
       
+      // Listen for chat messages
+      socket.on('chatMessage', (message: { 
+        name: string; 
+        text: string; 
+        playerId: string; 
+        timestamp: number;
+      }) => {
+        console.log('Chat message received for bubble creation:', message);
+        
+        // If this is our own message, add a chat bubble above our player
+        if (message.playerId === socket.id && playerRef.current) {
+          createChatBubble(message.playerId, message.text, playerRef.current);
+        } 
+        // If it's another player's message, find their mesh and add a bubble
+        else if (message.playerId && playersRef.current.has(message.playerId)) {
+          const playerMesh = playersRef.current.get(message.playerId);
+          if (playerMesh) {
+            createChatBubble(message.playerId, message.text, playerMesh);
+          }
+        }
+        
+        // Sound is now handled exclusively by ChatPanel component
+      });
+      
       // Add a function to perform thorough player mesh cleanup to prevent duplicates
       const cleanupPlayerMeshes = () => {
         console.log('Running aggressive player mesh cleanup');
@@ -1098,6 +1125,11 @@ const GameCanvas: React.FC = () => {
         }
       }
     };
+    
+    // Add event listeners for keyboard and mouse
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    renderer.domElement.addEventListener('click', handleMouseClick);
     
     // Function to handle resource gathering
     const gatherResource = async (resourceId: string) => {
@@ -1415,10 +1447,62 @@ const GameCanvas: React.FC = () => {
       movementChanged.current = false;
     };
     
-    // Add event listeners
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    renderer.domElement.addEventListener('click', handleMouseClick);
+    // Create chat bubble above player
+    const createChatBubble = (playerId: string, message: string, mesh: THREE.Mesh) => {
+      // Remove any existing chat bubble for this player
+      if (chatBubblesRef.current.has(playerId)) {
+        const existingBubble = chatBubblesRef.current.get(playerId);
+        if (existingBubble && existingBubble.object) {
+          // Remove from parent if it has one
+          if (existingBubble.object.parent) {
+            existingBubble.object.parent.remove(existingBubble.object);
+          }
+          // Also remove from scene directly to be sure
+          scene.remove(existingBubble.object);
+        }
+        // Remove from tracking map
+        chatBubblesRef.current.delete(playerId);
+      }
+      
+      // Create bubble div
+      const bubbleDiv = document.createElement('div');
+      bubbleDiv.className = 'chat-bubble';
+      bubbleDiv.textContent = message;
+      bubbleDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+      bubbleDiv.style.color = 'white';
+      bubbleDiv.style.padding = '5px 10px';
+      bubbleDiv.style.borderRadius = '10px';
+      bubbleDiv.style.fontSize = '12px';
+      bubbleDiv.style.fontFamily = 'Arial, sans-serif';
+      bubbleDiv.style.maxWidth = '150px';
+      bubbleDiv.style.textAlign = 'center';
+      bubbleDiv.style.wordWrap = 'break-word';
+      bubbleDiv.style.userSelect = 'none';
+      bubbleDiv.style.pointerEvents = 'none'; // Make sure bubbles don't interfere with clicks
+      
+      // Create the bubble object
+      const chatBubble = new CSS2DObject(bubbleDiv);
+      chatBubble.position.set(0, 3.2, 0); // Position above the player name
+      chatBubble.userData.bubbleType = 'chatBubble';
+      chatBubble.userData.forPlayer = playerId;
+      
+      // Add to mesh
+      mesh.add(chatBubble);
+      
+      // Store in our ref with expiry time (10 seconds from now)
+      const expiryTime = Date.now() + 10000; // 10 seconds
+      chatBubblesRef.current.set(playerId, { 
+        object: chatBubble, 
+        expiry: expiryTime 
+      });
+      
+      console.log(`Created chat bubble for player ${playerId}, expires at ${new Date(expiryTime).toLocaleTimeString()}`);
+      
+      return chatBubble;
+    };
+    
+    // Store createChatBubble in a ref for use in other effects
+    const createChatBubbleRef = { current: createChatBubble };
     
     // Animation loop
     const animate = () => {
@@ -1440,6 +1524,28 @@ const GameCanvas: React.FC = () => {
       
       // Animate dropped items
       updateDroppedItems(worldItemsRef.current, clockRef.current.getDelta());
+      
+      // Check for expired chat bubbles
+      const now = Date.now();
+      const expiredBubbles: string[] = [];
+      
+      chatBubblesRef.current.forEach((bubble, playerId) => {
+        if (now > bubble.expiry) {
+          expiredBubbles.push(playerId);
+        }
+      });
+      
+      // Remove expired bubbles
+      expiredBubbles.forEach(playerId => {
+        const bubble = chatBubblesRef.current.get(playerId);
+        if (bubble && bubble.object) {
+          if (bubble.object.parent) {
+            bubble.object.parent.remove(bubble.object);
+          }
+          scene.remove(bubble.object);
+        }
+        chatBubblesRef.current.delete(playerId);
+      });
       
       // Render scene and labels
       renderer.render(scene, camera);
@@ -1478,6 +1584,7 @@ const GameCanvas: React.FC = () => {
           socket.off('playerMoved');
           socket.off('itemDropped');
           socket.off('itemRemoved');
+          socket.off('chatMessage');
         }
       };
       

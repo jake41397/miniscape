@@ -420,9 +420,14 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     // Handle chat messages
     socket.on('chat', (text: string) => {
       const playerName = players[socket.id]?.name || 'Unknown';
-      io.emit('chat', {
+      // Instead of 'chat', emit 'chatMessage' to match frontend expectations
+      // Add a timestamp to help with message expiration
+      io.emit('chatMessage', {
         sender: playerName,
-        text: text
+        name: playerName, // For compatibility
+        text: text,
+        playerId: socket.id,
+        timestamp: Date.now()
       });
     });
     
