@@ -69,8 +69,9 @@ export const verifySocketToken = async (socket: ExtendedSocket, next: (err?: Err
     }
     
     if (!token) {
-      logger.error('No authentication token provided for socket', null, { socketId: socket.id });
-      return next(new Error('Authentication error: No token provided'));
+      // Allow connection without authentication
+      logger.info('No authentication token provided for socket - allowing as guest', { socketId: socket.id });
+      return next();
     }
     
     // Verify the token with Supabase
@@ -78,7 +79,9 @@ export const verifySocketToken = async (socket: ExtendedSocket, next: (err?: Err
     
     if (error || !data.user) {
       logger.error('Invalid token for socket', error instanceof Error ? error : null, { socketId: socket.id });
-      return next(new Error('Authentication error: Invalid token'));
+      // Still allow connection without authentication if token is invalid
+      logger.info('Invalid token - allowing as guest', { socketId: socket.id });
+      return next();
     }
     
     // Attach user to socket
@@ -87,6 +90,8 @@ export const verifySocketToken = async (socket: ExtendedSocket, next: (err?: Err
     next();
   } catch (error) {
     logger.error('Socket authentication error', error instanceof Error ? error : new Error('Unknown error'));
-    next(new Error('Authentication failed'));
+    // Allow connection despite authentication error
+    logger.info('Auth error - allowing as guest', { socketId: socket.id });
+    next();
   }
 }; 

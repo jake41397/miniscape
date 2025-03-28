@@ -120,6 +120,7 @@ const GameCanvas: React.FC = () => {
   // Add settings state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHorizontalInverted, setIsHorizontalInverted] = useState(false);
+  const [displayName, setDisplayName] = useState('');
   const isHorizontalInvertedRef = useRef(false);
   
   // Create a ref to store the createNameLabel function
@@ -152,6 +153,24 @@ const GameCanvas: React.FC = () => {
   
   // Create a ref for the Chat component with the proper type
   const chatRef = useRef<ChatRefHandle>(null);
+  
+  // Add effect to initialize display name
+  useEffect(() => {
+    if (playerName) {
+      setDisplayName(playerName);
+    }
+  }, [playerName]);
+  
+  // Add function to handle display name change
+  const handleDisplayNameChange = async () => {
+    if (!displayName.trim()) return;
+    
+    const socket = await getSocket();
+    if (socket) {
+      socket.emit('updateDisplayName', { name: displayName.trim() });
+      setPlayerName(displayName.trim());
+    }
+  };
   
   // Keep inversion setting in sync with ref
   useEffect(() => {
@@ -1246,6 +1265,42 @@ const GameCanvas: React.FC = () => {
         }}>
           <div style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #555', paddingBottom: '5px' }}>
             Game Settings
+          </div>
+          
+          <div style={{ marginBottom: '15px' }}>
+            <label htmlFor="displayName" style={{ display: 'block', marginBottom: '5px' }}>
+              Display Name
+            </label>
+            <div style={{ display: 'flex', gap: '5px' }}>
+              <input
+                id="displayName"
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                style={{
+                  flex: 1,
+                  padding: '5px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  borderRadius: '3px',
+                  color: 'white'
+                }}
+                placeholder="Enter display name"
+              />
+              <button
+                onClick={handleDisplayNameChange}
+                style={{
+                  padding: '5px 10px',
+                  backgroundColor: '#4CAF50',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '3px',
+                  cursor: 'pointer'
+                }}
+              >
+                Save
+              </button>
+            </div>
           </div>
           
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>

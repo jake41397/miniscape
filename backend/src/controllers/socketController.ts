@@ -132,80 +132,52 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
   console.log(`New connection: ${socket.id}`);
   
   try {
-    // Verify we have a valid user
-    if (!socket.user || !socket.user.id) {
-      console.error(`Socket ${socket.id} has no valid user object`);
-      socket.disconnect();
-      return;
-    }
+    let playerData;
+    let profile;
     
-    console.log(`Socket ${socket.id} authenticated as user ${socket.user.id}`);
+    // Generate a session ID for this connection
+    const sessionId = socket.id;
     
-    // Check if this user is already connected with a different socket
-    const existingSocketId = userIdToSocketId[socket.user.id];
-    if (existingSocketId && players[existingSocketId]) {
-      console.log(`User ${socket.user.id} reconnected. Old socket: ${existingSocketId}, New socket: ${socket.id}`);
-      
-      // Save the player data from the old connection
-      const existingPlayer = players[existingSocketId];
-      
-      // Tell ALL clients to remove the old player instance first
-      io.emit('playerLeft', existingSocketId);
-      
-      // Remove the old socket association
-      delete players[existingSocketId];
-    }
-    
-    // Update the user ID to socket ID mapping
-    userIdToSocketId[socket.user.id] = socket.id;
-    
-    // Load player data from database
-    let { data: playerData, error: playerError } = await supabase
-      .from('player_data')
+    // Try to load existing temporary player data
+    let { data: tempData, error: tempError } = await supabase
+      .from('temp_player_data')
       .select('*')
-      .eq('user_id', socket.user.id)
+      .eq('session_id', sessionId)
       .single();
       
-    // Handle case where player data doesn't exist
-    if (playerError && playerError.code === 'PGRST116') {
-      console.log(`No player data found for user ${socket.user.id}, creating default data`);
-      
-      // Create default player data
-      const defaultPlayerData = {
-        user_id: socket.user.id,
+    if (tempError && tempError.code === 'PGRST116') {
+      // Create new temporary player data
+      const defaultTempData = {
+        session_id: sessionId,
+        username: `Guest-${socket.id.substring(0, 4)}`,
         x: 0,
         y: 1,
         z: 0,
-        inventory: JSON.stringify([])
+        inventory: '[]'
       };
       
       try {
-        const { data: newPlayerData, error: createError } = await supabase
-          .from('player_data')
-          .insert(defaultPlayerData)
+        const { data: newTempData, error: createError } = await supabase
+          .from('temp_player_data')
+          .insert(defaultTempData)
           .select()
           .single();
         
         if (createError) {
-          console.error(`Failed to create player data for user ${socket.user.id}:`, createError);
-          // Continue with in-memory data instead of disconnecting
-          console.log('Using in-memory player data as fallback');
-          playerData = defaultPlayerData;
+          console.error(`Failed to create temp player data for session ${sessionId}:`, createError);
+          tempData = defaultTempData;
         } else {
-          playerData = newPlayerData;
-          console.log(`Created default player data for user ${socket.user.id}`);
+          tempData = newTempData;
         }
       } catch (error) {
-        console.error(`Exception creating player data for user ${socket.user.id}:`, error instanceof Error ? error : new Error(String(error)));
-        // Use default data as fallback
-        playerData = defaultPlayerData;
+        console.error(`Exception creating temp player data for session ${sessionId}:`, error);
+        tempData = defaultTempData;
       }
-    } else if (playerError) {
-      console.error(`Error loading player data for ${socket.user.id}:`, playerError);
-      // Use default data as fallback instead of disconnecting
-      console.log('Using in-memory player data as fallback due to error');
-      playerData = {
-        user_id: socket.user.id,
+    } else if (tempError) {
+      console.error(`Error loading temp player data for session ${sessionId}:`, tempError);
+      tempData = {
+        session_id: sessionId,
+        username: `Guest-${socket.id.substring(0, 4)}`,
         x: 0,
         y: 1,
         z: 0,
@@ -213,68 +185,28 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       };
     }
     
-    // Get user profile
-    let { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('user_id', socket.user.id)
-      .single();
-      
-    // Handle case where profile doesn't exist
-    if (profileError && profileError.code === 'PGRST116') {
-      console.log(`No profile found for user ${socket.user.id}, creating default profile`);
-      
-      // Create a default profile
-      const defaultUsername = `Player-${socket.id.substring(0, 4)}`;
-      const defaultProfile = {
-        user_id: socket.user.id,
-        username: defaultUsername,
-        created_at: new Date().toISOString()
-      };
-      
-      try {
-        const { data: newProfile, error: createError } = await supabase
-          .from('profiles')
-          .insert(defaultProfile)
-          .select()
-          .single();
-        
-        if (createError) {
-          console.error(`Failed to create profile for user ${socket.user.id}:`, createError);
-          // Continue with in-memory profile instead of disconnecting
-          console.log('Using in-memory profile as fallback');
-          profile = defaultProfile;
-        } else {
-          profile = newProfile;
-          console.log(`Created default profile for user ${socket.user.id} with username ${defaultUsername}`);
-        }
-      } catch (error) {
-        console.error(`Exception creating profile for user ${socket.user.id}:`, error instanceof Error ? error : new Error(String(error)));
-        // Use default profile as fallback
-        profile = defaultProfile;
-      }
-    } else if (profileError) {
-      console.error(`Error loading profile for ${socket.user.id}:`, profileError);
-      // Use a default profile as fallback instead of disconnecting
-      console.log('Using in-memory profile as fallback due to error');
-      profile = {
-        user_id: socket.user.id,
-        username: `Player-${socket.id.substring(0, 4)}`
-      };
-    }
+    // Convert temp data to player data format
+    playerData = {
+      user_id: sessionId,
+      x: tempData.x,
+      y: tempData.y,
+      z: tempData.z,
+      inventory: tempData.inventory
+    };
+    
+    profile = {
+      user_id: sessionId,
+      username: tempData.username
+    };
     
     // Create player object
     const newPlayer: Player = {
       id: socket.id,
-      userId: socket.user.id,
+      userId: sessionId,
       name: profile?.username || `Player-${socket.id.substring(0, 4)}`,
-      
-      // Only use default (0,0,0) if no position exists or if ALL values are null/undefined
-      // This prevents resetting to origin on slight DB errors
       x: playerData?.x ?? 0,
       y: playerData?.y ?? 1,
       z: playerData?.z ?? 0,
-      
       inventory: JSON.parse(playerData?.inventory || '[]')
     };
     
@@ -300,7 +232,7 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     
     // Send inventory
     socket.emit('inventoryUpdate', newPlayer.inventory || []);
-    
+
     // Handle player movement
     socket.on('playerMove', async (position: PlayerPosition) => {
       // Add detailed logging
@@ -381,8 +313,6 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         }
         
         // Update position in database (throttled)
-        // We don't want to update the database on every movement event
-        // so we'll use a debounce mechanism with socket data
         const now = Date.now();
         const lastUpdate = socket.data.lastPositionUpdate || 0;
         if (now - lastUpdate > 5000) { // Update position every 5 seconds max
@@ -390,10 +320,26 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           
           try {
             if (socket.user && socket.user.id) {
+              // Update authenticated player position
               await savePlayerPosition(socket.user.id, validX, position.y, validZ);
+            } else {
+              // Update temporary player position
+              const { error: tempError } = await supabase
+                .from('temp_player_data')
+                .update({ 
+                  x: validX,
+                  y: position.y,
+                  z: validZ,
+                  last_active: new Date().toISOString()
+                })
+                .eq('session_id', socket.id);
+                
+              if (tempError) {
+                console.error(`Failed to update temp player position for session ${socket.id}:`, tempError);
+              }
             }
           } catch (error) {
-            console.error('Failed to update player position in DB:', error instanceof Error ? error : new Error(String(error)));
+            console.error('Failed to update player position:', error);
           }
         }
       }
@@ -454,6 +400,58 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           connectedSockets.map(s => s.id).join(', '));
       } catch (error) {
         console.error('Error getting socket clients:', error);
+      }
+    });
+
+    // Handle display name updates
+    socket.on('updateDisplayName', async (data: { name: string }) => {
+      const newName = data.name.trim();
+      if (!newName) {
+        console.error(`Socket ${socket.id} tried to set empty display name`);
+        return;
+      }
+
+      console.log(`Updating display name for player ${socket.id} to: ${newName}`);
+
+      try {
+        if (socket.user && socket.user.id) {
+          // Update authenticated user's profile
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .update({ username: newName })
+            .eq('user_id', socket.user.id);
+
+          if (profileError) {
+            console.error(`Failed to update profile for user ${socket.user.id}:`, profileError);
+            return;
+          }
+        } else {
+          // Update temporary player's name
+          const { error: tempError } = await supabase
+            .from('temp_player_data')
+            .update({ 
+              username: newName,
+              last_active: new Date().toISOString()
+            })
+            .eq('session_id', socket.id);
+            
+          if (tempError) {
+            console.error(`Failed to update temp player name for session ${socket.id}:`, tempError);
+            return;
+          }
+        }
+
+        // Update the player's name in our in-memory state
+        if (players[socket.id]) {
+          players[socket.id].name = newName;
+          
+          // Broadcast the name change to all clients
+          io.emit('playerJoined', players[socket.id]);
+        }
+
+        console.log(`Successfully updated display name for player ${socket.id} to: ${newName}`);
+      } catch (error) {
+        console.error(`Error updating display name for player ${socket.id}:`, error);
       }
     });
     
@@ -638,54 +636,39 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     
     // Handle player disconnection
     socket.on('disconnect', async () => {
-      // Save player data before they disconnect
       const player = players[socket.id];
       if (player) {
         console.log(`Player ${player.name} (${socket.id}) disconnected`);
         
         try {
-          // Save player position and inventory to database
-          if (socket.user && socket.user.id) {
-            // Only save if we have a user ID
-            if (player.x !== undefined && player.y !== undefined && player.z !== undefined) {
-              savePlayerPosition(socket.user.id, player.x, player.y, player.z).catch(err => {
-                console.error('Error saving player position on disconnect:', err instanceof Error ? err : new Error(String(err)));
-              });
-              
-              savePlayerInventory(socket.user.id, player.inventory || []).catch(err => {
-                console.error('Error saving player inventory on disconnect:', err instanceof Error ? err : new Error(String(err)));
-              });
-            }
+          // Save temporary player data
+          const { error: tempError } = await supabase
+            .from('temp_player_data')
+            .update({ 
+              x: player.x,
+              y: player.y,
+              z: player.z,
+              inventory: JSON.stringify(player.inventory || []),
+              last_active: new Date().toISOString()
+            })
+            .eq('session_id', socket.id);
             
-            // Only remove the userIdToSocketId mapping if this is the current socket for this user
-            if (userIdToSocketId[socket.user.id] === socket.id) {
-              console.log(`Removing user ID ${socket.user.id} from socket ID mapping`);
-              delete userIdToSocketId[socket.user.id];
-            } else {
-              console.log(`Not removing user ID mapping because ${socket.user.id} is now connected with socket ${userIdToSocketId[socket.user.id]}`);
-            }
+          if (tempError) {
+            console.error(`Failed to save temp player data for session ${socket.id}:`, tempError);
           }
         } catch (error) {
-          console.error('Error during player disconnect save:', error instanceof Error ? error : new Error(String(error)));
+          console.error('Error during player disconnect save:', error);
         }
         
         // Remove player from our state
         delete players[socket.id];
         
-        // Let ALL clients know the player left, not just broadcast
+        // Let ALL clients know the player left
         io.emit('playerLeft', socket.id);
-        
-        // Log the disconnection
-        if (Object.keys(players).length > 0) {
-          console.log('Remaining players:', Object.keys(players).map(id => `${players[id].name} (${id})`).join(', '));
-          console.log('User ID to Socket ID mappings:', Object.entries(userIdToSocketId).map(([uid, sid]) => `${uid} -> ${sid}`).join(', '));
-        } else {
-          console.log('No players remain connected');
-        }
       }
     });
   } catch (error) {
-    console.error(`Error in handleSingleConnection for ${socket.id}:`, error instanceof Error ? error : new Error(String(error)));
+    console.error(`Error in handleSingleConnection for ${socket.id}:`, error);
     socket.disconnect();
   }
 };

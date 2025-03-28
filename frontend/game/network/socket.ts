@@ -33,6 +33,7 @@ export interface ClientToServerEvents {
   gather: (resourceId: string) => void;
   getPlayerData: (playerId: string, callback: (player: Player | null) => void) => void;
   ping: (callback: () => void) => void;
+  updateDisplayName: (data: { name: string }) => void;
 }
 
 // Create socket instance with better lifecycle management
@@ -108,28 +109,6 @@ export const initializeSocket = async () => {
   connectionState.error = null;
   
   try {
-    // Add a promise with timeout to handle auth session retrieval
-    const getSessionWithTimeout = () => {
-      return Promise.race([
-        supabase.auth.getSession(),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Auth session retrieval timed out')), 10000)  // Increased timeout
-        )
-      ]);
-    };
-    
-    // Get the session token for authentication with timeout
-    const { data } = await getSessionWithTimeout();
-    const token = data.session?.access_token;
-    
-    // Don't connect if not authenticated
-    if (!token) {
-      console.warn('No auth token available, not connecting to socket server');
-      connectionState.connecting = false;
-      connectionState.error = new Error('No auth token available');
-      return null;
-    }
-    
     // Default backend URL for fallback
     let BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
     
@@ -160,17 +139,13 @@ export const initializeSocket = async () => {
     socket = io(BACKEND_URL, {
       transports: ['websocket', 'polling'],  // Allow both WebSocket and polling for better compatibility
       path: '/socket.io',
-      auth: {
-        token
-      },
       reconnectionAttempts: 15,       // Increased from 8 to 15
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,     // Cap the exponential backoff
       timeout: 20000,                 // Increased from 15s to 20s for slower networks
       forceNew: true,
-      extraHeaders: {
-        'Authorization': `Bearer ${token}`
-      }
+      // Remove auth-related options - set to empty object instead of false
+      auth: {}
     });
 
     // Enhanced logging and error handling
@@ -258,63 +233,23 @@ export const initializeSocket = async () => {
       connectionState.connected = false;
       connectionState.error = err;
       
-      // Handle authentication errors specifically
-      if (err.message.includes('Authentication') || err.message.includes('auth') || err.message.includes('401')) {
-        console.log('Authentication error detected, attempting token refresh');
+      // For non-auth errors, try to reconnect after delay
+      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        const delay = Math.min(1000 * (reconnectAttempts + 1), 10000); // Increasing delay with backoff
+        console.log(`Will attempt to reconnect in ${delay/1000}s (attempt ${reconnectAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
         
-        // Clean up the failed socket
-        if (socket) {
-          socket.removeAllListeners();
-          socket.disconnect();
-          socket = null;
-        }
-        
-        // Try to refresh the auth token with timeout
-        Promise.race([
-          supabase.auth.refreshSession(),
-          new Promise<never>((_, reject) => 
-            setTimeout(() => reject(new Error('Token refresh timed out')), 10000)  // Increased from 8s to 10s
-          )
-        ]).then((result: any) => {
-          const { data, error } = result;
-          if (error) {
-            console.error('Token refresh failed:', error.message);
-            return;
-          }
-          
-          if (data?.session) {
-            console.log('Token refreshed successfully, reconnecting in 2s');
-            localStorage.setItem('token_refreshed_at', Date.now().toString());
-            
-            // Delay reconnect attempt to avoid race conditions
-            setTimeout(() => {
-              reconnectAttempts++;
-              initializeSocket();
-            }, 2000);
-          }
-        }).catch(error => {
-          console.error('Token refresh error:', error.message);
-          connectionState.error = error;
-        });
+        reconnectTimer = setTimeout(() => {
+          reconnectAttempts++;
+          initializeSocket();
+        }, delay);
       } else {
-        // For non-auth errors, try to reconnect after delay
-        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-          const delay = Math.min(1000 * (reconnectAttempts + 1), 10000); // Increasing delay with backoff
-          console.log(`Will attempt to reconnect in ${delay/1000}s (attempt ${reconnectAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
-          
-          reconnectTimer = setTimeout(() => {
-            reconnectAttempts++;
-            initializeSocket();
-          }, delay);
-        } else {
-          console.error(`Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
-          
-          // Broadcast failure event
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('socket_failed', { 
-              detail: { error: err.message, attempts: reconnectAttempts }
-            }));
-          }
+        console.error(`Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
+        
+        // Broadcast failure event
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('socket_failed', { 
+            detail: { error: err.message, attempts: reconnectAttempts }
+          }));
         }
       }
     });

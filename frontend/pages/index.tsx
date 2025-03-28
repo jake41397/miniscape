@@ -1,133 +1,94 @@
-import type { NextPage } from 'next';
+import { useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
-import { useEffect, useState, useRef } from 'react';
-import dynamic from 'next/dynamic';
 import { useRouter } from 'next/router';
+import dynamic from 'next/dynamic';
 import { useAuth } from '../contexts/AuthContext';
 import { setupSocketCleanup } from '../game/network/socket';
 
+// Dynamic imports to avoid SSR issues
+const DynamicDebugButton = dynamic(() => import('../components/DebugButton'), { 
+  ssr: false 
+});
+const DynamicSessionStatus = dynamic(() => import('../components/SessionStatus'), { 
+  ssr: false 
+});
+const DynamicGameCanvas = dynamic(() => import('../components/GameCanvas'), { 
+  ssr: false,
+  loading: () => <div>Loading game engine...</div>
+});
+
 // Debug logger
-const debugLog = (message: string, data?: any) => {
-  const timestamp = new Date().toISOString();
-  console.log(`[DEBUG][${timestamp}][Home] ${message}`, data || '');
-  
-  // Store debug logs in localStorage for persistence across refreshes
-  try {
-    const logs = JSON.parse(localStorage.getItem('miniscape_debug_logs') || '[]');
-    logs.push({ timestamp, page: 'home', message, data: data ? JSON.stringify(data) : undefined });
-    // Keep only the most recent 100 logs
-    if (logs.length > 100) logs.shift();
-    localStorage.setItem('miniscape_debug_logs', JSON.stringify(logs));
-  } catch (e) {
-    console.error('Error storing debug logs:', e);
-  }
-};
-
-// Dynamically import the GameCanvas component with no SSR
-// This is necessary since Three.js uses browser APIs
-const DynamicGameCanvas = dynamic(() => import('../components/GameCanvas'), {
-  ssr: false,
-  loading: () => (
-    <div style={{ 
-      display: 'flex', 
-      justifyContent: 'center', 
-      alignItems: 'center', 
-      width: '100%', 
-      height: '100%', 
-      fontSize: '24px',
-      fontWeight: 'bold' 
-    }}>
-      Loading game engine...
-    </div>
-  ),
-});
-
-// Dynamically import the DebugButton component with no SSR
-const DynamicDebugButton = dynamic(() => import('../components/DebugButton'), {
-  ssr: false,
-});
-
-// Dynamically import the SessionStatus component with no SSR
-const DynamicSessionStatus = dynamic(() => import('../components/SessionStatus'), {
-  ssr: false,
-});
-
-// Dynamically import the DebugViewLogs component with no SSR
-const DynamicDebugViewLogs = dynamic(() => import('../components/DebugViewLogs'), {
-  ssr: false,
-});
-
-const Home: NextPage = () => {
-  const [isLoading, setIsLoading] = useState(true);
-  const [socketError, setSocketError] = useState<string | null>(null);
-  const initAttempted = useRef(false);
-  const router = useRouter();
-  const { session, loading: authLoading } = useAuth();
-  const redirectAttempted = useRef(false);
-  const lastAuthCheck = useRef(0);
-  const redirectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+const useDebugLogger = () => {
   const [debugInfo, setDebugInfo] = useState<string[]>([]);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
-  const socketRetryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
-  // Add debug info handler
-  const addDebugInfo = (info: string, data?: any) => {
-    debugLog(info, data);
-    setDebugInfo(prev => [...prev, `${new Date().toISOString().substr(11, 8)} - ${info}`]);
-  };
-  
-  // Log component mounting
-  useEffect(() => {
-    addDebugInfo('Home component mounted');
+  // Simple function to add timestamped debug lines
+  const addDebugInfo = (message: string, data?: any) => {
+    const now = new Date();
+    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
     
-    // Show debug panel when in dev or if query param is present
-    if (process.env.NODE_ENV === 'development' || router.query.debug === 'true') {
-      setShowDebugPanel(true);
+    let debugMessage = `${timeString} - ${message}`;
+    if (data) {
+      try {
+        const dataString = typeof data === 'string' ? data : JSON.stringify(data);
+        debugMessage += ` ${dataString}`;
+      } catch (e) {
+        debugMessage += ' [data cannot be stringified]';
+      }
     }
     
-    // Check URL for issues
-    addDebugInfo(`Current URL: ${window.location.href}`);
-    if (window.location.hash) {
-      addDebugInfo(`Hash detected in URL: ${window.location.hash}`);
-      // Remove hash
-      history.replaceState(null, '', window.location.pathname);
-      addDebugInfo('Hash removed from URL');
+    setDebugInfo(prev => [...prev, debugMessage]);
+    console.log(debugMessage);
+  };
+  
+  return { debugInfo, addDebugInfo, showDebugPanel, setShowDebugPanel };
+};
+
+// Home page component with Game Canvas
+export default function Home() {
+  const router = useRouter();
+  const { session, loading: authLoading } = useAuth();
+  const [isLoading, setIsLoading] = useState(true);
+  const [socketError, setSocketError] = useState<string | null>(null);
+  const { debugInfo, addDebugInfo, showDebugPanel, setShowDebugPanel } = useDebugLogger();
+  
+  // Refs to prevent duplicate operations
+  const lastAuthCheck = useRef(0);
+  const redirectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const initAttempted = useRef(false);
+  const socketRetryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Log important lifecycle events
+  useEffect(() => {
+    addDebugInfo('Home component mounted');
+    addDebugInfo(`Current URL: ${typeof window !== 'undefined' ? window.location.href : 'SSR'}`);
+    
+    // Set up socket cleanup when component unmounts
+    addDebugInfo('Setting up socket cleanup');
+    const cleanup = setupSocketCleanup();
+    
+    // Read debug flags from URL or localStorage
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const debugParam = urlParams.get('debug');
+      
+      if (debugParam === 'true' || localStorage.getItem('show_debug') === 'true') {
+        setShowDebugPanel(true);
+        addDebugInfo('Debug panel enabled via URL or localStorage');
+      }
     }
     
     return () => {
       addDebugInfo('Home component unmounting');
+      cleanup();
     };
   }, []);
   
-  // Dump auth state on changes
+  // Monitor auth state changes
   useEffect(() => {
     addDebugInfo(`Auth state changed - session: ${!!session}, loading: ${authLoading}`);
-    if (session) {
-      // Log limited session info for debugging
-      const sessionDetails = { 
-        userId: session.user?.id,
-        email: session.user?.email,
-        expiresAt: new Date(session.expires_at! * 1000).toISOString()
-      };
-      addDebugInfo('Session details:', sessionDetails);
-    }
   }, [session, authLoading]);
-
-  // Clean up any socket connections when component unmounts
-  useEffect(() => {
-    // Setup socket cleanup for navigation
-    addDebugInfo('Setting up socket cleanup');
-    setupSocketCleanup();
-    
-    return () => {
-      // Clear any pending redirects
-      if (redirectTimeoutRef.current) {
-        addDebugInfo('Cleaning up redirect timeout on unmount');
-        clearTimeout(redirectTimeoutRef.current);
-      }
-    };
-  }, []);
-
+  
   // Handle authentication check and redirection
   useEffect(() => {
     // Avoid rapid authentication checks (prevent loops)
@@ -140,17 +101,10 @@ const Home: NextPage = () => {
 
     // Set a maximum loading time to avoid getting stuck
     const maxLoadingTime = setTimeout(() => {
-      // If we're still loading after 15 seconds, force a navigation to signin page
+      // If we're still loading after 15 seconds, continue anyway
       if (authLoading) {
-        addDebugInfo('Auth loading timeout reached (15s), forcing navigation to signin');
-        try {
-          localStorage.setItem('redirect_to_signin_at', Date.now().toString());
-          localStorage.setItem('auth_timeout', 'true');
-          window.location.href = '/auth/signin';
-        } catch (err) {
-          addDebugInfo(`Redirect error: ${err instanceof Error ? err.message : 'Unknown error'}`);
-          window.location.replace('/auth/signin');
-        }
+        addDebugInfo('Auth loading timeout reached (15s), continuing to game');
+        setIsLoading(false);
       }
     }, 15000);
 
@@ -161,35 +115,19 @@ const Home: NextPage = () => {
       redirectTimeoutRef.current = null;
     }
 
-    // Only check auth after auth state has loaded and we haven't already tried to redirect
+    // Only check auth after auth state has loaded
     if (!authLoading) {
       // Clear the max loading timeout since auth is done loading
       clearTimeout(maxLoadingTime);
       
-      addDebugInfo(`Auth loaded, checking session (exists: ${!!session})`);
+      addDebugInfo(`Auth loaded, proceeding to game`);
       
-      // If no session, redirect to login immediately with direct navigation
-      if (!session && !redirectAttempted.current) {
-        redirectAttempted.current = true;
-        addDebugInfo('No valid session, executing direct navigation to login...');
-        
-        try {
-          // Store redirect attempt time
-          localStorage.setItem('redirect_to_signin_at', Date.now().toString());
-          
-          // Use window.location.href for more reliable direct navigation in production
-          window.location.href = '/auth/signin';
-        } catch (err) {
-          addDebugInfo(`Redirect error: ${err instanceof Error ? err.message : 'Unknown error'}`);
-          // As a backup, try a forced reload to the signin page
-          window.location.replace('/auth/signin');
-        }
-      } else if (session) {
-        addDebugInfo('Valid session found, continuing to game initialization');
-        // Clear any stored redirect intentions
-        localStorage.removeItem('redirect_to_signin_at');
-        localStorage.removeItem('auth_timeout');
-      }
+      // Always allow access to the game
+      setIsLoading(false);
+      
+      // Clear any stored redirect intentions
+      localStorage.removeItem('redirect_to_signin_at');
+      localStorage.removeItem('auth_timeout');
     }
     
     // Add a safety cleanup to ensure we don't get stuck
@@ -263,30 +201,14 @@ const Home: NextPage = () => {
       addDebugInfo(`Failed to initialize socket: ${errorMessage}`);
       setSocketError(errorMessage);
       setIsLoading(false);
-      
-      // Set a timer to retry in 5 seconds
-      const retryTimeoutId = setTimeout(() => {
-        addDebugInfo('Attempting socket recovery after error');
-        initializeSocket();
-      }, 5000);
-      
-      // Store the timeout ID so we can clear it if needed
-      socketRetryTimeoutRef.current = retryTimeoutId;
     }
   };
 
-  // Initialize the socket - only run this if we have a valid session
+  // Initialize the socket - run this regardless of auth state
   useEffect(() => {
-    // Skip initialization if:
-    // 1. We're still loading auth state
-    // 2. We have no session (should redirect)
+    // Skip initialization if we're still loading auth state
     if (authLoading) {
       addDebugInfo('Auth still loading, skipping socket initialization');
-      return;
-    }
-    
-    if (!session) {
-      addDebugInfo('No session, skipping socket initialization');
       return;
     }
     
@@ -309,6 +231,9 @@ const Home: NextPage = () => {
       initAttempted.current = true;
     } else {
       addDebugInfo('Socket initialization already attempted, continuing');
+      // Always proceed to game if initialization was already attempted
+      setIsLoading(false);
+      return;
     }
 
     // Initialize socket connection with a small delay
@@ -318,6 +243,7 @@ const Home: NextPage = () => {
       // Set loading to false after a reasonable time even if connection hasn't completed
       setTimeout(() => {
         setIsLoading(false);
+        addDebugInfo('Forcing game to start after timeout');
       }, 2000);
     }, 500);
 
@@ -331,312 +257,185 @@ const Home: NextPage = () => {
         socketRetryTimeoutRef.current = null;
       }
     };
-  }, [session, authLoading]);
+  }, [authLoading]);
 
-  // View debug logs button
-  const viewDebugLogs = () => {
-    try {
-      const logs = JSON.parse(localStorage.getItem('miniscape_debug_logs') || '[]');
-      console.log('--- DEBUG LOGS ---');
-      logs.forEach((log: any) => {
-        console.log(`[${log.timestamp}][${log.page}] ${log.message}`, log.data || '');
-      });
-      console.log('--- END DEBUG LOGS ---');
-      alert('Debug logs have been printed to the console');
-    } catch (e) {
-      console.error('Error displaying debug logs:', e);
-    }
+  // Override LoadingScreen component to ensure it continues to game after delay
+  const LoadingScreen = () => {
+    const [dots, setDots] = useState(".");
+    const [elapsedTime, setElapsedTime] = useState(0);
+
+    useEffect(() => {
+      const timer = setTimeout(() => {
+        setDots(dots => dots.length < 3 ? dots + "." : ".");
+      }, 500);
+      
+      // Count elapsed time
+      const elapsedTimer = setInterval(() => {
+        setElapsedTime(prev => prev + 1);
+      }, 1000);
+      
+      // Force loading to complete after 10 seconds
+      if (elapsedTime > 10) {
+        addDebugInfo('Loading timeout reached (10s), forcing game to start');
+        setIsLoading(false);
+      }
+      
+      return () => {
+        clearTimeout(timer);
+        clearInterval(elapsedTimer);
+      };
+    }, [dots, elapsedTime]);
+
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#111',
+        color: '#fff',
+        zIndex: 1000,
+        fontFamily: 'Monospace, monospace'
+      }}>
+        <h2>MiniScape</h2>
+        <div>Loading game{dots}</div>
+        <div style={{ marginTop: '20px', fontSize: '14px', opacity: 0.7 }}>
+          {elapsedTime > 5 && "Taking longer than expected... "}
+          {elapsedTime > 8 && <div><button onClick={() => setIsLoading(false)} style={{
+            padding: '8px 16px',
+            background: '#333',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            marginTop: '10px'
+          }}>Start Game Now</button></div>}
+        </div>
+      </div>
+    );
   };
 
-  // Show loading state when checking auth or initializing game
-  if (authLoading) {
-    return (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        width: '100%', 
-        height: '100%', 
-        fontSize: '24px',
-        fontWeight: 'bold',
-        flexDirection: 'column'
-      }}>
-        <div>Checking login status...</div>
-        
-        {showDebugPanel && (
-          <div style={{
-            marginTop: '20px',
-            fontSize: '12px',
-            fontFamily: 'monospace',
-            color: '#666',
-            maxHeight: '50vh',
-            overflowY: 'auto',
-            padding: '10px',
-            backgroundColor: '#f0f0f0',
-            borderRadius: '4px',
-            width: '80%',
-            maxWidth: '800px'
-          }}>
-            <div><strong>Debug Info:</strong></div>
-            {debugInfo.map((info, i) => (
-              <div key={i}>{info}</div>
-            ))}
-            
-            <button 
-              onClick={viewDebugLogs}
-              style={{
-                marginTop: '10px',
-                padding: '5px 10px',
-                backgroundColor: '#333',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              View All Logs
-            </button>
-          </div>
-        )}
-        
-        {/* Add the diagnostic button regardless of showDebugPanel */}
-        <DynamicDebugButton />
-        
-        {/* Always show SessionStatus in compact mode */}
-        <DynamicSessionStatus compact={true} />
-      </div>
-    );
-  }
-
-  // Don't render anything if we don't have a session
-  if (!session) {
-    return (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        width: '100%', 
-        height: '100%', 
-        fontSize: '24px',
-        fontWeight: 'bold',
-        flexDirection: 'column'
-      }}>
-        <div>Redirecting to login...</div>
-        
-        {showDebugPanel && (
-          <div style={{
-            marginTop: '20px',
-            fontSize: '12px',
-            fontFamily: 'monospace',
-            color: '#666',
-            maxHeight: '50vh',
-            overflowY: 'auto',
-            padding: '10px',
-            backgroundColor: '#f0f0f0',
-            borderRadius: '4px',
-            width: '80%',
-            maxWidth: '800px'
-          }}>
-            <div><strong>Debug Info:</strong></div>
-            {debugInfo.map((info, i) => (
-              <div key={i}>{info}</div>
-            ))}
-            
-            <button 
-              onClick={() => {
-                addDebugInfo('Force redirect to signin button clicked');
-                // Use direct navigation for reliability
-                window.location.href = '/auth/signin';
-              }}
-              style={{
-                marginTop: '10px',
-                padding: '5px 10px',
-                backgroundColor: '#f44336', // More visible red color
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontWeight: 'bold'
-              }}
-            >
-              Force Redirect Now
-            </button>
-          </div>
-        )}
-        
-        {/* Add the diagnostic button regardless of showDebugPanel */}
-        <DynamicDebugButton />
-        
-        {/* Always show SessionStatus in compact mode */}
-        <DynamicSessionStatus compact={true} />
-      </div>
-    );
-  }
-
+  // Main render function for the page
   return (
     <div style={{ width: '100%', height: '100%' }}>
       <Head>
-        <title>MiniScape - Browser MMO</title>
-        <meta name="description" content="A browser-based MMO inspired by RuneScape" />
+        <title>MiniScape</title>
+        <meta name="description" content="MiniScape - A Miniature Adventure" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
-      <main style={{ width: '100%', height: '100%' }}>
-        {isLoading ? (
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'center', 
-            alignItems: 'center', 
-            width: '100%', 
-            height: '100%', 
-            fontSize: '24px',
-            fontWeight: 'bold',
-            flexDirection: 'column'
-          }}>
-            <div>Game is loading...</div>
-            {socketError && (
-              <div style={{
-                color: 'red',
-                fontSize: '16px',
-                marginTop: '10px',
-                maxWidth: '500px',
-                textAlign: 'center'
-              }}>
-                Warning: {socketError}
-                <div style={{ marginTop: '10px' }}>
-                  Continuing anyway...
-                </div>
-              </div>
-            )}
-            
-            {showDebugPanel && (
-              <div style={{
-                marginTop: '20px',
-                fontSize: '12px',
-                fontFamily: 'monospace',
-                color: '#666',
-                maxHeight: '50vh',
-                overflowY: 'auto',
-                padding: '10px',
-                backgroundColor: '#f0f0f0',
-                borderRadius: '4px',
-                width: '80%',
-                maxWidth: '800px'
-              }}>
-                <div><strong>Debug Info:</strong></div>
-                {debugInfo.map((info, i) => (
-                  <div key={i}>{info}</div>
-                ))}
-                
-                <div style={{ marginTop: '10px', display: 'flex', gap: '10px' }}>
-                  <button 
-                    onClick={() => {
-                      addDebugInfo('Retry button clicked');
-                      initAttempted.current = false;
-                      setIsLoading(true);
-                      window.location.reload();
-                    }}
-                    style={{
-                      padding: '5px 10px',
-                      backgroundColor: '#333',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Retry Connection
-                  </button>
-                  
-                  <button 
-                    onClick={() => {
-                      addDebugInfo('Skip loading clicked');
-                      setIsLoading(false);
-                    }}
-                    style={{
-                      padding: '5px 10px',
-                      backgroundColor: '#444',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Skip Loading
-                  </button>
-                </div>
-              </div>
-            )}
-            
-            {/* Add the diagnostic button */}
-            <DynamicDebugButton />
-            
-            {/* Always show SessionStatus in compact mode during loading */}
-            <DynamicSessionStatus compact={true} />
+      {showDebugPanel && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            padding: '10px',
+            background: 'rgba(0, 0, 0, 0.7)',
+            color: '#fff',
+            zIndex: 1000,
+            maxHeight: '50vh',
+            overflowY: 'auto',
+            fontSize: '12px',
+            fontFamily: 'monospace'
+          }}
+        >
+          <div>
+            <strong>Debug Info:</strong>
+            <button 
+              onClick={() => setShowDebugPanel(false)}
+              style={{
+                float: 'right',
+                background: 'transparent',
+                border: '1px solid #fff',
+                color: '#fff',
+                cursor: 'pointer'
+              }}
+            >
+              Close
+            </button>
           </div>
-        ) : (
-          <>
-            <DynamicGameCanvas />
-            {showDebugPanel && (
-              <div style={{
-                position: 'fixed',
-                bottom: '10px',
-                right: '10px',
-                zIndex: 1000
-              }}>
-                <button
-                  onClick={() => {
-                    const elem = document.getElementById('debug-panel');
-                    if (elem) elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
-                  }}
-                  style={{
-                    padding: '5px 10px',
-                    backgroundColor: 'rgba(0,0,0,0.5)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Debug
-                </button>
-                <div 
-                  id="debug-panel"
-                  style={{
-                    display: 'none',
-                    marginTop: '10px',
-                    fontSize: '12px',
-                    fontFamily: 'monospace',
-                    backgroundColor: 'rgba(0,0,0,0.7)',
-                    color: '#fff',
-                    padding: '10px',
-                    borderRadius: '4px',
-                    maxHeight: '300px',
-                    overflowY: 'auto',
-                    width: '300px'
-                  }}
-                >
-                  <div><strong>Debug Info:</strong></div>
-                  {debugInfo.map((info, i) => (
-                    <div key={i} style={{fontSize: '10px'}}>{info}</div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* Always show diagnostic button in game view */}
-            <DynamicDebugButton />
-            
-            {/* Show SessionStatus in game view */}
-            <DynamicSessionStatus compact={true} />
-            
-            {/* Add logs viewer component */}
-            {showDebugPanel && <DynamicDebugViewLogs />}
-          </>
-        )}
-      </main>
+          {debugInfo.map((info, i) => (
+            <div key={i}>{info}</div>
+          ))}
+        </div>
+      )}
+
+      {socketError && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            padding: '10px',
+            background: 'rgba(255, 0, 0, 0.8)',
+            color: '#fff',
+            zIndex: 1000,
+            fontSize: '14px',
+            fontFamily: 'monospace',
+            textAlign: 'center'
+          }}
+        >
+          Socket Error: {socketError}
+          <button 
+            onClick={() => {
+              setSocketError(null);
+              initializeSocket();
+            }}
+            style={{
+              marginLeft: '10px',
+              background: '#fff',
+              color: '#f00',
+              border: 'none',
+              padding: '5px 10px',
+              cursor: 'pointer'
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {isLoading ? (
+        <LoadingScreen />
+      ) : (
+        <DynamicGameCanvas key={`game-canvas-${Date.now()}`} session={session} />
+      )}
+    
+      {/* Debug button in the corner */}
+      <div style={{
+        position: 'fixed',
+        bottom: '10px',
+        left: '10px',
+        zIndex: 1000,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '5px'
+      }}>
+        <button 
+          onClick={() => setShowDebugPanel(!showDebugPanel)}
+          style={{
+            background: 'rgba(0, 0, 0, 0.7)',
+            color: '#fff',
+            border: 'none',
+            padding: '5px 10px',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '12px'
+          }}
+        >
+          {showDebugPanel ? 'Hide Debug' : 'Show Debug'}
+        </button>
+        
+        <DynamicSessionStatus compact={true} />
+      </div>
     </div>
   );
-};
-
-export default Home;
+}

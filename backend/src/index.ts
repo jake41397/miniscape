@@ -123,14 +123,14 @@ initializeGameState()
 io.on('connection', (socket: ExtendedSocket) => {
   logger.info('New socket connection', { socketId: socket.id });
   
-  // Verify that socket has a user attached after authentication
-  if (!socket.user) {
-    logger.error('Socket connected but has no user object', null, { socketId: socket.id });
-    socket.disconnect();
-    return;
+  // Check if socket has a user (authenticated) or not (guest)
+  if (socket.user) {
+    logger.info('Socket authenticated', { socketId: socket.id, userId: socket.user.id });
+  } else {
+    logger.info('Socket connected as guest', { socketId: socket.id });
   }
   
-  logger.info('Socket authenticated', { socketId: socket.id, userId: socket.user.id });
+  // Handle socket connection with or without authentication
   setupSocketHandlers(io, socket);
 });
 
