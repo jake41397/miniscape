@@ -8,6 +8,7 @@ export interface ServerToClientEvents {
   playerJoined: (player: Player) => void;
   playerLeft: (playerId: string) => void;
   playerMoved: (player: { id: string, x: number, y: number, z: number }) => void;
+  playerCount: (data: { count: number }) => void;
   chatMessage: (message: { 
     name: string, 
     text: string,

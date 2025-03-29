@@ -138,6 +138,16 @@ io.on('connection', (socket: ExtendedSocket) => {
 server.listen(PORT, () => {
   logger.info(`MiniScape backend server running on port ${PORT}`);
   logger.info(`Socket.IO server available at path /socket.io`);
+  
+  // Broadcast initial player count in case there are any connected players
+  setTimeout(() => {
+    // Import broadcastPlayerCount function from socketController
+    const { broadcastPlayerCount } = require('./controllers/socketController');
+    if (typeof broadcastPlayerCount === 'function') {
+      broadcastPlayerCount(io);
+      logger.info('Initial player count broadcast sent');
+    }
+  }, 5000); // Wait 5 seconds to ensure everything is initialized
 });
 
 // Handle graceful shutdown

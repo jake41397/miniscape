@@ -95,6 +95,8 @@ const GameCanvas: React.FC = () => {
   const [playerName, setPlayerName] = useState<string>('');
   const [isConnected, setIsConnected] = useState(false);
   const [currentZone, setCurrentZone] = useState<string>('Lumbridge');
+  // Add player count state
+  const [playerCount, setPlayerCount] = useState<number>(0);
   
   // Store key states
   const keysPressed = useRef<Record<string, boolean>>({
@@ -213,6 +215,7 @@ const GameCanvas: React.FC = () => {
     itemManagerRef,
     sceneRef,
     setPlayerNameState: setPlayerName,
+    setPlayerCount,
   });
 
   // Sync player name from network
@@ -221,6 +224,16 @@ const GameCanvas: React.FC = () => {
       setPlayerName(networkPlayerName);
     }
   }, [networkPlayerName, playerName]);
+
+  // Sync connection status from network
+  useEffect(() => {
+    setIsConnected(networkConnected);
+  }, [networkConnected]);
+
+  // Log when player count changes
+  useEffect(() => {
+    console.log(`Player count updated: ${playerCount}`);
+  }, [playerCount]);
 
   // 6. Interaction Handling
   const { handleMouseClick } = useInteraction({
@@ -437,6 +450,11 @@ const GameCanvas: React.FC = () => {
       <InventoryPanel 
         style={{ top: "100px", right: "20px" }} 
         itemManager={itemManagerRef.current || undefined}
+      />
+
+      <ConnectionStatusIndicator 
+        isConnected={isConnected} 
+        playerCount={playerCount}
       />
     </div>
   );

@@ -90,6 +90,31 @@ const players: PlayersStore = {};
 // Add a map to track user ID to socket ID for reconnection handling
 const userIdToSocketId: Record<string, string> = {};
 
+// Add function to broadcast player count
+const broadcastPlayerCount = (io: Server) => {
+  // Count active connections from socket.io to ensure accuracy
+  const getConnectedClientsCount = (): number => {
+    try {
+      const rooms = io.sockets.adapter.rooms;
+      const sids = io.sockets.adapter.sids;
+      
+      // Count all unique socket IDs
+      const connectedCount = Array.from(sids.keys()).length;
+      console.log(`Active socket connections: ${connectedCount}`);
+      
+      return connectedCount;
+    } catch (error) {
+      console.error('Error counting connected clients:', error);
+      // Fallback to the players object count
+      return Object.keys(players).length;
+    }
+  };
+
+  const count = getConnectedClientsCount();
+  console.log(`Broadcasting player count: ${count} to all clients`);
+  io.emit('playerCount', { count });
+};
+
 // Store world items and resource nodes
 let worldItems: WorldItem[] = [];
 let resourceNodes: ResourceNode[] = [];
@@ -131,6 +156,11 @@ const setupSocketHandlers = (io: Server, socket?: ExtendedSocket): void => {
     console.log(`New connection in setupSocketHandlers: ${socket.id}`);
     handleSingleConnection(io, socket);
   });
+
+  // Set up periodic player count broadcast (every 30 seconds)
+  setInterval(() => {
+    broadcastPlayerCount(io);
+  }, 30000);
 };
 
 // Handle a single socket connection
@@ -265,6 +295,9 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     console.log(`Player ${newPlayer.name} (${socket.id}) added. Total players: ${Object.keys(players).length}`);
     console.log('Connected players:', Object.keys(players).map(id => `${players[id].name} (${id})`).join(', '));
     
+    // Broadcast the updated player count
+    broadcastPlayerCount(io);
+    
     // Flag to track if this player has a valid position (to prevent automatic position broadcasts)
     const hasDefaultPosition = isDefaultPosition(newPlayer.x, newPlayer.y, newPlayer.z);
     
@@ -294,6 +327,14 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     
     // Send inventory
     socket.emit('inventoryUpdate', newPlayer.inventory || []);
+
+    // Send current player count immediately to the new client
+    const initialCount = Object.keys(players).length;
+    console.log(`Sending initial player count: ${initialCount} to new client ${socket.id}`);
+    socket.emit('playerCount', { count: initialCount });
+    
+    // Also broadcast to all clients to ensure consistency
+    broadcastPlayerCount(io);
 
     // Handle player movement
     socket.on('playerMove', async (position: PlayerPosition) => {
@@ -741,6 +782,9 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         
         // Let ALL clients know the player left
         io.emit('playerLeft', socket.id);
+        
+        // Broadcast the updated player count
+        broadcastPlayerCount(io);
       }
     });
   } catch (error) {
@@ -750,4 +794,4 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
 };
 
 // Export functions as ES modules
-export { setupSocketHandlers, initializeGameState }; 
+export { setupSocketHandlers, initializeGameState, broadcastPlayerCount }; 

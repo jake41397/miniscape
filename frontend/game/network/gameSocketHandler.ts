@@ -28,6 +28,7 @@ interface SocketHandlerOptions {
   cleanupIntervalRef: React.MutableRefObject<NodeJS.Timeout | null>;
   setPlayerName: (name: string) => void;
   createNameLabel: (name: string, mesh: THREE.Mesh) => CSS2DObject;
+  setPlayerCount?: (count: number) => void; // Add setPlayerCount callback
 }
 
 // Setup socket event listeners and return cleanup function
@@ -40,7 +41,8 @@ export const setupSocketListeners = async ({
   itemManagerRef,
   cleanupIntervalRef,
   setPlayerName,
-  createNameLabel
+  createNameLabel,
+  setPlayerCount
 }: SocketHandlerOptions) => {
   const socket = await getSocket();
   if (!socket) return () => {};
@@ -274,6 +276,14 @@ export const setupSocketListeners = async ({
       }
     });
   };
+
+  // Handle player count updates
+  socket.on('playerCount', (data: { count: number }) => {
+    console.log('Received player count update:', data.count);
+    if (setPlayerCount) {
+      setPlayerCount(data.count);
+    }
+  });
 
   // Handle initial players
   socket.on('initPlayers', (players) => {

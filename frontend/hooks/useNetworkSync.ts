@@ -29,6 +29,7 @@ interface NetworkSyncOptions {
     itemManagerRef: React.RefObject<ItemManager | null>;
     sceneRef: React.RefObject<THREE.Scene | null>;
     setPlayerNameState: (name: string) => void;
+    setPlayerCount?: (count: number) => void;
 }
 
 /**
@@ -44,7 +45,8 @@ export const useNetworkSync = ({
     worldManagerRef,
     itemManagerRef,
     sceneRef,
-    setPlayerNameState
+    setPlayerNameState,
+    setPlayerCount
 }: NetworkSyncOptions) => {
     const [isConnected, setIsConnected] = useState(false);
     const [playerName, setPlayerName] = useState<string>(''); // Internal state for display name from socket
@@ -106,6 +108,7 @@ export const useNetworkSync = ({
                         cleanupIntervalRef,
                         setPlayerName: handleSetPlayerName,
                         createNameLabel: createLabelWrapper,
+                        setPlayerCount,
                     });
                     
                     console.log("Game socket listeners set up successfully.");
@@ -314,7 +317,7 @@ export const useNetworkSync = ({
              setIsConnected(false); // Ensure state reflects cleanup
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [playerRef, playersRef, nameLabelsRef, worldManagerRef, itemManagerRef, sceneRef, handleSetPlayerName, createLabelWrapper]); // Add dependencies
+    }, [playerRef, playersRef, nameLabelsRef, worldManagerRef, itemManagerRef, sceneRef, handleSetPlayerName, createLabelWrapper, setPlayerCount]); // Add dependencies
 
 
      // Function to send position update, called from game loop

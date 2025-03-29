@@ -2,9 +2,10 @@ import React from 'react';
 
 interface ConnectionStatusIndicatorProps {
     isConnected: boolean;
+    playerCount?: number;
 }
 
-const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps> = ({ isConnected }) => {
+const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps> = ({ isConnected, playerCount }) => {
     return (
         <div style={{
             position: 'absolute',
@@ -29,6 +30,7 @@ const ConnectionStatusIndicator: React.FC<ConnectionStatusIndicatorProps> = ({ i
                 marginRight: '5px',
                 transition: 'background-color 0.3s ease', // Smooth transition
             }}></div>
+            {playerCount !== undefined ? `Online: ${playerCount}` : (isConnected ? 'Connected' : 'Disconnected')}
         </div>
     );
 };
