@@ -417,28 +417,6 @@ const GameCanvas: React.FC = () => {
 
       {/* UI Overlays */}
       <ZoneIndicator currentZone={currentZone} />
-      <ConnectionStatusIndicator isConnected={isConnected} />
-
-      {!isConnected && (
-        <button
-          onClick={reconnect}
-          style={{
-            position: 'absolute',
-            top: '40px',
-            left: '10px',
-            backgroundColor: 'rgba(0, 0, 255, 0.5)',
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            padding: '5px 10px',
-            cursor: 'pointer',
-            fontSize: '12px',
-            zIndex: 100
-          }}
-        >
-          Reconnect
-        </button>
-      )}
 
       <GameSettings
         playerName={playerName}
