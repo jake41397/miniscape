@@ -383,48 +383,52 @@ export class SocketController {
     console.log('Sent system message to chat:', message);
   }
 
+  /**
+   * Send player position to server for synchronization with other clients.
+   * @param position Player's current position vector
+   * @param rotationY Player's Y-axis rotation (yaw)
+   * @param force Force an update regardless of timing/movement thresholds (used for automove)
+   */
   public async sendPlayerPosition(position: THREE.Vector3, rotationY: number, force: boolean = false): Promise<void> {
     const now = Date.now();
     const socket = await getSocket();
+    if (!socket) return;
     
-    // Minimum time between position updates (to limit network traffic)
-    const MIN_UPDATE_INTERVAL = 50; // milliseconds
+    // Simple fixed interval for all updates to ensure consistency
+    // This avoids issues with variable update rates
+    const UPDATE_INTERVAL = 80; // ms
     
-    // Don't send position updates too frequently
-    if (!force && now - this.lastSendTime < MIN_UPDATE_INTERVAL) {
+    // Skip updates that are too frequent, unless forced
+    if (!force && now - this.lastSendTime < UPDATE_INTERVAL) {
       return;
     }
     
-    // Calculate distance from last sent position
-    const dx = position.x - this.lastSentPosition.x;
-    const dy = position.y - this.lastSentPosition.y;
-    const dz = position.z - this.lastSentPosition.z;
-    const distanceSquared = dx * dx + dy * dy + dz * dz;
+    // Update last sent time immediately
+    this.lastSendTime = now;
     
-    // Only send position update if moved significantly or forced
-    if (force || distanceSquared > 0.001) {
-      // Update last sent position and time
-      this.lastSentPosition = { x: position.x, y: position.y, z: position.z };
-      this.lastSendTime = now;
-      
-      // Send position to server
-      if (socket) {
-        socket.emit('playerMove', {
-          x: position.x,
-          y: position.y,
-          z: position.z,
-          rotationY: rotationY
-        });
-      }
-      
-      // Cache the ACTUAL position for reconnection, not this.lastSentPosition
-      // This ensures we're always caching the valid position passed to this method
-      saveLastKnownPosition({
-        x: position.x,
-        y: position.y,
-        z: position.z
-      });
-    }
+    // Send player position update to server
+    socket.emit('playerMove', {
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      rotationY: rotationY,
+      timestamp: now,
+      isAutoMove: force
+    });
+    
+    // Update our last sent position
+    this.lastSentPosition = { 
+      x: position.x, 
+      y: position.y, 
+      z: position.z 
+    };
+    
+    // Save position for reconnection
+    saveLastKnownPosition({
+      x: position.x,
+      y: position.y,
+      z: position.z
+    });
   }
 
   public async sendChatMessage(message: string): Promise<void> {

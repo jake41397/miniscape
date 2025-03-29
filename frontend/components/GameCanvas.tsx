@@ -25,6 +25,7 @@ import GameSettings from './GameSettings';
 import WorldManager, { WORLD_BOUNDS } from '../game/world/WorldManager';
 import ItemManager from '../game/world/ItemManager';
 import FPSCounter from './ui/FPSCounter';
+import { PlayerController } from './game/PlayerController';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -208,6 +209,54 @@ const GameCanvas: React.FC = () => {
     isHorizontalInvertedRef,
   });
 
+  // Create a player controller ref to hold the controller instance
+  const playerControllerRef = useRef<PlayerController | null>(null);
+
+  // Initialize PlayerController when player and camera are available
+  useEffect(() => {
+    if (playerRef.current && camera) {
+      // Create movement state for PlayerController
+      const movementState = {
+        current: {
+          moveForward: moveForward.current,
+          moveBackward: moveBackward.current,
+          moveLeft: moveLeft.current,
+          moveRight: moveRight.current,
+          isJumping: isJumping.current,
+          jumpVelocity: jumpVelocity.current,
+          lastJumpTime: lastJumpTime.current,
+          lastUpdateTime: lastUpdateTime.current
+        }
+      };
+
+      // Create camera state for PlayerController
+      const controllerCameraState = {
+        current: {
+          distance: cameraDistance.current,
+          angle: cameraAngle.current,
+          tilt: cameraTilt.current,
+          isMiddleMouseDown: isMiddleMouseDown.current,
+          lastMousePosition: lastMousePosition.current,
+          isHorizontalInverted: isHorizontalInvertedRef.current
+        }
+      };
+
+      // Create the PlayerController instance
+      playerControllerRef.current = new PlayerController(
+        playerRef,
+        movementState as any,
+        keysPressed as any,
+        controllerCameraState as any,
+        camera,
+        lastSentPosition,
+        movementChanged,
+        null // No socket controller for now
+      );
+
+      console.log("PlayerController initialized");
+    }
+  }, [playerRef.current, camera]);
+
   // 4. Player Movement
   const { updatePlayerMovement, movementOccurred } = usePlayerMovement({
     playerRef,
@@ -252,7 +301,15 @@ const GameCanvas: React.FC = () => {
     resourceNodesRef,
     worldItemsRef,
     canvasRef,
+    playerRef,
+    playerController: playerControllerRef.current || undefined
   });
+  
+  // Rebuild the interaction handler when playerController changes
+  useEffect(() => {
+    // This empty effect will trigger a re-evaluation of useInteraction
+    // when playerControllerRef.current updates
+  }, [playerControllerRef.current]);
 
   // --- World and Item Management ---
   useEffect(() => {

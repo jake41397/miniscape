@@ -197,12 +197,10 @@ export class AnimationController {
     }
     
     this.playersRef.current.forEach((mesh, playerId) => {
-        // Ensure mesh has userData and targetPosition
+      // Ensure mesh has userData and targetPosition
       if (mesh.userData && mesh.userData.targetPosition) {
         const target = mesh.userData.targetPosition as THREE.Vector3;
         const current = mesh.position;
-
-        // --- Restored Logic from old updateRemotePlayerPositions ---
 
         // Calculate distance (use non-squared for dynamic factor logic)
         const distance = Math.sqrt(
@@ -214,63 +212,75 @@ export class AnimationController {
         // If distance is large, snap immediately
         if (distanceSquared > POSITION_SNAP_THRESHOLD * POSITION_SNAP_THRESHOLD) {
           mesh.position.copy(target);
-           // Also snap rotation if available in userData
-           if (mesh.userData.rotationY !== undefined) {
-             mesh.rotation.y = mesh.userData.rotationY;
-           }
+          // Also snap rotation if available in userData
+          if (mesh.userData.rotationY !== undefined) {
+            mesh.rotation.y = mesh.userData.rotationY;
+          }
         } else if (distance > 0.005) { // Only interpolate if there's a meaningful distance
-            // Calculate time since last server update for prediction
-            const timeSinceUpdate = mesh.userData.lastUpdateTime ? (Date.now() - mesh.userData.lastUpdateTime) / 1000 : delta;
+          // Calculate time since last server update for prediction
+          const timeSinceUpdate = mesh.userData.lastUpdateTime ? (Date.now() - mesh.userData.lastUpdateTime) / 1000 : delta;
 
-            // Dynamic interpolation factor based on distance (restored logic)
-            let finalFactor = INTERPOLATION_SPEED;
-            if (distance > 3.0) { finalFactor = 0.8; }
-            else if (distance > 1.0) { finalFactor = 0.6; }
-            else if (distance > 0.5) { finalFactor = 0.5; }
-            else {
-                const distanceFactor = Math.min(1, distance * 0.9);
-                finalFactor = Math.min(1, INTERPOLATION_SPEED * (1 + distanceFactor * 5));
+          // Dynamic interpolation factor based on distance (restored logic)
+          let finalFactor = INTERPOLATION_SPEED;
+          if (distance > 3.0) { finalFactor = 0.8; }
+          else if (distance > 1.0) { finalFactor = 0.6; }
+          else if (distance > 0.5) { finalFactor = 0.5; }
+          else {
+            const distanceFactor = Math.min(1, distance * 0.9);
+            finalFactor = Math.min(1, INTERPOLATION_SPEED * (1 + distanceFactor * 5));
+          }
+
+          // Clamp factor based on delta to prevent overshooting on low frame rates
+          const lerpFactor = Math.min(1, finalFactor); // Removed delta * 60, direct factor is often better
+
+          // Interpolate position
+          mesh.position.x += (target.x - current.x) * lerpFactor;
+          mesh.position.y += (target.y - current.y) * lerpFactor;
+          mesh.position.z += (target.z - current.z) * lerpFactor;
+
+          // Apply prediction based on server-provided velocity (restored logic)
+          if (ENABLE_POSITION_PREDICTION && mesh.userData.serverVelocity) {
+            const predictionFactor = Math.min(0.3, timeSinceUpdate * 0.6);
+            if (distance < 0.8) { // Only predict for small distances
+              mesh.position.x += mesh.userData.serverVelocity.x * timeSinceUpdate * predictionFactor;
+              mesh.position.z += mesh.userData.serverVelocity.z * timeSinceUpdate * predictionFactor;
             }
+          }
 
-             // Clamp factor based on delta to prevent overshooting on low frame rates
-            const lerpFactor = Math.min(1, finalFactor); // Removed delta * 60, direct factor is often better
-
-            // Interpolate position
-            mesh.position.x += (target.x - current.x) * lerpFactor;
-            mesh.position.y += (target.y - current.y) * lerpFactor;
-            mesh.position.z += (target.z - current.z) * lerpFactor;
-
-            // Apply prediction based on server-provided velocity (restored logic)
-            if (ENABLE_POSITION_PREDICTION && mesh.userData.serverVelocity) {
-                const predictionFactor = Math.min(0.3, timeSinceUpdate * 0.6);
-                if (distance < 0.8) { // Only predict for small distances
-                    mesh.position.x += mesh.userData.serverVelocity.x * timeSinceUpdate * predictionFactor;
-                    mesh.position.z += mesh.userData.serverVelocity.z * timeSinceUpdate * predictionFactor;
-                }
+          // Update player rotation to face movement direction or match server rotation
+          if (distance > 0.05) { // Only update rotation if moving significantly
+            // If we have server rotation data, prioritize that for better sync
+            if (mesh.userData.rotationY !== undefined) {
+              const rotationDiff = mesh.userData.rotationY - mesh.rotation.y;
+              // Normalize rotation difference to [-PI, PI]
+              const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
+              // Use faster rotation speed during active movement
+              mesh.rotation.y += normalizedDiff * ROTATION_SPEED * 1.5;
+            } else {
+              // Fall back to calculated angle based on movement direction
+              const angle = Math.atan2(target.x - current.x, target.z - current.z);
+              const rotationDiff = angle - mesh.rotation.y;
+              const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
+              mesh.rotation.y += normalizedDiff * ROTATION_SPEED;
             }
+          } else if (mesh.userData.rotationY !== undefined) {
+            // If not moving much, slowly sync with last known server rotation
+            const rotationDiff = mesh.userData.rotationY - mesh.rotation.y;
+            const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
+            
+            // If the rotation difference is large, sync faster
+            const rotationSpeed = Math.abs(normalizedDiff) > 0.5 ? 
+              ROTATION_SPEED * 0.5 : // Faster sync for large differences
+              ROTATION_SPEED * 0.1;  // Slower sync for minor adjustments
+              
+            mesh.rotation.y += normalizedDiff * rotationSpeed;
+          }
 
-            // *** FIX: Update player rotation to face movement direction (Restored) ***
-            if (distance > 0.05) { // Only update rotation if moving significantly
-                // Calculate angle based on XZ movement direction
-                const angle = Math.atan2(target.x - current.x, target.z - current.z);
-
-                // Smooth rotation transition
-                const rotationDiff = angle - mesh.rotation.y;
-                // Normalize rotation difference to [-PI, PI]
-                const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
-                mesh.rotation.y += normalizedDiff * ROTATION_SPEED; // Use defined rotation speed
-            } else if (mesh.userData.rotationY !== undefined) {
-                // If not moving much, slowly sync with last known server rotation
-                 const rotationDiff = mesh.userData.rotationY - mesh.rotation.y;
-                 const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
-                 mesh.rotation.y += normalizedDiff * (ROTATION_SPEED * 0.1); // Slower sync when idle
-            }
-
-            // Snap if very close (restored logic)
-            // Use squared distance check for performance
-            if (distanceSquared < CLOSE_SNAP_DISTANCE_SQ) {
-                mesh.position.copy(target);
-            }
+          // Snap if very close (restored logic)
+          // Use squared distance check for performance
+          if (distanceSquared < CLOSE_SNAP_DISTANCE_SQ) {
+            mesh.position.copy(target);
+          }
         }
       } else {
         console.warn(`Player mesh ${playerId} missing userData or targetPosition:`, mesh.userData);

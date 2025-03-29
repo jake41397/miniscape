@@ -106,6 +106,8 @@ export class PlayerHandler {
     const MIN_BROADCAST_DISTANCE_SQUARED = 0.05; // About 0.22 units
     // Set a minimum time between broadcasts to prevent spam
     const MIN_BROADCAST_INTERVAL = 100; // ms
+    // Set a faster interval for automove updates
+    const AUTOMOVE_BROADCAST_INTERVAL = 40; // ms - faster updates during automove
     let lastBroadcastTime = 0;
     
     socket.on('playerMove', async (position: PlayerPosition) => {
@@ -152,8 +154,8 @@ export class PlayerHandler {
         const distanceSquared = dx * dx + dy * dy + dz * dz;
         
         // Only process significant movements (avoid processing tiny or duplicate movements)
-        if (distanceSquared < 0.0001 && !isReceivingDefault) {
-          // Skip processing for insignificant movements
+        if (distanceSquared < 0.0001 && !isReceivingDefault && !position.isAutoMove) {
+          // Skip processing for insignificant movements, unless it's an automove update
           return;
         }
         
@@ -161,6 +163,12 @@ export class PlayerHandler {
         this.players[socket.id].x = validX;
         this.players[socket.id].y = position.y;
         this.players[socket.id].z = validZ;
+        
+        // Also update rotation if provided
+        if (position.rotationY !== undefined) {
+          this.players[socket.id].rotationY = position.rotationY;
+        }
+        
         this.players[socket.id].lastActive = Date.now();
         
         // Track movement frequency
@@ -183,16 +191,23 @@ export class PlayerHandler {
         const now = Date.now();
         const timeSinceLastBroadcast = now - lastBroadcastTime;
         
+        // Determine which time interval to use based on movement type
+        const isAutoMove = position.isAutoMove === true;
+        const minBroadcastInterval = isAutoMove ? AUTOMOVE_BROADCAST_INTERVAL : MIN_BROADCAST_INTERVAL;
+        
         // Only broadcast if:
         // 1. We've moved more than the minimum distance, OR
-        // 2. It's been at least MIN_BROADCAST_INTERVAL ms since our last broadcast
-        if (broadcastDistanceSquared >= MIN_BROADCAST_DISTANCE_SQUARED || timeSinceLastBroadcast >= MIN_BROADCAST_INTERVAL) {
+        // 2. It's been at least MIN_BROADCAST_INTERVAL ms since our last broadcast (or faster for automove)
+        if (broadcastDistanceSquared >= MIN_BROADCAST_DISTANCE_SQUARED || 
+            timeSinceLastBroadcast >= minBroadcastInterval) {
+          
           // Broadcast player movement to other players
-          socket.broadcast.emit('playerMove', {
+          socket.broadcast.emit('playerMoved', {
             id: socket.id,
             x: validX,
             y: position.y,
             z: validZ,
+            rotationY: position.rotationY,  // Include rotation in broadcast
             timestamp: Date.now()
           });
           
@@ -201,7 +216,7 @@ export class PlayerHandler {
           lastBroadcastTime = now;
           
           // Debug log about broadcasting
-          console.log(`Broadcasting player ${socket.id} movement: distance=${Math.sqrt(broadcastDistanceSquared)}, lastBroadcast=${timeSinceLastBroadcast}ms ago`);
+          console.log(`Broadcasting player ${socket.id} movement: distance=${Math.sqrt(broadcastDistanceSquared)}, lastBroadcast=${timeSinceLastBroadcast}ms ago${isAutoMove ? ', automove' : ''}`);
         } else {
           // Debug log about skipping broadcast
           console.log(`Skipping broadcast for player ${socket.id}: distance=${Math.sqrt(broadcastDistanceSquared)}, lastBroadcast=${timeSinceLastBroadcast}ms ago`);

@@ -22,6 +22,7 @@ export interface Player {
   x: number;
   y: number;
   z: number;
+  rotationY?: number;     // Y-axis rotation in radians
   inventory: InventoryItem[];
   lastPing?: number;      // Last time player responded to ping
   lastActive?: number;    // Last time player did something (moved, etc)
@@ -68,7 +69,9 @@ export interface PlayerPosition {
   x: number;
   y: number;
   z: number;
+  rotationY?: number;     // Y-axis rotation in radians
   timestamp?: number;
+  isAutoMove?: boolean;   // Flag to indicate this is from automove
 }
 
 export interface PlayersStore {

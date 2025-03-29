@@ -11,7 +11,9 @@ interface PlayerMoveData {
   x: number;
   y: number;
   z: number;
+  rotationY?: number;
   timestamp?: number; // Make timestamp optional
+  isAutoMove?: boolean;
 }
 
 // Position interpolation settings
@@ -494,6 +496,8 @@ export const setupSocketListeners = async ({
     console.log('Received playerMoved event:', {
       playerId: data.id,
       position: { x: data.x, y: data.y, z: data.z },
+      rotation: data.rotationY ? data.rotationY.toFixed(2) : 'none',
+      isAutoMove: data.isAutoMove || false,
       playerExists: playersRef.current.has(data.id),
       totalPlayers: playersRef.current.size
     });
@@ -532,6 +536,15 @@ export const setupSocketListeners = async ({
       
       const newTargetPosition = new THREE.Vector3(validX, data.y, validZ);
       
+      // Store rotation Y if provided
+      if (data.rotationY !== undefined) {
+        // Store the rotation value for interpolation
+        playerMesh.userData.rotationY = data.rotationY;
+      }
+      
+      // Flag to indicate if this update is from automove
+      playerMesh.userData.isAutoMove = data.isAutoMove || false;
+      
       // Calculate distance to current position to detect large discrepancies
       const currentPosition = playerMesh.position;
       const distanceToTarget = currentPosition.distanceTo(newTargetPosition);
@@ -539,6 +552,11 @@ export const setupSocketListeners = async ({
       // If the discrepancy is too large, snap immediately to avoid visible "teleporting"
       if (distanceToTarget > POSITION_SNAP_THRESHOLD) {
         playerMesh.position.copy(newTargetPosition);
+        
+        // Also set rotation if provided to avoid rotation "snapping" after position snap
+        if (data.rotationY !== undefined) {
+          playerMesh.rotation.y = data.rotationY;
+        }
         
         // Also reset velocity for a fresh start
         playerMesh.userData.velocity = { x: 0, z: 0 };

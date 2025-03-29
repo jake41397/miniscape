@@ -5,7 +5,7 @@
  */
 import * as THREE from 'three';
 // Make sure this path is correct for your project structure
-import { cachePlayerPosition } from '../../game/network/socket'; 
+import { saveLastKnownPosition } from '../../game/network/socket'; 
 
 // --- Constants ---
 
@@ -67,6 +67,9 @@ export class PlayerController {
   private lastSentPosition: React.MutableRefObject<{ x: number; y: number; z: number }>;
   private movementChanged: React.MutableRefObject<boolean>;
   private socketController: any; // Assuming a socketController is set up
+  private moveToPositionInterrupted: boolean = false;
+  private isAutoMoving: boolean = false;
+  private targetPosition: THREE.Vector3 | null = null;
 
   constructor(
     playerRef: React.MutableRefObject<THREE.Mesh | null>,
@@ -198,7 +201,7 @@ export class PlayerController {
       this.movementChanged.current = true; // Mark change for network/other systems
       
       // Cache position periodically or on significant change if needed
-      cachePlayerPosition({
+      saveLastKnownPosition({
         x: player.position.x,
         y: player.position.y,
         z: player.position.z
@@ -345,6 +348,134 @@ export class PlayerController {
         CAMERA_MIN_DISTANCE, 
         Math.min(CAMERA_MAX_DISTANCE, camState.distance + delta * CAMERA_ZOOM_SPEED)
     );
+  }
+
+  /**
+   * Moves the player to a specific position in the world using a simple linear movement.
+   * @param targetPosition The position to move to
+   * @returns A Promise that resolves when the player reaches the target position
+   */
+  moveToPosition(targetPosition: THREE.Vector3): Promise<void> {
+    // First, interrupt any existing movement
+    this.interruptMovement();
+    
+    // Mark this movement as active
+    this.isAutoMoving = true;
+    this.targetPosition = targetPosition.clone();
+    this.moveToPositionInterrupted = false;
+    
+    return new Promise((resolve) => {
+      const player = this.playerRef.current;
+      if (!player) {
+        this.isAutoMoving = false;
+        resolve();
+        return;
+      }
+      
+      // Constant speed in units per frame (will be applied each animation frame)
+      const MOVE_SPEED = 0.05;
+      // Duration between network position updates (in ms)
+      const NETWORK_UPDATE_INTERVAL = 100;
+      let lastNetworkUpdate = 0;
+      
+      // Movement loop function
+      const moveStep = () => {
+        // Check if we should stop
+        if (!this.isAutoMoving || this.moveToPositionInterrupted) {
+          this.isAutoMoving = false;
+          resolve();
+          return;
+        }
+        
+        // Get current player mesh (it might have changed)
+        const player = this.playerRef.current;
+        if (!player) {
+          this.isAutoMoving = false;
+          resolve();
+          return;
+        }
+        
+        // Calculate direction to target
+        const direction = new THREE.Vector3()
+          .subVectors(targetPosition, player.position)
+          .normalize();
+        
+        // Calculate distance to target
+        const distanceToTarget = player.position.distanceTo(targetPosition);
+        
+        // Check if we've reached the target
+        if (distanceToTarget < 0.1) {
+          // We've arrived, finish movement
+          this.isAutoMoving = false;
+          
+          // Make sure we're exactly at the target position
+          player.position.copy(targetPosition);
+          
+          // Send final position update
+          if (this.socketController) {
+            this.socketController.sendPlayerPosition(
+              player.position, 
+              player.rotation.y,
+              true
+            );
+          }
+          
+          // Save position for persistence
+          saveLastKnownPosition({
+            x: player.position.x,
+            y: player.position.y,
+            z: player.position.z
+          });
+          
+          resolve();
+          return;
+        }
+        
+        // Set player rotation to face the direction of movement
+        player.rotation.y = Math.atan2(direction.x, direction.z);
+        
+        // Calculate how far to move this frame
+        // If we're closer than our step size, just move to the target
+        const moveDistance = Math.min(MOVE_SPEED, distanceToTarget);
+        
+        // Apply movement
+        player.position.x += direction.x * moveDistance;
+        player.position.z += direction.z * moveDistance;
+        
+        // Mark that movement has occurred
+        this.movementChanged.current = true;
+        
+        // Send network updates at regular intervals
+        const now = Date.now();
+        if (now - lastNetworkUpdate > NETWORK_UPDATE_INTERVAL) {
+          if (this.socketController) {
+            this.socketController.sendPlayerPosition(
+              player.position, 
+              player.rotation.y,
+              true
+            );
+            lastNetworkUpdate = now;
+          }
+        }
+        
+        // Continue the movement loop
+        requestAnimationFrame(moveStep);
+      };
+      
+      // Start the movement loop
+      moveStep();
+    });
+  }
+  
+  /**
+   * Interrupt the current auto-movement (if any).
+   * Called when a new destination is clicked.
+   */
+  interruptMovement(): void {
+    if (this.isAutoMoving) {
+      this.moveToPositionInterrupted = true;
+      this.isAutoMoving = false;
+    }
   }
 }
 

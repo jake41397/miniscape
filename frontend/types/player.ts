@@ -16,7 +16,9 @@ export interface PlayerPosition {
   x: number;
   y: number;
   z: number;
+  rotationY?: number;  // Optional rotation around Y axis
   timestamp?: number;  // Optional timestamp for synchronization
+  isAutoMove?: boolean; // Flag to indicate this is from automove (click-to-move)
 }
 
 // Item interface
