@@ -5,7 +5,8 @@ import {
   WorldItem, 
   createResourceMesh, 
   createItemMesh,
-  updateDroppedItems
+  updateDroppedItems,
+  updateResourceLOD
 } from './resources';
 
 // World boundaries
@@ -28,6 +29,7 @@ class WorldManager {
   private worldItems: WorldItem[] = [];
   private onResourceNodesCreated: (nodes: ResourceNode[]) => void;
   private onWorldItemsCreated: (items: WorldItem[]) => void;
+  private camera: THREE.Camera | null = null;
   
   // Geometries and materials for proper disposal
   private groundGeometry?: THREE.PlaneGeometry;
@@ -41,6 +43,11 @@ class WorldManager {
     this.onWorldItemsCreated = props.onWorldItemsCreated;
     
     this.initialize();
+  }
+
+  // Set camera for LOD calculations
+  public setCamera(camera: THREE.Camera) {
+    this.camera = camera;
   }
 
   private initialize() {
@@ -158,7 +165,7 @@ class WorldManager {
       // Store reference to mesh in resource node
       this.resourceNodes.push({
         ...resource,
-        mesh: mesh as THREE.Mesh
+        mesh: mesh as unknown as THREE.Mesh
       });
     });
 
@@ -177,11 +184,39 @@ class WorldManager {
     this.resourceNodes.forEach((node) => {
       if (node.mesh) {
         this.scene.remove(node.mesh);
-        if (node.mesh.geometry) node.mesh.geometry.dispose();
+        
+        // Handle standard meshes
+        if (node.mesh.geometry) {
+          node.mesh.geometry.dispose();
+        }
+        
+        // Handle materials
         if (Array.isArray(node.mesh.material)) {
-          node.mesh.material.forEach(material => material.dispose());
+          node.mesh.material.forEach(mat => {
+            if (mat) mat.dispose();
+          });
         } else if (node.mesh.material) {
           node.mesh.material.dispose();
+        }
+        
+        // Check if it's actually a LOD object
+        const meshAsAny = node.mesh as any;
+        if (meshAsAny.levels && Array.isArray(meshAsAny.levels)) {
+          for (let i = 0; i < meshAsAny.levels.length; i++) {
+            const level = meshAsAny.levels[i];
+            if (level && level.object) {
+              if (level.object.geometry) {
+                level.object.geometry.dispose();
+              }
+              if (Array.isArray(level.object.material)) {
+                level.object.material.forEach((mat: THREE.Material) => {
+                  if (mat) mat.dispose();
+                });
+              } else if (level.object.material) {
+                level.object.material.dispose();
+              }
+            }
+          }
         }
       }
     });
@@ -237,6 +272,12 @@ class WorldManager {
   }
   
   public updateItems(delta: number) {
+    // Update LOD for resource nodes based on camera position
+    if (this.camera) {
+      updateResourceLOD(this.resourceNodes, this.camera);
+    }
+    
+    // Update dropped items animation
     updateDroppedItems(this.worldItems, delta);
   }
 }

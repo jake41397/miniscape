@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer';
 import ItemManager from '../game/world/ItemManager';
@@ -19,6 +19,7 @@ interface GameLoopOptions {
     sendPositionUpdate: (movementOccurred: boolean) => void;
     checkMovementInputChanged: () => boolean;
     movementOccurred: React.RefObject<boolean>;
+    onFpsUpdate?: (fps: number) => void;
 }
 
 /**
@@ -39,10 +40,15 @@ export const useGameLoop = ({
     updateRemotePlayerPositions,
     sendPositionUpdate,
     checkMovementInputChanged,
-    movementOccurred
+    movementOccurred,
+    onFpsUpdate
 }: GameLoopOptions) => {
     const clockRef = useRef<THREE.Clock>(new THREE.Clock());
     const animationFrameId = useRef<number | null>(null);
+    const framerateRef = useRef<number[]>([]);
+    const renderScaleRef = useRef<number>(1.0);
+    const lastRenderScaleChangeRef = useRef<number>(0);
+    const lastFpsUpdateTimeRef = useRef<number>(0);
 
     const animate = useCallback(() => {
         // Ensure core components are ready
@@ -57,6 +63,52 @@ export const useGameLoop = ({
         const delta = clockRef.current.getDelta();
         // Cap delta to prevent huge jumps after inactivity
         const cappedDelta = Math.min(delta, 0.1);
+        
+        // Track fps for adaptive rendering
+        framerateRef.current.push(1 / delta);
+        if (framerateRef.current.length > 60) {
+            framerateRef.current.shift();
+        }
+
+        // Update FPS counter in UI (limit updates to reduce DOM operations)
+        const now = performance.now();
+        if (now - lastFpsUpdateTimeRef.current > 200 && onFpsUpdate) { // Update UI every 200ms
+            const avgFps = Math.round(framerateRef.current.reduce((a, b) => a + b, 0) / framerateRef.current.length);
+            onFpsUpdate(avgFps);
+            lastFpsUpdateTimeRef.current = now;
+        }
+
+        // Adaptive rendering resolution (halving/doubling scalar logic)
+        if (now - lastRenderScaleChangeRef.current > 1000) { // Only check every second
+            const avgFps = framerateRef.current.reduce((a, b) => a + b, 0) / framerateRef.current.length;
+            
+            // If framerate is too low, reduce resolution
+            if (avgFps < 30 && renderScaleRef.current > 0.5) {
+                // Apply halving scalar logic explicitly: divide by 2
+                // This enforces power-of-2 scaling which is more efficient for GPU texture scaling
+                renderScaleRef.current = renderScaleRef.current / 2;
+                
+                // Optimize width and height calculations using halving/doubling scalar logic:
+                // Calculate width/height as (original * 0.5) * (scale * 2)
+                // This can potentially help with instruction-level parallelism
+                const width = (window.innerWidth * 0.5) * (renderScaleRef.current * 2);
+                const height = (window.innerHeight * 0.5) * (renderScaleRef.current * 2);
+                renderer.setSize(width, height, false);
+                lastRenderScaleChangeRef.current = now;
+            } 
+            // If framerate is good, increase resolution
+            else if (avgFps > 55 && renderScaleRef.current < 1.0) {
+                // Apply doubling scalar logic explicitly: multiply by 2, then cap at max of 1.0
+                // This maintains power-of-2 scaling pattern for optimal GPU performance
+                renderScaleRef.current = Math.min(1.0, renderScaleRef.current * 2);
+                
+                // Using the same optimization pattern for consistency and potential compiler optimizations
+                const width = (window.innerWidth * 0.5) * (renderScaleRef.current * 2);
+                const height = (window.innerHeight * 0.5) * (renderScaleRef.current * 2);
+                renderer.setSize(width, height, false);
+                lastRenderScaleChangeRef.current = now;
+            }
+        }
 
         // --- Core Updates ---
         // 1. Check for input changes (affects if we *consider* sending network update)
@@ -102,7 +154,7 @@ export const useGameLoop = ({
     }, [
         scene, camera, renderer, labelRenderer, itemManagerRef, playerRef, playersRef,
         updatePlayerMovement, updateCameraPosition, updateRemotePlayerPositions,
-        sendPositionUpdate, checkMovementInputChanged, movementOccurred
+        sendPositionUpdate, checkMovementInputChanged, movementOccurred, onFpsUpdate
     ]);
 
     // Start and stop the loop

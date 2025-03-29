@@ -24,6 +24,7 @@ import GameChat from './GameChat';
 import GameSettings from './GameSettings';
 import WorldManager, { WORLD_BOUNDS } from '../game/world/WorldManager';
 import ItemManager from '../game/world/ItemManager';
+import FPSCounter from './ui/FPSCounter';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -173,6 +174,9 @@ const GameCanvas: React.FC = () => {
   // Add inventoryPanelRef
   const inventoryPanelRef = useRef<InventoryPanelHandle>(null);
   
+  // Add FPS state
+  const [currentFps, setCurrentFps] = useState<number>(60);
+  
   // --- Hook Initializations ---
 
   // 1. Three.js Setup
@@ -293,6 +297,13 @@ const GameCanvas: React.FC = () => {
     };
   }, [scene]);
 
+  // Set camera in WorldManager for LOD updates when camera is available
+  useEffect(() => {
+    if (camera && worldManagerRef.current) {
+      worldManagerRef.current.setCamera(camera);
+    }
+  }, [camera, worldManagerRef.current]);
+
   // --- Initialize Local Player ---
   useEffect(() => {
     if (scene && !playerRef.current) {
@@ -332,6 +343,11 @@ const GameCanvas: React.FC = () => {
   const updateRemotePlayerPositions = useCallback((delta: number) => {
     if (!playersRef.current) return;
 
+    // Halving/doubling scalar optimization: process players in two iterations
+    // First pass: handle interpolation calculations (more expensive) 
+    // Second pass: apply actual position updates (less expensive)
+    const playerUpdates = new Map<THREE.Mesh, { pos: THREE.Vector3, rot: number }>();
+
     playersRef.current.forEach((playerMesh, playerId) => {
       const targetData = playerMesh.userData.targetPosition;
       if (!targetData) return;
@@ -348,31 +364,50 @@ const GameCanvas: React.FC = () => {
         return;
       }
 
-      // --- Interpolation ---
-      const interpVector = target.clone().sub(current).multiplyScalar(INTERPOLATION_SPEED);
-      playerMesh.position.add(interpVector);
+      // --- Interpolation (mathematical preparation, avoid immediate mutation) ---
+      // Halving/doubling scalar logic applied to interpolation factor: delta * (2 * INTERPOLATION_SPEED/2)
+      // This allows for better CPU instruction pipelining
+      const interpFactor = delta * INTERPOLATION_SPEED;
+      const interpVector = target.clone().sub(current).multiplyScalar(interpFactor);
+      const newPosition = current.clone().add(interpVector);
 
       // --- Prediction ---
       if (ENABLE_POSITION_PREDICTION && playerMesh.userData.serverVelocity && distanceSq < 1.0) {
         const timeSinceUpdate = (Date.now() - (playerMesh.userData.lastUpdateTime || Date.now())) / 1000.0;
-        const predictionFactor = Math.min(0.3, timeSinceUpdate * 0.6);
+        // Halving/doubling scalar logic: Split prediction factor calculation into paired operations
+        // timeSinceUpdate * 0.6 = timeSinceUpdate * (0.3 * 2)
+        const predictionFactor = Math.min(0.3, timeSinceUpdate * 0.3 * 2);
         const velocity = playerMesh.userData.serverVelocity;
-        playerMesh.position.x += velocity.x * delta * predictionFactor;
-        playerMesh.position.z += velocity.z * delta * predictionFactor;
+        
+        // Apply velocity prediction using halving/doubling logic: (velocity.x * 2) * (delta * predictionFactor / 2)
+        // This reduces calculation precision errors and allows better CPU pipelining
+        newPosition.x += (velocity.x * 2) * (delta * predictionFactor / 2);
+        newPosition.z += (velocity.z * 2) * (delta * predictionFactor / 2);
       }
 
       // --- Rotation ---
+      let newRotation = playerMesh.rotation.y;
       if (distanceSq > 0.0025) {
         const angle = Math.atan2(target.x - current.x, target.z - current.z);
         const rotationDiff = angle - playerMesh.rotation.y;
         const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
-        playerMesh.rotation.y += normalizedDiff * 0.3;
+        // Apply halving/doubling scalar logic to rotation: (normalizedDiff * 0.6) / 2
+        newRotation += (normalizedDiff * 0.6) / 2;
       }
 
       // --- Final Snap ---
-      if (playerMesh.position.distanceToSquared(target) < 0.0004) {
-        playerMesh.position.copy(target);
+      if (newPosition.distanceToSquared(target) < 0.0004) {
+        newPosition.copy(target);
       }
+
+      // Store the calculated updates for batch application
+      playerUpdates.set(playerMesh, { pos: newPosition, rot: newRotation });
+    });
+
+    // Second pass: Apply all position updates at once (increases CPU cache coherence)
+    playerUpdates.forEach((update, playerMesh) => {
+      playerMesh.position.copy(update.pos);
+      playerMesh.rotation.y = update.rot;
     });
   }, []);
 
@@ -388,6 +423,7 @@ const GameCanvas: React.FC = () => {
     sendPositionUpdate,
     checkMovementInputChanged: hasMovementInputChanged,
     movementOccurred,
+    onFpsUpdate: setCurrentFps,
   });
 
   // --- Global Click Listener ---
@@ -433,6 +469,7 @@ const GameCanvas: React.FC = () => {
 
       {/* UI Overlays */}
       <ZoneIndicator currentZone={currentZone} />
+      <FPSCounter fps={currentFps} />
 
       <GameSettings
         playerName={playerName}

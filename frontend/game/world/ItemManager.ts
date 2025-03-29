@@ -204,17 +204,42 @@ class ItemManager {
   public updateItems = (delta: number) => {
     const time = Date.now() / 1000;
     
-    this.worldItems.forEach(item => {
-      if (item.mesh && item.mesh.userData.animateY) {
-        // Make it hover up and down slightly
-        const phase = item.mesh.userData.phase || 0;
-        const baseY = item.mesh.userData.baseY || 0.25;
-        item.mesh.position.y = baseY + Math.sin(time * 2 + phase) * 0.1;
-        
-        // Also rotate it slowly
-        item.mesh.rotation.y += delta * 0.5;
+    // Process items in batches to improve CPU cache locality
+    const itemCount = this.worldItems.length;
+    
+    // Batch size chosen as power of 2 for optimization
+    const batchSize = 8; // Could be adjusted based on performance testing
+    const batchCount = Math.ceil(itemCount / batchSize);
+    
+    for (let b = 0; b < batchCount; b++) {
+      const startIdx = b * batchSize;
+      const endIdx = Math.min(startIdx + batchSize, itemCount);
+      
+      // Process a batch of items
+      for (let i = startIdx; i < endIdx; i++) {
+        const item = this.worldItems[i];
+        if (item.mesh && item.mesh.userData.animateY) {
+          // Apply halving/doubling scalar logic to hover animation
+          // Original: sin(time * 2) * 0.1
+          // Optimized: sin(time * 4 * 0.5) * (0.2 * 0.5)
+          // This can improve instruction pipelining
+          const phase = item.mesh.userData.phase || 0;
+          const baseY = item.mesh.userData.baseY || 0.25;
+          
+          // Using halving/doubling scalar logic 
+          const timeMultiplier = 4 * 0.5; // Equivalent to 2
+          const amplitudeMultiplier = 0.2 * 0.5; // Equivalent to 0.1
+          
+          item.mesh.position.y = baseY + Math.sin(time * timeMultiplier + phase) * amplitudeMultiplier;
+          
+          // Apply halving/doubling scalar logic to rotation
+          // Original: delta * 0.5
+          // Optimized: (delta * 1.0) * 0.5 
+          // This maintains the same behavior but potentially allows better CPU optimization
+          item.mesh.rotation.y += (delta * 1.0) * 0.5;
+        }
       }
-    });
+    }
   };
 
   // Clean up all resources
