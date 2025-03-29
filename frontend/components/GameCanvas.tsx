@@ -13,7 +13,7 @@ import {
 } from '../game/network/socket';
 import { setupSocketListeners } from '../game/network/gameSocketHandler';
 import { Player, PlayerPosition } from '../types/player';
-import InventoryPanel from './ui/InventoryPanel';
+import InventoryPanel, { InventoryPanelHandle } from './ui/InventoryPanel';
 import soundManager from '../game/audio/soundManager';
 import { 
   ResourceNode, 
@@ -169,6 +169,9 @@ const GameCanvas: React.FC = () => {
   
   // Add a ref to track the last time we cached position
   const lastPositionCacheTime = useRef(0);
+  
+  // Add inventoryPanelRef
+  const inventoryPanelRef = useRef<InventoryPanelHandle>(null);
   
   // --- Hook Initializations ---
 
@@ -448,6 +451,7 @@ const GameCanvas: React.FC = () => {
       />
 
       <InventoryPanel 
+        ref={inventoryPanelRef}
         style={{ top: "100px", right: "20px" }} 
         itemManager={itemManagerRef.current || undefined}
       />

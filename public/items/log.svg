@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Background -->
+  <rect x="10" y="30" width="80" height="40" rx="5" fill="#8B4513" />
+  
+  <!-- Wood grain lines -->
+  <path d="M20 40 L80 40" stroke="#6A3805" stroke-width="3" stroke-linecap="round" />
+  <path d="M15 50 L85 50" stroke="#6A3805" stroke-width="2" stroke-linecap="round" />
+  <path d="M25 60 L75 60" stroke="#6A3805" stroke-width="3" stroke-linecap="round" />
+  
+  <!-- End circles representing the cut -->
+  <circle cx="10" cy="50" r="10" fill="#A0522D" />
+  <circle cx="90" cy="50" r="10" fill="#A0522D" />
+  
+  <!-- Wood ring details -->
+  <circle cx="10" cy="50" r="6" fill="none" stroke="#6A3805" stroke-width="2" />
+  <circle cx="10" cy="50" r="3" fill="none" stroke="#6A3805" stroke-width="1" />
+  <circle cx="90" cy="50" r="6" fill="none" stroke="#6A3805" stroke-width="2" />
+  <circle cx="90" cy="50" r="3" fill="none" stroke="#6A3805" stroke-width="1" />
+</svg> 

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Fish body -->
+  <path d="M30,50 C40,30 60,30 75,50 C60,70 40,70 30,50 Z" 
+        fill="#6495ED" stroke="#4682B4" stroke-width="2" />
+  
+  <!-- Tail -->
+  <path d="M25,50 C15,35 5,50 15,65 C20,55 20,45 25,50 Z" 
+        fill="#6495ED" stroke="#4682B4" stroke-width="2" />
+  
+  <!-- Fins -->
+  <path d="M55,35 C60,25 65,30 60,40 Z" 
+        fill="#6495ED" stroke="#4682B4" stroke-width="1" />
+  <path d="M55,65 C60,75 65,70 60,60 Z" 
+        fill="#6495ED" stroke="#4682B4" stroke-width="1" />
+  
+  <!-- Eye -->
+  <circle cx="70" cy="45" r="5" fill="white" stroke="#4682B4" stroke-width="1" />
+  <circle cx="72" cy="44" r="2" fill="black" />
+  
+  <!-- Scales -->
+  <path d="M45,45 Q50,40 55,45" stroke="#4682B4" stroke-width="1" fill="none" />
+  <path d="M45,55 Q50,60 55,55" stroke="#4682B4" stroke-width="1" fill="none" />
+  <path d="M40,40 Q45,35 50,40" stroke="#4682B4" stroke-width="1" fill="none" />
+  <path d="M40,60 Q45,65 50,60" stroke="#4682B4" stroke-width="1" fill="none" />
+</svg> 

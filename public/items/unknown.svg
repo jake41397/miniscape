@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Background -->
+  <rect x="10" y="10" width="80" height="80" rx="5" fill="#888" />
+  
+  <!-- Question mark -->
+  <text x="50" y="70" font-size="70" font-weight="bold" text-anchor="middle" fill="#333">?</text>
+  
+  <!-- Border -->
+  <rect x="10" y="10" width="80" height="80" rx="5" fill="none" stroke="#555" stroke-width="3" />
+</svg> 

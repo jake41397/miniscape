@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Main coal chunk -->
+  <path d="M20,30 C15,40 10,60 30,75 C50,85 80,70 85,55 C90,40 70,25 50,30 C30,35 25,30 20,30 Z" 
+        fill="#36454F" />
+  
+  <!-- Shiny spots -->
+  <ellipse cx="35" cy="45" rx="6" ry="4" fill="#555" transform="rotate(-15 35 45)" />
+  <ellipse cx="60" cy="60" rx="10" ry="5" fill="#555" transform="rotate(20 60 60)" />
+  <ellipse cx="40" cy="65" rx="7" ry="4" fill="#555" transform="rotate(-5 40 65)" />
+  
+  <!-- Highlights -->
+  <ellipse cx="30" cy="40" rx="2" ry="1" fill="#888" transform="rotate(-15 30 40)" />
+  <ellipse cx="65" cy="55" rx="3" ry="1.5" fill="#888" transform="rotate(20 65 55)" />
+  <ellipse cx="45" cy="60" rx="2" ry="1" fill="#888" transform="rotate(-5 45 60)" />
+</svg> 
