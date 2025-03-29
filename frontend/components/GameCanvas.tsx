@@ -4,14 +4,15 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 import { 
   initializeSocket, 
   disconnectSocket, 
+  setupSocketCleanup, 
   getSocket, 
   isSocketReady, 
   getSocketStatus, 
-  cachePlayerPosition, 
-  getCachedPlayerPosition 
+  saveLastKnownPosition,
+  getLastKnownPosition
 } from '../game/network/socket';
 import { setupSocketListeners } from '../game/network/gameSocketHandler';
-import { Player } from '../types/player';
+import { Player, PlayerPosition } from '../types/player';
 import InventoryPanel from './ui/InventoryPanel';
 import soundManager from '../game/audio/soundManager';
 import { 
@@ -19,7 +20,8 @@ import {
   ResourceType, 
   WorldItem
 } from '../game/world/resources';
-import Chat, { ChatRefHandle } from './chat/Chat';
+import GameChat from './GameChat';
+import GameSettings from './GameSettings';
 import WorldManager, { WORLD_BOUNDS } from '../game/world/WorldManager';
 import ItemManager from '../game/world/ItemManager';
 
@@ -117,10 +119,8 @@ const GameCanvas: React.FC = () => {
   // Add sound toggle state
   const [soundEnabled, setSoundEnabled] = useState(true);
   
-  // Add settings state
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Settings state moved to GameSettings component
   const [isHorizontalInverted, setIsHorizontalInverted] = useState(false);
-  const [displayName, setDisplayName] = useState('');
   const isHorizontalInvertedRef = useRef(false);
   
   // Create a ref to store the createNameLabel function
@@ -151,26 +151,18 @@ const GameCanvas: React.FC = () => {
   // Add a ref for the WorldManager
   const worldManagerRef = useRef<WorldManager | null>(null);
   
-  // Create a ref for the Chat component with the proper type
-  const chatRef = useRef<ChatRefHandle>(null);
+  // Add a ref to track the last time we cached position
+  const lastPositionCacheTime = useRef(0);
   
   // Add effect to initialize display name
   useEffect(() => {
     if (playerName) {
-      setDisplayName(playerName);
+      // This effect is now handled in the GameSettings component
     }
   }, [playerName]);
   
   // Add function to handle display name change
-  const handleDisplayNameChange = async () => {
-    if (!displayName.trim()) return;
-    
-    const socket = await getSocket();
-    if (socket) {
-      socket.emit('updateDisplayName', { name: displayName.trim() });
-      setPlayerName(displayName.trim());
-    }
-  };
+  // This function is now handled in the GameSettings component
   
   // Keep inversion setting in sync with ref
   useEffect(() => {
@@ -198,7 +190,7 @@ const GameCanvas: React.FC = () => {
         }
         
         // On reconnection, check for cached position to prevent reset to origin
-        const cachedPosition = getCachedPlayerPosition();
+        const cachedPosition = getLastKnownPosition();
         if (cachedPosition && playerRef.current) {
           // Only apply if significantly different from origin (0,0,0) to avoid overriding server position
           const isAtOrigin = 
@@ -472,14 +464,20 @@ const GameCanvas: React.FC = () => {
       // Get delta time for frame-rate independent updates
       const delta = clockRef.current.getDelta();
       
+      // Track whether the player moved this frame
+      const hadMovement = movementChanged.current;
+      
       // Update player movement (delta time is calculated inside updatePlayerMovement)
       updatePlayerMovement();
       
       // Update remote player positions with interpolation
       updateRemotePlayerPositions(delta);
       
-      // Send position updates
-      sendPositionUpdate();
+      // Only send position updates if player has moved or movementChanged was set
+      // This prevents unnecessary network traffic
+      if (hadMovement || movementChanged.current) {
+        sendPositionUpdate();
+      }
       
       // Always update camera to follow player
       if (playerRef.current) {
@@ -505,11 +503,6 @@ const GameCanvas: React.FC = () => {
         worldManagerRef.current.updateItems(delta);
       }
       
-      // Update chat bubbles with the Chat component
-      if (chatRef.current) {
-        chatRef.current.updateChatBubbles();
-      }
-      
       // Render scene and labels
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
@@ -519,44 +512,36 @@ const GameCanvas: React.FC = () => {
         updateDebugVisuals();
       }
       
-      // Add this to the animate function or in a separate useEffect
-      // Update player position data attribute for the caching system
-      if (playerRef.current) {
-        // Create or update a hidden data element to store position
-        let positionEl = document.querySelector('[data-player-position]') as HTMLDivElement | null;
-        if (!positionEl) {
-          positionEl = document.createElement('div');
-          positionEl.style.display = 'none';
-          positionEl.setAttribute('data-player-position', 'true');
-          document.body.appendChild(positionEl);
-        }
-        
-        // Update the position data
-        const currentPos = playerRef.current.position;
-        const positionData = { x: currentPos.x, y: currentPos.y, z: currentPos.z };
+      // Update the data-position attribute with current position
+      // This is used by other components to access the player's position
+      const positionEl = document.querySelector('[data-player-position]');
+      if (playerRef.current && positionEl) {
+        const positionData = {
+          x: playerRef.current.position.x,
+          y: playerRef.current.position.y,
+          z: playerRef.current.position.z
+        };
         positionEl.setAttribute('data-position', JSON.stringify(positionData));
         
-        // Periodically cache the position (every ~5 seconds)
-        if (Math.random() < 0.01) { // ~1% chance per frame at 60fps = ~once every 2 seconds
-          cachePlayerPosition(positionData);
+        // Cache position only when player has actually moved a significant amount
+        // Compare with the last cached position to avoid unnecessary updates
+        const lastCachedPosition = getLastKnownPosition() || { x: 0, y: 1, z: 0 };
+        const dx = positionData.x - lastCachedPosition.x;
+        const dy = positionData.y - lastCachedPosition.y;
+        const dz = positionData.z - lastCachedPosition.z;
+        const distanceSquared = dx * dx + dy * dy + dz * dz;
+        
+        // Cache if moved more than 1 unit or if it's been a long time since last cache
+        // Use the moved flag from animation frame to know if player moved this frame
+        const now = Date.now();
+        if ((distanceSquared > 1.0 && movementChanged.current) || 
+            (now - lastPositionCacheTime.current > 5000 && movementChanged.current)) {
+          saveLastKnownPosition(positionData);
+          lastPositionCacheTime.current = now;
         }
       }
     };
     animate();
-    
-    // Just before the animate function, add a diagnostic console log to regularly check player tracking
-    setInterval(() => {
-      // Get current socket reference
-      getSocket().then(currentSocket => {
-        console.log('PERIODIC PLAYER TRACKING CHECK:', {
-          connectedToSocket: !!currentSocket?.connected,
-          socketId: currentSocket?.id,
-          trackedPlayers: Array.from(playersRef.current.keys()),
-          trackedPlayersCount: playersRef.current.size,
-          ownPlayerId: currentSocket?.id
-        });
-      });
-    }, 10000); // Check every 10 seconds
     
     // Clean up on unmount
     return () => {
@@ -972,19 +957,30 @@ const GameCanvas: React.FC = () => {
     const currentTime = Date.now();
     const timeSinceLastSend = currentTime - lastSendTime.current;
     
-    // Send position update if we've moved substantially or it's been a while since our last update
+    // Only send updates in these cases:
+    // 1. Player has actually moved AND it's been at least SEND_INTERVAL ms
+    // 2. Player has moved significantly (> 0.1 units) AND it's been at least SEND_INTERVAL ms
+    // Remove the periodic updates (every 1000ms) which were causing unnecessary network traffic
     if ((movementChanged.current && timeSinceLastSend >= SEND_INTERVAL) || 
-        (distanceFromLast > 0.1 && timeSinceLastSend >= SEND_INTERVAL) ||
-        timeSinceLastSend >= 1000) { // Send at least every second even if not moving
+        (distanceFromLast > 0.1 && timeSinceLastSend >= SEND_INTERVAL)) {
       
       getSocket().then(socket => {
         if (socket) {
-          socket.emit('playerMove', {
+          // Add timestamp to help with server-side position prediction
+          // Create position data with explicit PlayerPosition type
+          const positionData: PlayerPosition = {
             x, 
             y, 
-            z
-            // timestamp removed to fix type error
-          });
+            z,
+            timestamp: Date.now()
+          };
+          
+          socket.emit('playerMove', positionData);
+          
+          // Log only significant movements for debugging
+          if (distanceFromLast > 0.5) {
+            console.log(`Sending position update: distance moved = ${distanceFromLast.toFixed(2)}`);
+          }
         }
       });
       
@@ -1227,129 +1223,16 @@ const GameCanvas: React.FC = () => {
         {isConnected ? 'Connected' : 'Disconnected'}
       </div>
       
-      {/* Settings button */}
-      <button
-        onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-        style={{
-          position: 'absolute',
-          top: '10px',
-          right: '10px',
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          color: 'white',
-          border: 'none',
-          borderRadius: '5px',
-          padding: '5px 10px',
-          cursor: 'pointer',
-          fontSize: '12px',
-          zIndex: 100
-        }}
-      >
-        ⚙️ Settings
-      </button>
-      
-      {/* Settings panel */}
-      {isSettingsOpen && (
-        <div style={{
-          position: 'absolute',
-          top: '45px',
-          right: '10px',
-          backgroundColor: 'rgba(0, 0, 0, 0.8)',
-          color: 'white',
-          border: '1px solid #333',
-          borderRadius: '5px',
-          padding: '10px',
-          width: '250px',
-          zIndex: 101,
-          fontFamily: 'sans-serif',
-          fontSize: '14px'
-        }}>
-          <div style={{ fontWeight: 'bold', marginBottom: '10px', borderBottom: '1px solid #555', paddingBottom: '5px' }}>
-            Game Settings
-          </div>
-          
-          <div style={{ marginBottom: '15px' }}>
-            <label htmlFor="displayName" style={{ display: 'block', marginBottom: '5px' }}>
-              Display Name
-            </label>
-            <div style={{ display: 'flex', gap: '5px' }}>
-              <input
-                id="displayName"
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                style={{
-                  flex: 1,
-                  padding: '5px',
-                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                  borderRadius: '3px',
-                  color: 'white'
-                }}
-                placeholder="Enter display name"
-              />
-              <button
-                onClick={handleDisplayNameChange}
-                style={{
-                  padding: '5px 10px',
-                  backgroundColor: '#4CAF50',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '3px',
-                  cursor: 'pointer'
-                }}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-          
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <label htmlFor="invertHorizontal" style={{ cursor: 'pointer' }}>
-              Invert Camera Horizontal
-            </label>
-            <input
-              id="invertHorizontal"
-              type="checkbox"
-              checked={isHorizontalInverted}
-              onChange={() => {
-                const newValue = !isHorizontalInverted;
-                setIsHorizontalInverted(newValue);
-              }}
-              style={{ cursor: 'pointer' }}
-            />
-          </div>
-          
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <label htmlFor="soundToggle" style={{ cursor: 'pointer' }}>
-              Sound Effects
-            </label>
-            <input
-              id="soundToggle"
-              type="checkbox"
-              checked={soundEnabled}
-              onChange={() => setSoundEnabled(!soundEnabled)}
-              style={{ cursor: 'pointer' }}
-            />
-          </div>
-          
-          <div style={{ marginTop: '15px', textAlign: 'right' }}>
-            <button
-              onClick={() => setIsSettingsOpen(false)}
-              style={{
-                backgroundColor: '#555',
-                color: 'white',
-                border: 'none',
-                borderRadius: '3px',
-                padding: '3px 8px',
-                cursor: 'pointer',
-                fontSize: '12px'
-              }}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Use GameSettings component */}
+      <GameSettings
+        playerName={playerName}
+        setPlayerName={setPlayerName}
+        soundEnabled={soundEnabled}
+        setSoundEnabled={setSoundEnabled}
+        isHorizontalInverted={isHorizontalInverted}
+        setIsHorizontalInverted={setIsHorizontalInverted}
+        isHorizontalInvertedRef={isHorizontalInvertedRef}
+      />
       
       {/* Reconnect button */}
       {!isConnected && (
@@ -1397,10 +1280,8 @@ const GameCanvas: React.FC = () => {
         {isCleaningUp ? 'Cleaning...' : '👻 Remove Ghosts'}
       </button>
       
-      {/* Use Chat component with proper forwardRef */}
-      <Chat
-        ref={chatRef}
-        scene={sceneRef.current}
+      <GameChat
+        sceneRef={sceneRef}
         playerRef={playerRef}
         playersRef={playersRef}
       />

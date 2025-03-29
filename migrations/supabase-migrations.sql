@@ -66,13 +66,6 @@ CREATE TABLE IF NOT EXISTS world_map (
   UNIQUE(chunk_x, chunk_z)
 );
 
--- Migrations table to track applied migrations
-CREATE TABLE IF NOT EXISTS migrations (
-  id SERIAL PRIMARY KEY,
-  name VARCHAR(255) NOT NULL UNIQUE,
-  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- Temporary player data table - stores game state for non-authenticated players
 CREATE TABLE IF NOT EXISTS temp_player_data (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -85,6 +78,50 @@ CREATE TABLE IF NOT EXISTS temp_player_data (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ,
   last_active TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Add index for session_id
+CREATE INDEX IF NOT EXISTS idx_temp_player_data_session_id ON temp_player_data(session_id);
+
+-- Add RLS policies for temp_player_data
+ALTER TABLE temp_player_data ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY IF NOT EXISTS "Anyone can insert temp player data"
+  ON temp_player_data FOR INSERT
+  WITH CHECK (true);
+
+CREATE POLICY IF NOT EXISTS "Anyone can read temp player data"
+  ON temp_player_data FOR SELECT
+  USING (true);
+
+CREATE POLICY IF NOT EXISTS "Anyone can update temp player data"
+  ON temp_player_data FOR UPDATE
+  USING (true);
+
+CREATE POLICY IF NOT EXISTS "Anyone can delete temp player data"
+  ON temp_player_data FOR DELETE
+  USING (true);
+
+-- Create function to set updated_at
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger for updated_at
+CREATE TRIGGER set_temp_player_data_updated_at
+  BEFORE UPDATE ON temp_player_data
+  FOR EACH ROW
+  EXECUTE FUNCTION set_updated_at();
+
+-- Migrations table to track applied migrations
+CREATE TABLE IF NOT EXISTS migrations (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL UNIQUE,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Realtime subscriptions for profiles
@@ -120,34 +157,6 @@ CREATE INDEX idx_player_data_user_id ON player_data(user_id);
 CREATE INDEX idx_resource_nodes_type ON resource_nodes(node_type);
 CREATE INDEX idx_world_items_type ON world_items(item_type);
 CREATE INDEX idx_world_map_chunk ON world_map(chunk_x, chunk_z);
-
--- Add index for session_id
-CREATE INDEX idx_temp_player_data_session_id ON temp_player_data(session_id);
-
--- Add RLS policies for temp_player_data
-ALTER TABLE temp_player_data ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Anyone can insert temp player data"
-  ON temp_player_data FOR INSERT
-  WITH CHECK (true);
-
-CREATE POLICY "Anyone can read temp player data"
-  ON temp_player_data FOR SELECT
-  USING (true);
-
-CREATE POLICY "Anyone can update temp player data"
-  ON temp_player_data FOR UPDATE
-  USING (true);
-
-CREATE POLICY "Anyone can delete temp player data"
-  ON temp_player_data FOR DELETE
-  USING (true);
-
--- Create trigger for updated_at
-CREATE TRIGGER set_temp_player_data_updated_at
-  BEFORE UPDATE ON temp_player_data
-  FOR EACH ROW
-  EXECUTE FUNCTION set_updated_at();
 
 -- PART 2: Seed Data
 

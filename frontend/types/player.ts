@@ -11,6 +11,14 @@ export interface Player {
   inventory?: Item[];
 }
 
+// Player position interface for network updates
+export interface PlayerPosition {
+  x: number;
+  y: number;
+  z: number;
+  timestamp?: number;  // Optional timestamp for synchronization
+}
+
 // Item interface
 export interface Item {
   id: string;

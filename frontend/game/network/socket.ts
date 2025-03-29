@@ -49,14 +49,14 @@ let connectionState = {
 };
 
 // Add caching for last known position to prevent position resets
-const saveLastKnownPosition = (position: {x: number, y: number, z: number}) => {
+export const saveLastKnownPosition = (position: {x: number, y: number, z: number}) => {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('last_player_position', JSON.stringify(position));
     console.log('Saved last known position:', position);
   }
 };
 
-const getLastKnownPosition = (): {x: number, y: number, z: number} | null => {
+export const getLastKnownPosition = (): {x: number, y: number, z: number} | null => {
   if (typeof localStorage !== 'undefined') {
     const positionStr = localStorage.getItem('last_player_position');
     if (positionStr) {
@@ -82,6 +82,28 @@ export const getSocketStatus = () => {
     lastConnected: connectionState.lastConnected,
     error: connectionState.error
   };
+};
+
+// Generate/get persistent temp user ID
+export const getTempUserId = (): string => {
+  if (typeof localStorage !== 'undefined') {
+    // Try to get existing temp user ID
+    let tempUserId = localStorage.getItem('miniscape_temp_user_id');
+    
+    // If no temp user ID exists, generate one
+    if (!tempUserId) {
+      tempUserId = 'temp-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+      localStorage.setItem('miniscape_temp_user_id', tempUserId);
+      console.log('Generated new temp user ID:', tempUserId);
+    } else {
+      console.log('Using existing temp user ID:', tempUserId);
+    }
+    
+    return tempUserId;
+  }
+  
+  // Fallback for server-side rendering
+  return 'temp-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
 };
 
 // Initialize socket connection
@@ -144,8 +166,10 @@ export const initializeSocket = async () => {
       reconnectionDelayMax: 5000,     // Cap the exponential backoff
       timeout: 20000,                 // Increased from 15s to 20s for slower networks
       forceNew: true,
-      // Remove auth-related options - set to empty object instead of false
-      auth: {}
+      // Include the temp user ID in auth
+      auth: {
+        tempUserId: getTempUserId()
+      }
     });
 
     // Enhanced logging and error handling
@@ -393,8 +417,4 @@ export const setupSocketCleanup = () => {
     console.log('Component unmounting, disconnecting socket');
     disconnectSocket();
   };
-};
-
-// Export the position utility functions
-export const cachePlayerPosition = saveLastKnownPosition;
-export const getCachedPlayerPosition = getLastKnownPosition; 
+}; 

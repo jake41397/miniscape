@@ -43,6 +43,9 @@ export const setupSocketListeners = async ({
   const socket = await getSocket();
   if (!socket) return () => {};
 
+  // Setup position correction handler
+  setupPositionCorrectionHandler(socket, playerRef);
+
   // Function to create a player mesh
   const createPlayerMesh = (player: Player) => {
     // First check if this is the player's own character
@@ -844,3 +847,20 @@ export const setupSocketListeners = async ({
 };
 
 // We don't need to export cleanupPlayerMeshes since it's only used internally 
+
+// Add handler for position correction events from the server
+// This ensures client position state stays in sync with server
+// Especially when the server rejects a reset to the default position
+export const setupPositionCorrectionHandler = (socket: any, playerRef: React.MutableRefObject<THREE.Mesh | null>) => {
+  socket.on('positionCorrection', (position: { x: number, y: number, z: number }) => {
+    console.log('Received position correction from server:', position);
+    
+    if (playerRef.current) {
+      // Update the player's position to match the server's corrected position
+      playerRef.current.position.set(position.x, position.y, position.z);
+      
+      // Update client-side state
+      console.log('Applied position correction from server');
+    }
+  });
+}; 

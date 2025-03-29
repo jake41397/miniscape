@@ -9,9 +9,6 @@ import { setupSocketCleanup } from '../game/network/socket';
 const DynamicDebugButton = dynamic(() => import('../components/DebugButton'), { 
   ssr: false 
 });
-const DynamicSessionStatus = dynamic(() => import('../components/SessionStatus'), { 
-  ssr: false 
-});
 const DynamicGameCanvas = dynamic(() => import('../components/GameCanvas'), { 
   ssr: false,
   loading: () => <div>Loading game engine...</div>
@@ -406,7 +403,7 @@ export default function Home() {
       {isLoading ? (
         <LoadingScreen />
       ) : (
-        <DynamicGameCanvas key={`game-canvas-${Date.now()}`} session={session} />
+        <DynamicGameCanvas key={`game-canvas-${Date.now()}`} />
       )}
     
       {/* Debug button in the corner */}
@@ -433,8 +430,6 @@ export default function Home() {
         >
           {showDebugPanel ? 'Hide Debug' : 'Show Debug'}
         </button>
-        
-        <DynamicSessionStatus compact={true} />
       </div>
     </div>
   );
