@@ -24,6 +24,7 @@ interface SocketHandlerOptions {
   playersRef: React.MutableRefObject<Map<string, THREE.Mesh>>;
   nameLabelsRef: React.MutableRefObject<Map<string, CSS2DObject>>;
   worldManagerRef: React.MutableRefObject<WorldManager | null>;
+  itemManagerRef?: React.MutableRefObject<any | null>; // Add itemManagerRef as optional
   cleanupIntervalRef: React.MutableRefObject<NodeJS.Timeout | null>;
   setPlayerName: (name: string) => void;
   createNameLabel: (name: string, mesh: THREE.Mesh) => CSS2DObject;
@@ -36,6 +37,7 @@ export const setupSocketListeners = async ({
   playersRef,
   nameLabelsRef,
   worldManagerRef,
+  itemManagerRef,
   cleanupIntervalRef,
   setPlayerName,
   createNameLabel
