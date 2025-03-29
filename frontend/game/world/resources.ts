@@ -131,13 +131,20 @@ export const createFishingSpotMesh = (): THREE.Mesh => {
 
 // Create a dropped item mesh
 export const createItemMesh = (itemType: string): THREE.Mesh => {
+  console.log(`Creating item mesh for type: '${itemType}'`);
+  
   let geometry;
   let material;
   let mesh;
   
+  // Normalize itemType to lowercase for consistent handling
+  const type = String(itemType).toLowerCase();
+  
   // Choose geometry and color based on item type
-  switch (itemType) {
+  switch (type) {
     case 'log':
+    case 'wood':
+    case 'logs':
       // Create a cylindrical log
       geometry = new THREE.CylinderGeometry(0.15, 0.15, 0.5, 8);
       material = new THREE.MeshStandardMaterial({
@@ -151,6 +158,7 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
       break;
       
     case 'coal':
+    case 'coal_ore':
       // Create irregular rock-like shape for coal
       geometry = new THREE.DodecahedronGeometry(0.2, 0);
       material = new THREE.MeshStandardMaterial({
@@ -164,6 +172,7 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
       break;
       
     case 'fish':
+    case 'raw_fish':
       // Create flattened ellipsoid for fish
       geometry = new THREE.SphereGeometry(0.2, 8, 8);
       // Flatten it a bit
@@ -185,17 +194,19 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
       break;
       
     default:
+      console.warn(`Unknown item type '${itemType}', using default box`);
       // Default fallback - simple box
       geometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
       material = new THREE.MeshStandardMaterial({
-        color: 0xCCCCCC, // Default gray
-        emissive: 0xCCCCCC,
-        emissiveIntensity: 0.1
+        color: 0xCC44CC, // Bright purple for visibility
+        emissive: 0xCC44CC,
+        emissiveIntensity: 0.2
       });
       mesh = new THREE.Mesh(geometry, material);
   }
   
-  mesh.position.y = 0.15; // Position slightly above ground to avoid z-fighting
+  // Position slightly above ground to avoid z-fighting
+  mesh.position.y = 0.25; 
   
   // Add animation properties
   mesh.userData.animateY = true;
@@ -203,14 +214,11 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
   mesh.userData.phase = Math.random() * Math.PI * 2; // Random phase for varied motion
   mesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2; // Random rotation speed
   
-  // Add subtle glow/highlight effect
-  const glowColor = new THREE.Color(0xffffff);
-  glowColor.lerp(new THREE.Color(material.color.getHex()), 0.5);
-  
   // Set shadow casting
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   
+  console.log(`Created mesh for '${itemType}' at initial y: ${mesh.position.y}`);
   return mesh;
 };
 

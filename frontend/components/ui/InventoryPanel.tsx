@@ -83,13 +83,12 @@ const ItemSprites = {
 
 const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ onDropItem, style, itemManager }, ref) => {
   const [inventory, setInventory] = useState<Item[]>([]);
-  const [isOpen, setIsOpen] = useState(false);
   const [selectedItemIndex, setSelectedItemIndex] = useState<number | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   
   // Grid configuration
-  const GRID_SIZE = 4; // 4x7 grid (28 slots like RuneScape)
-  const GRID_ROWS = 7;
+  const GRID_SIZE = 4; // 4x6 grid (24 slots)
+  const GRID_ROWS = 6;
 
   // Expose methods via ref for external components
   useImperativeHandle(ref, () => ({
@@ -177,21 +176,82 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
   }, []);
   
   const handleDropItem = async (item: Item) => {
-    // First check if we have an itemManager that can handle the drop
-    if (itemManager) {
-      await itemManager.dropItem(item);
-      return;
-    }
+    console.log(`Attempting to drop item: ${item.type} (${item.id})`);
     
-    // Fall back to previous behavior if no itemManager
-    if (onDropItem) {
-      onDropItem(item);
-    } else {
-      // If no callback and no itemManager, send directly to server
-      const socket = await getSocket();
-      if (socket) {
-        socket.emit('dropItem', { itemId: item.id, itemType: item.type });
+    try {
+      // First check if we have an itemManager that can handle the drop
+      if (itemManager) {
+        console.log(`Using ItemManager to drop item: ${item.type}`);
+        // We're removing the item from local inventory immediately for better UX
+        setInventory(prevInventory => {
+          const newInventory = [...prevInventory];
+          const index = newInventory.findIndex(i => i.id === item.id);
+          if (index !== -1) {
+            if (newInventory[index].count && newInventory[index].count > 1) {
+              newInventory[index].count -= 1;
+            } else {
+              newInventory.splice(index, 1);
+            }
+          }
+          return newInventory;
+        });
+        
+        // Then send to server - this is the critical part
+        const result = await itemManager.dropItem(item);
+        console.log(`ItemManager drop result: ${result ? 'Success' : 'Failed'}`);
+        return;
       }
+      
+      // Rest of the function remains unchanged
+      if (onDropItem) {
+        console.log(`Using onDropItem callback to drop item: ${item.type}`);
+        onDropItem(item);
+      } else {
+        // If no callback and no itemManager, send directly to server
+        console.log(`No itemManager or callback found, sending drop directly to server`);
+        const socket = await getSocket();
+        if (socket) {
+          console.log(`Socket available (${socket.id}), emitting dropItem event`);
+          
+          // Get player position from data attribute if available
+          const positionElement = document.querySelector('[data-player-position]');
+          let positionData = {};
+          
+          if (positionElement && positionElement.getAttribute('data-position')) {
+            try {
+              positionData = JSON.parse(positionElement.getAttribute('data-position') || '{}');
+              console.log('Retrieved player position for drop:', positionData);
+            } catch (e) {
+              console.error('Failed to parse player position:', e);
+            }
+          }
+          
+          // Send in the format that the server expects based on which handler processes it
+          (socket as any).emit('dropItem', { 
+            itemId: item.id, 
+            itemType: item.type,
+            ...positionData
+          });
+          
+          // Remove from local inventory immediately for better UX
+          setInventory(prevInventory => {
+            const newInventory = [...prevInventory];
+            const index = newInventory.findIndex(i => i.id === item.id);
+            if (index !== -1) {
+              if (newInventory[index].count && newInventory[index].count > 1) {
+                newInventory[index].count -= 1;
+              } else {
+                newInventory.splice(index, 1);
+              }
+            }
+            return newInventory;
+          });
+        } else {
+          console.error('Failed to get socket for item drop');
+        }
+      }
+    } catch (error) {
+      console.error('Error dropping item:', error);
     }
   };
 
@@ -218,11 +278,6 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
   const getItemSprite = (type: ItemType) => {
     const SpriteComponent = ItemSprites[type] || ItemSprites.default;
     return <SpriteComponent />;
-  };
-  
-  const toggleInventory = () => {
-    setIsOpen(!isOpen);
-    setContextMenu(null); // Close context menu when toggling inventory
   };
   
   const selectItem = (index: number) => {
@@ -306,58 +361,70 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
     
     setInventory([...inventory, newItem]);
   };
+
+  // Add a test drop function that uses the ItemManager's test function
+  const testDrop = async () => {
+    if (itemManager) {
+      console.log("Running test drop via ItemManager");
+      await itemManager.testDrop();
+    } else {
+      console.error("Cannot test drop - no ItemManager available");
+    }
+  };
   
   return (
     <div className="inventory-panel" style={style}>
-      <div className="inventory-button" onClick={toggleInventory}>
-        <span>Inventory ({inventory.length}/28)</span>
-      </div>
-      
-      {isOpen && (
-        <div className="inventory-content">
-          <h3>Inventory</h3>
-          
-          <div className="hint-text">
-            Right-click items for options
-          </div>
-          
-          <div className="inventory-grid">
-            {Array.from({ length: GRID_ROWS }).map((_, rowIndex) => (
-              <div key={`row-${rowIndex}`} className="inventory-row">
-                {Array.from({ length: GRID_SIZE }).map((_, colIndex) => {
-                  const slotIndex = rowIndex * GRID_SIZE + colIndex;
-                  const item = slotIndex < inventory.length ? inventory[slotIndex] : null;
-                  
-                  return (
-                    <div 
-                      key={`cell-${rowIndex}-${colIndex}`} 
-                      className={`inventory-cell ${selectedItemIndex === slotIndex ? 'selected' : ''}`}
-                      onClick={() => item && selectItem(slotIndex)}
-                      onContextMenu={(e) => item && handleRightClick(e, item)}
-                    >
-                      {item && (
-                        <div className="item-content">
-                          <div className="item-icon">
-                            {getItemSprite(item.type)}
-                          </div>
-                          {item.count > 1 && (
-                            <div className="item-count">{item.count}</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-          
+      <div className="inventory-content">
+        <h3>Inventory</h3>
+        
+        {/* Debug buttons area */}
+        <div className="debug-buttons">
           {/* Test button - remove in production */}
           <button className="test-button" onClick={addTestItem}>
             Add Test Item
           </button>
+          
+          {/* Test drop button - remove in production */}
+          <button className="test-button" onClick={testDrop}>
+            Test Drop
+          </button>
         </div>
-      )}
+        
+        <div className="hint-text">
+          Right-click items for options
+        </div>
+        
+        <div className="inventory-grid">
+          {Array.from({ length: GRID_ROWS }).map((_, rowIndex) => (
+            <div key={`row-${rowIndex}`} className="inventory-row">
+              {Array.from({ length: GRID_SIZE }).map((_, colIndex) => {
+                const slotIndex = rowIndex * GRID_SIZE + colIndex;
+                const item = slotIndex < inventory.length ? inventory[slotIndex] : null;
+                
+                return (
+                  <div 
+                    key={`cell-${rowIndex}-${colIndex}`} 
+                    className={`inventory-cell ${selectedItemIndex === slotIndex ? 'selected' : ''}`}
+                    onClick={() => item && selectItem(slotIndex)}
+                    onContextMenu={(e) => item && handleRightClick(e, item)}
+                  >
+                    {item && (
+                      <div className="item-content">
+                        <div className="item-icon">
+                          {getItemSprite(item.type)}
+                        </div>
+                        {item.count > 1 && (
+                          <div className="item-count">{item.count}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
       
       {/* Context Menu */}
       {contextMenu && (
@@ -386,36 +453,15 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
       
       <style jsx>{`
         .inventory-panel {
-          position: absolute;
-          top: 20px;
-          right: 20px;
-          z-index: 100;
+          width: 100%;
           font-family: sans-serif;
         }
         
-        .inventory-button {
-          background-color: rgba(0, 0, 0, 0.7);
-          color: white;
-          padding: 8px 16px;
-          border-radius: 4px;
-          cursor: pointer;
-          text-align: center;
-          box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
-          transition: background-color 0.2s;
-        }
-        
-        .inventory-button:hover {
-          background-color: rgba(0, 0, 0, 0.8);
-        }
-        
         .inventory-content {
-          margin-top: 10px;
-          background-color: rgba(0, 0, 0, 0.7);
+          background-color: transparent;
           color: white;
-          border-radius: 8px;
           padding: 15px;
           width: 280px;
-          box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
         }
         
         .inventory-content h3 {
@@ -534,6 +580,12 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
           background-color: rgba(100, 120, 150, 0.8);
         }
         
+        .debug-buttons {
+          display: flex;
+          gap: 5px;
+          margin-bottom: 10px;
+        }
+        
         .test-button {
           margin-top: 5px;
           padding: 8px;
@@ -542,7 +594,7 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
           border: none;
           border-radius: 4px;
           cursor: pointer;
-          width: 100%;
+          flex: 1;
         }
         
         .test-button:hover {

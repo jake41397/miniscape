@@ -67,31 +67,24 @@ export const usePlayerMovement = ({
         let moveX = 0;
         let moveZ = 0;
 
-        // Apply halving/doubling scalar logic to movement calculations
-        // Original: Math.sin(angle) * SPEED
-        // Optimized: (Math.sin(angle) * 2) * (SPEED/2)
-        // This can improve instruction pipelining and reduce clock cycles
-        const speedHalf = FIXED_SPEED_FACTOR / 2;
-
         // Calculate forward/backward movement relative to camera
         if (moveForward) {
-            moveX -= (Math.sin(cameraAngle) * 2) * speedHalf;
-            moveZ -= (Math.cos(cameraAngle) * 2) * speedHalf;
+            moveX -= Math.sin(cameraAngle) * FIXED_SPEED_FACTOR;
+            moveZ -= Math.cos(cameraAngle) * FIXED_SPEED_FACTOR;
         }
         if (moveBackward) {
-            moveX += (Math.sin(cameraAngle) * 2) * speedHalf;
-            moveZ += (Math.cos(cameraAngle) * 2) * speedHalf;
+            moveX += Math.sin(cameraAngle) * FIXED_SPEED_FACTOR;
+            moveZ += Math.cos(cameraAngle) * FIXED_SPEED_FACTOR;
         }
 
         // Calculate left/right strafing relative to camera
-        // Apply same halving/doubling scalar logic to strafing
         if (moveLeft) {
-            moveX -= (Math.sin(cameraAngle + Math.PI / 2) * 2) * speedHalf;
-            moveZ -= (Math.cos(cameraAngle + Math.PI / 2) * 2) * speedHalf;
+            moveX -= Math.sin(cameraAngle + Math.PI / 2) * FIXED_SPEED_FACTOR;
+            moveZ -= Math.cos(cameraAngle + Math.PI / 2) * FIXED_SPEED_FACTOR;
         }
         if (moveRight) {
-            moveX += (Math.sin(cameraAngle + Math.PI / 2) * 2) * speedHalf;
-            moveZ += (Math.cos(cameraAngle + Math.PI / 2) * 2) * speedHalf;
+            moveX += Math.sin(cameraAngle + Math.PI / 2) * FIXED_SPEED_FACTOR;
+            moveZ += Math.cos(cameraAngle + Math.PI / 2) * FIXED_SPEED_FACTOR;
         }
 
         // Apply horizontal movement if there is any
@@ -118,11 +111,7 @@ export const usePlayerMovement = ({
             // Apply smooth rotation towards the movement angle
             const rotationDiff = moveAngle - playerMesh.rotation.y;
             const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI; // Normalize to [-PI, PI]
-            
-            // Apply halving/doubling scalar logic to rotation smoothing
-            // Original: normalizedDiff * 0.15
-            // Optimized: (normalizedDiff * 0.3) / 2
-            const rotationStep = (normalizedDiff * 0.3) / 2; // Smoothing factor
+            const rotationStep = normalizedDiff * 0.15; // Smoothing factor
 
             // Only apply rotation if the change is significant enough
             if (Math.abs(rotationStep) > 0.001) {

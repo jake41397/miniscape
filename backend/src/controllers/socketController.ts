@@ -41,6 +41,7 @@ interface WorldItem {
   x: number;
   y: number;
   z: number;
+  droppedBy?: string;
 }
 
 interface ResourceNode {
@@ -633,58 +634,100 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     });
     
     // Handle item dropping
-    socket.on('dropItem', async (item: {id: string}) => {
-      // Validate input
-      const player = players[socket.id];
-      const itemId = item.id;
-      
-      if (player && player.inventory && itemId) {
-        const itemIndex = player.inventory.findIndex(i => i.id === itemId);
+    socket.on('dropItem', async (data: any) => {
+      try {
+        // Log the received data
+        console.log(`[${socket.id}] Received dropItem event in socketController:`, data);
         
-        if (itemIndex !== -1) {
-          // Get the item
-          const droppedItem = player.inventory[itemIndex];
-          
-          // Remove from inventory (either reduce quantity or remove entirely)
-          if (droppedItem.quantity > 1) {
-            droppedItem.quantity -= 1;
-          } else {
-            player.inventory.splice(itemIndex, 1);
-          }
-          
-          // Generate a unique ID for the world item
-          const dropId = Math.random().toString(36).substr(2, 9);
-          
-          // Add to world items
-          const worldItem: WorldItem = {
-            dropId: dropId,
-            itemType: droppedItem.type,
-            x: player.x,
-            y: player.y,
-            z: player.z
-          };
-          
-          worldItems.push(worldItem);
-          
-          // Tell all clients about the new world item
-          io.emit('worldItemAdded', worldItem);
-          
-          // Update client's inventory
-          socket.emit('inventoryUpdate', player.inventory);
-          
-          // Save to database
-          try {
-            // Save updated inventory to database
-            if (socket.user && socket.user.id) {
-              await savePlayerInventory(socket.user.id, player.inventory);
-            }
-            
-            // Add the item to the world in database
-            await dropItemInWorld(dropId, droppedItem.type, player.x, player.y, player.z);
-          } catch (error) {
-            console.error('Failed to save dropped item to database:', error instanceof Error ? error : new Error(String(error)));
-          }
+        // Validate input
+        const player = players[socket.id];
+        if (!player) {
+          console.error(`[${socket.id}] Player not found in dropItem handler`);
+          return;
         }
+        
+        // Get the itemId - support both formats
+        const itemId = data.itemId || data.id;
+        if (!itemId) {
+          console.error(`[${socket.id}] No itemId or id provided in dropItem event`, data);
+          return;
+        }
+        
+        console.log(`[${socket.id}] Looking for item ${itemId} in inventory:`, player.inventory);
+        
+        if (!player.inventory) {
+          console.error(`[${socket.id}] Player inventory is missing`);
+          return;
+        }
+        
+        const itemIndex = player.inventory.findIndex(i => i.id === itemId);
+        if (itemIndex === -1) {
+          console.error(`[${socket.id}] Item ${itemId} not found in player's inventory`);
+          return;
+        }
+        
+        // Get the item
+        const droppedItem = player.inventory[itemIndex];
+        console.log(`[${socket.id}] Found item to drop:`, droppedItem);
+        
+        // Remove from inventory (either reduce quantity or remove entirely)
+        if (droppedItem.quantity > 1) {
+          droppedItem.quantity -= 1;
+          console.log(`[${socket.id}] Reduced item quantity to ${droppedItem.quantity}`);
+        } else {
+          player.inventory.splice(itemIndex, 1);
+          console.log(`[${socket.id}] Removed item from inventory`);
+        }
+        
+        // Generate a unique ID for the world item
+        const dropId = `drop-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        
+        // Get position from data or use player position
+        const x = data.x !== undefined ? data.x : player.x;
+        const y = data.y !== undefined ? data.y : player.y;
+        const z = data.z !== undefined ? data.z : player.z;
+        
+        // Add to world items
+        const worldItem: WorldItem = {
+          dropId: dropId,
+          itemType: droppedItem.type,
+          x,
+          y,
+          z,
+          droppedBy: socket.id
+        };
+        
+        worldItems.push(worldItem);
+        
+        console.log(`[${socket.id}] Created world item at position (${x}, ${y}, ${z}):`, worldItem);
+        
+        // Tell all clients about the new world item (broadcast BOTH event types for compatibility)
+        io.emit('worldItemAdded', worldItem);
+        io.emit('itemDropped', worldItem);
+        
+        console.log(`[${socket.id}] Broadcasted item drop to ALL clients`);
+        
+        // Update client's inventory
+        socket.emit('inventoryUpdate', player.inventory);
+        console.log(`[${socket.id}] Sent updated inventory to client`);
+        
+        // Save to database
+        try {
+          // Save updated inventory to database
+          if (socket.user && socket.user.id) {
+            await savePlayerInventory(socket.user.id, player.inventory);
+            console.log(`[${socket.id}] Saved inventory to database for user ${socket.user.id}`);
+          }
+          
+          // Add the item to the world in database
+          await dropItemInWorld(dropId, droppedItem.type, x, y, z);
+          console.log(`[${socket.id}] Saved world item to database`);
+        } catch (error) {
+          console.error(`[${socket.id}] Failed to save data to database:`, error instanceof Error ? error : new Error(String(error)));
+        }
+      } catch (error) {
+        console.error(`[${socket.id}] Error in dropItem handler:`, error instanceof Error ? error : new Error(String(error)));
+        socket.emit('error', 'Failed to drop item. Please try again.');
       }
     });
     
@@ -794,4 +837,7 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
 };
 
 // Export functions as ES modules
-export { setupSocketHandlers, initializeGameState, broadcastPlayerCount }; 
+export { setupSocketHandlers, initializeGameState, broadcastPlayerCount };
+
+// Add function to get the players object
+export const getPlayers = () => players; 

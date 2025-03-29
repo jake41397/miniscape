@@ -5,7 +5,7 @@ import cors from 'cors';
 import { Server, Socket } from 'socket.io';
 // Import socket controller as a regular module with any type
 // @ts-ignore - Ignore the TypeScript error for the controller import
-import { initializeGameState, setupSocketHandlers } from './controllers/socketController';
+import { initializeGameState, setupSocketHandlers, getPlayers } from './controllers/socketController';
 import * as authMiddleware from './middleware/authMiddleware';
 import { verifySocketToken } from './middleware/authMiddleware';
 import authRoutes from './routes/authRoutes';
@@ -13,6 +13,8 @@ import playerRoutes from './routes/playerRoutes';
 import gameRoutes from './routes/gameRoutes';
 import logger from './utils/logger';
 import { configureSocketIO } from './middleware/corsMiddleware';
+// Import the InventoryHandler class
+import InventoryHandler from './controllers/handlers/InventoryHandler';
 
 // Define the extended Socket interface
 interface ExtendedSocket extends Socket {
@@ -114,25 +116,48 @@ io.use(async (socket: ExtendedSocket, next) => {
 initializeGameState()
   .then(() => {
     logger.info('Game state initialized successfully');
+    
+    // Get the players object after initialization
+    const players = getPlayers();
+    
+    // Initialize the InventoryHandler with the players object
+    const inventoryHandler = new InventoryHandler(io, players);
+    
+    // Setup socket handlers
+    io.on('connection', (socket: ExtendedSocket) => {
+      const socketId = socket.id;
+      logger.info(`Client connected: ${socketId}`);
+      
+      // Log relevant information
+      logger.info('New connection details', {
+        connectionId: socketId,
+        userAgent: socket.handshake.headers['user-agent'],
+        remoteAddress: socket.handshake.address,
+        time: new Date().toISOString()
+      });
+      
+      // Check for authentication
+      const userId = socket.user?.id;
+      if (userId) {
+        // Log authenticated connection
+        logger.info(`Authenticated connection: ${socketId} (User: ${userId})`);
+        socket.emit('authStatus', { authenticated: true, userId });
+      } else {
+        // Log anonymous connection
+        logger.info(`Anonymous connection: ${socketId}`);
+        socket.emit('authStatus', { authenticated: false });
+      }
+      
+      // Set up all inventory handlers
+      inventoryHandler.setupAllHandlers(socket);
+      
+      // Set up other socket handlers
+      setupSocketHandlers(io, socket);
+    });
   })
   .catch((error) => {
     logger.error('Failed to initialize game state', error);
   });
-
-// Setup socket handlers
-io.on('connection', (socket: ExtendedSocket) => {
-  logger.info('New socket connection', { socketId: socket.id });
-  
-  // Check if socket has a user (authenticated) or not (guest)
-  if (socket.user) {
-    logger.info('Socket authenticated', { socketId: socket.id, userId: socket.user.id });
-  } else {
-    logger.info('Socket connected as guest', { socketId: socket.id });
-  }
-  
-  // Handle socket connection with or without authentication
-  setupSocketHandlers(io, socket);
-});
 
 // Start server
 server.listen(PORT, () => {

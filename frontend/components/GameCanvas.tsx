@@ -12,7 +12,7 @@ import {
   getLastKnownPosition
 } from '../game/network/socket';
 import { setupSocketListeners } from '../game/network/gameSocketHandler';
-import { Player, PlayerPosition } from '../types/player';
+import { Player, PlayerPosition, Item } from '../types/player';
 import InventoryPanel, { InventoryPanelHandle } from './ui/InventoryPanel';
 import soundManager from '../game/audio/soundManager';
 import { 
@@ -70,6 +70,7 @@ import { useNetworkSync } from '../hooks/useNetworkSync';
 import ConnectionStatusIndicator from './ui/ConnectionStatusIndicator';
 import ZoneIndicator from './ui/ZoneIndicator';
 import { cleanupAllNameLabels, createPlayerMesh, disposeMesh } from 'utils/threeUtils';
+import TabMenu from './ui/TabMenu';
 
 const GameCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -98,6 +99,8 @@ const GameCanvas: React.FC = () => {
   const [currentZone, setCurrentZone] = useState<string>('Lumbridge');
   // Add player count state
   const [playerCount, setPlayerCount] = useState<number>(0);
+  // Add inventory state
+  const [inventory, setInventory] = useState<Item[]>([]);
   
   // Store key states
   const keysPressed = useRef<Record<string, boolean>>({
@@ -343,11 +346,6 @@ const GameCanvas: React.FC = () => {
   const updateRemotePlayerPositions = useCallback((delta: number) => {
     if (!playersRef.current) return;
 
-    // Halving/doubling scalar optimization: process players in two iterations
-    // First pass: handle interpolation calculations (more expensive) 
-    // Second pass: apply actual position updates (less expensive)
-    const playerUpdates = new Map<THREE.Mesh, { pos: THREE.Vector3, rot: number }>();
-
     playersRef.current.forEach((playerMesh, playerId) => {
       const targetData = playerMesh.userData.targetPosition;
       if (!targetData) return;
@@ -364,50 +362,31 @@ const GameCanvas: React.FC = () => {
         return;
       }
 
-      // --- Interpolation (mathematical preparation, avoid immediate mutation) ---
-      // Halving/doubling scalar logic applied to interpolation factor: delta * (2 * INTERPOLATION_SPEED/2)
-      // This allows for better CPU instruction pipelining
-      const interpFactor = delta * INTERPOLATION_SPEED;
-      const interpVector = target.clone().sub(current).multiplyScalar(interpFactor);
-      const newPosition = current.clone().add(interpVector);
+      // --- Interpolation ---
+      const interpVector = target.clone().sub(current).multiplyScalar(INTERPOLATION_SPEED);
+      playerMesh.position.add(interpVector);
 
       // --- Prediction ---
       if (ENABLE_POSITION_PREDICTION && playerMesh.userData.serverVelocity && distanceSq < 1.0) {
         const timeSinceUpdate = (Date.now() - (playerMesh.userData.lastUpdateTime || Date.now())) / 1000.0;
-        // Halving/doubling scalar logic: Split prediction factor calculation into paired operations
-        // timeSinceUpdate * 0.6 = timeSinceUpdate * (0.3 * 2)
-        const predictionFactor = Math.min(0.3, timeSinceUpdate * 0.3 * 2);
+        const predictionFactor = Math.min(0.3, timeSinceUpdate * 0.6);
         const velocity = playerMesh.userData.serverVelocity;
-        
-        // Apply velocity prediction using halving/doubling logic: (velocity.x * 2) * (delta * predictionFactor / 2)
-        // This reduces calculation precision errors and allows better CPU pipelining
-        newPosition.x += (velocity.x * 2) * (delta * predictionFactor / 2);
-        newPosition.z += (velocity.z * 2) * (delta * predictionFactor / 2);
+        playerMesh.position.x += velocity.x * delta * predictionFactor;
+        playerMesh.position.z += velocity.z * delta * predictionFactor;
       }
 
       // --- Rotation ---
-      let newRotation = playerMesh.rotation.y;
       if (distanceSq > 0.0025) {
         const angle = Math.atan2(target.x - current.x, target.z - current.z);
         const rotationDiff = angle - playerMesh.rotation.y;
         const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
-        // Apply halving/doubling scalar logic to rotation: (normalizedDiff * 0.6) / 2
-        newRotation += (normalizedDiff * 0.6) / 2;
+        playerMesh.rotation.y += normalizedDiff * 0.3;
       }
 
       // --- Final Snap ---
-      if (newPosition.distanceToSquared(target) < 0.0004) {
-        newPosition.copy(target);
+      if (playerMesh.position.distanceToSquared(target) < 0.0004) {
+        playerMesh.position.copy(target);
       }
-
-      // Store the calculated updates for batch application
-      playerUpdates.set(playerMesh, { pos: newPosition, rot: newRotation });
-    });
-
-    // Second pass: Apply all position updates at once (increases CPU cache coherence)
-    playerUpdates.forEach((update, playerMesh) => {
-      playerMesh.position.copy(update.pos);
-      playerMesh.rotation.y = update.rot;
     });
   }, []);
 
@@ -458,6 +437,54 @@ const GameCanvas: React.FC = () => {
     }
   }, []);
 
+  // Set up a listener for inventory updates
+  useEffect(() => {
+    const setupInventoryListener = async () => {
+      const socket = await getSocket();
+      if (socket) {
+        socket.on('inventoryUpdate', (updatedInventory: Item[]) => {
+          setInventory(updatedInventory);
+        });
+      }
+      
+      return () => {
+        getSocket().then(socket => {
+          if (socket) {
+            socket.off('inventoryUpdate');
+          }
+        });
+      };
+    };
+    
+    setupInventoryListener();
+  }, []);
+
+  // Find the useEffect that handles player position updates
+  // Add this code to update the data attribute with the current player position
+  useEffect(() => {
+    if (playerRef.current) {
+      // Create a function to update the position data attribute
+      const updatePositionDataAttribute = () => {
+        const positionElement = document.querySelector('[data-player-position]');
+        if (positionElement && playerRef.current) {
+          const { x, y, z } = playerRef.current.position;
+          const positionData = { x, y, z };
+          positionElement.setAttribute('data-position', JSON.stringify(positionData));
+        }
+      };
+
+      // Initial update
+      updatePositionDataAttribute();
+
+      // Set interval to update regularly
+      const updateInterval = setInterval(updatePositionDataAttribute, 500);
+
+      return () => {
+        clearInterval(updateInterval);
+      };
+    }
+  }, [playerRef.current]);
+
   // --- Render ---
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -471,26 +498,41 @@ const GameCanvas: React.FC = () => {
       <ZoneIndicator currentZone={currentZone} />
       <FPSCounter fps={currentFps} />
 
-      <GameSettings
-        playerName={playerName}
-        setPlayerName={setPlayerName}
-        soundEnabled={soundEnabled}
-        setSoundEnabled={setSoundEnabled}
-        isHorizontalInverted={isHorizontalInverted}
-        setIsHorizontalInverted={setIsHorizontalInverted}
-        isHorizontalInvertedRef={isHorizontalInvertedRef}
+      <TabMenu
+        tabs={[
+          {
+            icon: <span style={{ fontSize: '16px' }}>🎒</span>,
+            label: `Inventory`,
+            badge: inventory.length > 0 ? `${inventory.length}/24` : undefined,
+            content: (
+              <InventoryPanel 
+                ref={inventoryPanelRef}
+                itemManager={itemManagerRef.current || undefined}
+              />
+            )
+          },
+          {
+            icon: <span style={{ fontSize: '16px' }}>⚙️</span>,
+            label: "Settings",
+            content: (
+              <GameSettings
+                playerName={playerName}
+                setPlayerName={setPlayerName}
+                soundEnabled={soundEnabled}
+                setSoundEnabled={setSoundEnabled}
+                isHorizontalInverted={isHorizontalInverted}
+                setIsHorizontalInverted={setIsHorizontalInverted}
+                isHorizontalInvertedRef={isHorizontalInvertedRef}
+              />
+            )
+          }
+        ]}
       />
       
       <GameChat
         sceneRef={sceneRef}
         playerRef={playerRef}
         playersRef={playersRef}
-      />
-
-      <InventoryPanel 
-        ref={inventoryPanelRef}
-        style={{ top: "100px", right: "20px" }} 
-        itemManager={itemManagerRef.current || undefined}
       />
 
       <ConnectionStatusIndicator 

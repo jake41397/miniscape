@@ -129,7 +129,9 @@ export const useGameLoop = ({
         updateCameraPosition();
 
         // 6. Update world items (animations, etc.)
-        itemManagerRef.current?.updateItems(cappedDelta);
+        if (itemManagerRef.current) {
+            itemManagerRef.current.updateItems(cappedDelta);
+        }
 
         // --- Rendering ---
         renderer.render(scene, camera);
