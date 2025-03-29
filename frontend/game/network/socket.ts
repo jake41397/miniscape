@@ -160,12 +160,12 @@ export const initializeSocket = async () => {
     
     // Create socket connection with better reconnection and error handling
     socket = io(BACKEND_URL, {
-      transports: ['websocket', 'polling'],  // Allow both WebSocket and polling for better compatibility
+      transports: ['websocket'],  // Use only WebSocket for faster connection
       path: '/socket.io',
-      reconnectionAttempts: 15,       // Increased from 8 to 15
+      reconnectionAttempts: 5,    // Reduced from 15 to 5
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,     // Cap the exponential backoff
-      timeout: 20000,                 // Increased from 15s to 20s for slower networks
+      reconnectionDelayMax: 3000, // Reduced from 5000 to 3000
+      timeout: 8000,              // Reduced from 20000 to 8000 for faster timeout
       forceNew: true,
       // Include the temp user ID in auth
       auth: {

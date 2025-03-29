@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import dynamic from 'next/dynamic';
 import { useAuth } from '../contexts/AuthContext';
 import { setupSocketCleanup } from '../game/network/socket';
+import LoadingScreen from '../components/LoadingScreen';
 
 // Dynamic imports to avoid SSR issues
 const DynamicDebugButton = dynamic(() => import('../components/DebugButton'), { 
@@ -98,12 +99,12 @@ export default function Home() {
 
     // Set a maximum loading time to avoid getting stuck
     const maxLoadingTime = setTimeout(() => {
-      // If we're still loading after 15 seconds, continue anyway
+      // If we're still loading after 5 seconds, continue anyway
       if (authLoading) {
-        addDebugInfo('Auth loading timeout reached (15s), continuing to game');
+        addDebugInfo('Auth loading timeout reached (5s), continuing to game');
         setIsLoading(false);
       }
-    }, 15000);
+    }, 5000);
 
     // Clear any existing redirect timeout
     if (redirectTimeoutRef.current) {
@@ -145,8 +146,8 @@ export default function Home() {
       // Set a timeout for socket connection
       const socketTimeout = setTimeout(() => {
         setIsLoading(false);
-        addDebugInfo('Socket connection timed out after 10 seconds, proceeding anyway');
-      }, 10000);
+        addDebugInfo('Socket connection timed out after 5 seconds, proceeding anyway');
+      }, 5000);
       
       // Import and use our socket client implementation
       const { initializeSocket: initSocket, getSocket } = await import('../game/network/socket');
@@ -173,7 +174,7 @@ export default function Home() {
         const connectionTimeout = setTimeout(() => {
           addDebugInfo('Socket connection timeout reached, proceeding anyway');
           setIsLoading(false);
-        }, 5000);
+        }, 2500);
         
         // Add a one-time connection listener
         socket.once('connect', () => {
@@ -241,8 +242,8 @@ export default function Home() {
       setTimeout(() => {
         setIsLoading(false);
         addDebugInfo('Forcing game to start after timeout');
-      }, 2000);
-    }, 500);
+      }, 1000);
+    }, 100);
 
     return () => {
       addDebugInfo('Cleaning up socket initialization timer');
@@ -256,181 +257,31 @@ export default function Home() {
     };
   }, [authLoading]);
 
-  // Override LoadingScreen component to ensure it continues to game after delay
-  const LoadingScreen = () => {
-    const [dots, setDots] = useState(".");
-    const [elapsedTime, setElapsedTime] = useState(0);
-
-    useEffect(() => {
-      const timer = setTimeout(() => {
-        setDots(dots => dots.length < 3 ? dots + "." : ".");
-      }, 500);
-      
-      // Count elapsed time
-      const elapsedTimer = setInterval(() => {
-        setElapsedTime(prev => prev + 1);
-      }, 1000);
-      
-      // Force loading to complete after 10 seconds
-      if (elapsedTime > 10) {
-        addDebugInfo('Loading timeout reached (10s), forcing game to start');
-        setIsLoading(false);
-      }
-      
-      return () => {
-        clearTimeout(timer);
-        clearInterval(elapsedTimer);
-      };
-    }, [dots, elapsedTime]);
-
-    return (
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#111',
-        color: '#fff',
-        zIndex: 1000,
-        fontFamily: 'Monospace, monospace'
-      }}>
-        <h2>MiniScape</h2>
-        <div>Loading game{dots}</div>
-        <div style={{ marginTop: '20px', fontSize: '14px', opacity: 0.7 }}>
-          {elapsedTime > 5 && "Taking longer than expected... "}
-          {elapsedTime > 8 && <div><button onClick={() => setIsLoading(false)} style={{
-            padding: '8px 16px',
-            background: '#333',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            marginTop: '10px'
-          }}>Start Game Now</button></div>}
-        </div>
-      </div>
-    );
-  };
-
   // Main render function for the page
   return (
-    <div style={{ width: '100%', height: '100%' }}>
+    <div className="game-container">
       <Head>
         <title>MiniScape</title>
-        <meta name="description" content="MiniScape - A Miniature Adventure" />
-        <link rel="icon" href="/favicon.ico" />
+        <meta name="description" content="A minimalist social RPG" />
       </Head>
 
-      {showDebugPanel && (
-        <div 
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            padding: '10px',
-            background: 'rgba(0, 0, 0, 0.7)',
-            color: '#fff',
-            zIndex: 1000,
-            maxHeight: '50vh',
-            overflowY: 'auto',
-            fontSize: '12px',
-            fontFamily: 'monospace'
-          }}
-        >
-          <div>
-            <strong>Debug Info:</strong>
-            <button 
-              onClick={() => setShowDebugPanel(false)}
-              style={{
-                float: 'right',
-                background: 'transparent',
-                border: '1px solid #fff',
-                color: '#fff',
-                cursor: 'pointer'
-              }}
-            >
-              Close
-            </button>
-          </div>
-          {debugInfo.map((info, i) => (
-            <div key={i}>{info}</div>
-          ))}
-        </div>
-      )}
-
-      {socketError && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            padding: '10px',
-            background: 'rgba(255, 0, 0, 0.8)',
-            color: '#fff',
-            zIndex: 1000,
-            fontSize: '14px',
-            fontFamily: 'monospace',
-            textAlign: 'center'
-          }}
-        >
-          Socket Error: {socketError}
-          <button 
-            onClick={() => {
-              setSocketError(null);
-              initializeSocket();
-            }}
-            style={{
-              marginLeft: '10px',
-              background: '#fff',
-              color: '#f00',
-              border: 'none',
-              padding: '5px 10px',
-              cursor: 'pointer'
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
       {isLoading ? (
-        <LoadingScreen />
+        <LoadingScreen message={socketError ? 'Connection error, retrying...' : 'Loading game...'} />
       ) : (
-        <DynamicGameCanvas key={`game-canvas-${Date.now()}`} />
+        <main>
+          {/* Game canvas component */}
+          <DynamicGameCanvas />
+          
+          {/* Debug panel if enabled */}
+          {showDebugPanel && (
+            <div className="debug-panel">
+              <h3>Debug Info</h3>
+              <pre>{debugInfo.join('\n')}</pre>
+              <DynamicDebugButton />
+            </div>
+          )}
+        </main>
       )}
-    
-      {/* Debug button in the corner */}
-      <div style={{
-        position: 'fixed',
-        bottom: '10px',
-        left: '10px',
-        zIndex: 1000,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '5px'
-      }}>
-        <button 
-          onClick={() => setShowDebugPanel(!showDebugPanel)}
-          style={{
-            background: 'rgba(0, 0, 0, 0.7)',
-            color: '#fff',
-            border: 'none',
-            padding: '5px 10px',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '12px'
-          }}
-        >
-          {showDebugPanel ? 'Hide Debug' : 'Show Debug'}
-        </button>
-      </div>
     </div>
   );
 }

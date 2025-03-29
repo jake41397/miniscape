@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
+  reactStrictMode: false, // Disable strict mode for better performance
   // Only use export for production builds, not during development
   output: process.env.NODE_ENV === 'production' ? 'export' : undefined,
   images: {
@@ -15,6 +15,10 @@ const nextConfig = {
       },
     ];
   },
+  // Add performance optimizations
+  swcMinify: true,
+  compress: true,
+  poweredByHeader: false,
 };
 
 module.exports = nextConfig; 
