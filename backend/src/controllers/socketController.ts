@@ -60,6 +60,7 @@ interface ExtendedSocket extends Socket {
   data: {
     lastPositionUpdate?: number;
     movementCount?: number;
+    sessionId?: string;
     [key: string]: any;
   };
 }
@@ -92,6 +93,11 @@ const userIdToSocketId: Record<string, string> = {};
 // Store world items and resource nodes
 let worldItems: WorldItem[] = [];
 let resourceNodes: ResourceNode[] = [];
+
+// Add a helper function to check for default positions
+const isDefaultPosition = (x: number, y: number, z: number): boolean => {
+  return x === 0 && y === 1 && z === 0;
+};
 
 // Initialize game state by loading data from the database
 const initializeGameState = async (): Promise<void> => {
@@ -136,7 +142,22 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     let profile;
     
     // Generate a session ID for this connection
-    const sessionId = socket.id;
+    // Use the persistent tempUserId if available, otherwise fallback to socket.id
+    const tempUserId = socket.handshake.auth.tempUserId;
+    const sessionId = tempUserId || socket.id;
+    
+    // Store the sessionId in the socket for future reference
+    socket.data.sessionId = sessionId;
+    
+    console.log(`Using session ID: ${sessionId} (${tempUserId ? 'from persistent ID' : 'from socket ID'})`);
+    
+    // Default starting position - only used as a fallback
+    // We'll try to find a saved position first
+    const defaultPosition = {
+      x: 0,
+      y: 1,
+      z: 0
+    };
     
     // Try to load existing temporary player data
     let { data: tempData, error: tempError } = await supabase
@@ -146,13 +167,31 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       .single();
       
     if (tempError && tempError.code === 'PGRST116') {
-      // Create new temporary player data
+      // No existing data found - check if we have any previous records for this player
+      // This could help with reconnections from the same device/browser
+      
+      console.log(`No existing data for session ${sessionId}, creating new temp player data`);
+      
+      // Default temp data uses random spawn point instead of 0,1,0
+      // Here we could implement spawn points around the world
+      const spawnPoints = [
+        { x: 5, y: 1, z: 5 },
+        { x: -5, y: 1, z: 5 },
+        { x: 5, y: 1, z: -5 },
+        { x: -5, y: 1, z: -5 },
+        { x: 10, y: 1, z: 0 },
+        { x: 0, y: 1, z: 10 }
+      ];
+      
+      // Select a random spawn point
+      const randomSpawn = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
+      
       const defaultTempData = {
         session_id: sessionId,
         username: `Guest-${socket.id.substring(0, 4)}`,
-        x: 0,
-        y: 1,
-        z: 0,
+        x: randomSpawn.x,
+        y: randomSpawn.y,
+        z: randomSpawn.z,
         inventory: '[]'
       };
       
@@ -168,6 +207,7 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           tempData = defaultTempData;
         } else {
           tempData = newTempData;
+          console.log(`Created new player at position (${randomSpawn.x}, ${randomSpawn.y}, ${randomSpawn.z})`);
         }
       } catch (error) {
         console.error(`Exception creating temp player data for session ${sessionId}:`, error);
@@ -175,14 +215,22 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       }
     } else if (tempError) {
       console.error(`Error loading temp player data for session ${sessionId}:`, tempError);
+      // As a fallback, still use a random spawn point
+      const spawnPoint = { x: 10 * (Math.random() - 0.5), y: 1, z: 10 * (Math.random() - 0.5) };
+      
       tempData = {
         session_id: sessionId,
         username: `Guest-${socket.id.substring(0, 4)}`,
-        x: 0,
-        y: 1,
-        z: 0,
+        x: spawnPoint.x,
+        y: spawnPoint.y,
+        z: spawnPoint.z,
         inventory: '[]'
       };
+    } else {
+      console.log(`Found existing player data for session ${sessionId}:`, {
+        position: { x: tempData.x, y: tempData.y, z: tempData.z },
+        username: tempData.username
+      });
     }
     
     // Convert temp data to player data format
@@ -217,8 +265,22 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     console.log(`Player ${newPlayer.name} (${socket.id}) added. Total players: ${Object.keys(players).length}`);
     console.log('Connected players:', Object.keys(players).map(id => `${players[id].name} (${id})`).join(', '));
     
-    // Tell all other clients about the new player
-    socket.broadcast.emit('playerJoined', newPlayer);
+    // Flag to track if this player has a valid position (to prevent automatic position broadcasts)
+    const hasDefaultPosition = isDefaultPosition(newPlayer.x, newPlayer.y, newPlayer.z);
+    
+    // Only broadcast the new player if they don't have the default position
+    // This prevents unnecessary position updates for new or reconnected players
+    if (!hasDefaultPosition) {
+      // Tell all other clients about the new player
+      socket.broadcast.emit('playerJoined', newPlayer);
+      console.log(`Broadcasting new player ${newPlayer.name} (${socket.id}) to other players`);
+    } else {
+      console.log(`Player ${newPlayer.name} (${socket.id}) has default position (0,1,0), skipping initial broadcast`);
+      // We'll broadcast when they move to a valid position
+      
+      // Don't send playerMove events until the client sends a valid position
+      console.log(`Waiting for client ${socket.id} to send a valid position before broadcasting`);
+    }
     
     // Send the new player the list of existing players
     const existingPlayers = Object.values(players).filter(p => p.id !== socket.id);
@@ -262,6 +324,12 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           z: validZ,
           timestamp: position.timestamp || Date.now()
         };
+        
+        // Skip broadcasting if this is the default position (0,1,0)
+        // This prevents unnecessary position updates for new or reconnected players
+        if (isDefaultPosition(validX, position.y, validZ)) {
+          return;
+        }
         
         console.log(`Broadcasting playerMoved event`, {
           targetPlayers: Object.keys(players).filter(id => id !== socket.id).length,
@@ -426,6 +494,9 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
             return;
           }
         } else {
+          // Get the persistent session ID
+          const sessionId = socket.data.sessionId || socket.id;
+          
           // Update temporary player's name
           const { error: tempError } = await supabase
             .from('temp_player_data')
@@ -433,10 +504,10 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
               username: newName,
               last_active: new Date().toISOString()
             })
-            .eq('session_id', socket.id);
+            .eq('session_id', sessionId);
             
           if (tempError) {
-            console.error(`Failed to update temp player name for session ${socket.id}:`, tempError);
+            console.error(`Failed to update temp player name for session ${sessionId}:`, tempError);
             return;
           }
         }
@@ -641,6 +712,9 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         console.log(`Player ${player.name} (${socket.id}) disconnected`);
         
         try {
+          // Get the persistent session ID
+          const sessionId = socket.data.sessionId || socket.id;
+          
           // Save temporary player data
           const { error: tempError } = await supabase
             .from('temp_player_data')
@@ -651,10 +725,12 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
               inventory: JSON.stringify(player.inventory || []),
               last_active: new Date().toISOString()
             })
-            .eq('session_id', socket.id);
+            .eq('session_id', sessionId);
             
           if (tempError) {
-            console.error(`Failed to save temp player data for session ${socket.id}:`, tempError);
+            console.error(`Failed to save temp player data for session ${sessionId}:`, tempError);
+          } else {
+            console.log(`Successfully saved player data for session ${sessionId}`);
           }
         } catch (error) {
           console.error('Error during player disconnect save:', error);
