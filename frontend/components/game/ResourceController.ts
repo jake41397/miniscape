@@ -59,6 +59,46 @@ export class ResourceController {
   }
   
   public updateResourceNodes(nodes: ResourceNode[]): void {
+    console.log(`%c 🌳 ResourceController.updateResourceNodes called with ${nodes.length} nodes`, "background: #4CAF50; color: white; font-size: 14px;");
+    console.log("Node IDs:", nodes.map(node => node.id).join(', '));
+    
+    // Log the full node data structure for debugging
+    console.log("Complete resource nodes data:", JSON.stringify(nodes));
+    
+    // If no nodes received, create default resources
+    if (nodes.length === 0) {
+      console.warn("%c ⚠️ No resource nodes received from server! Creating default resources.", "background: #FFC107; color: black; font-size: 14px;");
+      nodes = this.createDefaultResources();
+    }
+    
+    // Check if any nodes match our expected resources
+    const expectedIds = ['tree-1', 'tree-2', 'tree-3', 'rock-1', 'rock-2', 'fish-1'];
+    const foundIds = nodes.map(node => node.id).filter(id => expectedIds.includes(id));
+    console.log(`Found ${foundIds.length}/${expectedIds.length} expected resource IDs:`, foundIds);
+    
+    // Check resource node types to ensure they're compatible with ResourceType enum
+    const validTypes = Object.values(ResourceType);
+    const invalidTypeNodes = nodes.filter(node => !validTypes.includes(node.type as any));
+    if (invalidTypeNodes.length > 0) {
+      console.warn(`Found ${invalidTypeNodes.length} nodes with invalid types:`, 
+        invalidTypeNodes.map(n => `${n.id}: ${n.type}`));
+      
+      // Convert string types to enum values
+      nodes.forEach(node => {
+        const typeStr = String(node.type).toLowerCase();
+        // Map string types to enum values
+        if (typeStr === 'tree') {
+          node.type = ResourceType.TREE;
+        } else if (typeStr === 'rock') {
+          node.type = ResourceType.ROCK;
+        } else if (typeStr === 'fish') {
+          node.type = ResourceType.FISH;
+        }
+      });
+      
+      console.log("Resource types converted to enum values");
+    }
+    
     // Remove old resource nodes
     this.clearResourceNodes();
     
@@ -142,72 +182,105 @@ export class ResourceController {
     this.worldItemsRef.current.splice(index, 1);
   }
   
-  public updateResourceNodeState(nodeId: string, isAvailable: boolean): void {
+  public updateResourceNodeState(nodeId: string, data: { 
+    available?: boolean, 
+    state?: 'normal' | 'harvested',
+    remainingResources?: number
+  }): void {
     // Find resource node
     const node = this.resourceNodesRef.current.find(n => n.id === nodeId);
     if (!node) {
+      console.log(`Resource node not found: ${nodeId}`);
       return;
     }
     
-    // Update mesh appearance based on availability
-    if (node.mesh) {
-      const material = node.mesh.material as THREE.MeshStandardMaterial;
-      if (Array.isArray(material)) {
-        material.forEach(m => {
-          m.opacity = isAvailable ? 1.0 : 0.5;
-          m.transparent = !isAvailable;
+    console.log(`Updating resource node ${nodeId} state:`, data);
+    
+    // Update node properties
+    if (data.remainingResources !== undefined) {
+      node.remainingResources = data.remainingResources;
+    }
+    
+    // Handle state change
+    if (data.state !== undefined && node.state !== data.state) {
+      node.state = data.state;
+      this.updateResourceNodeMesh(node);
+    }
+    
+    // Handle availability change (this is separate from state - unavailable could be temporary)
+    if (data.available !== undefined) {
+      // If the mesh exists, update its appearance
+      if (node.mesh) {
+        // Get all materials (could be a single material or an array)
+        const materials = Array.isArray(node.mesh.material) 
+          ? node.mesh.material 
+          : [node.mesh.material as THREE.Material];
+        
+        // Update each material
+        materials.forEach(material => {
+          if (material) {
+            material.opacity = data.available ? 1.0 : 0.5;
+            material.transparent = !data.available;
+          }
         });
-      } else if (material) {
-        material.opacity = isAvailable ? 1.0 : 0.5;
-        material.transparent = !isAvailable;
+        
+        // Also apply to any children
+        node.mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.material) {
+            const childMaterials = Array.isArray(child.material) 
+              ? child.material 
+              : [child.material as THREE.Material];
+            
+            childMaterials.forEach(material => {
+              if (material) {
+                material.opacity = data.available ? 1.0 : 0.5;
+                material.transparent = !data.available;
+              }
+            });
+          }
+        });
       }
     }
   }
   
-  private initializeResourceNodeMeshes(): void {
-    this.resourceNodesRef.current.forEach(node => {
-      this.createResourceNodeMesh(node);
-    });
-  }
-  
-  private initializeWorldItemMeshes(): void {
-    this.worldItemsRef.current.forEach(item => {
-      this.createWorldItemMesh(item);
-    });
-  }
-  
-  private createResourceNodeMesh(node: ResourceNode): void {
-    // Get node color based on type
-    let color: number;
-    let geometry: THREE.BufferGeometry;
-    
-    switch (node.type) {
-      case ResourceType.TREE:
-        color = 0x228B22; // Forest Green
-        geometry = new THREE.CylinderGeometry(0.5, 0.7, 3, 8);
-        break;
-      case ResourceType.ROCK:
-        color = 0x808080; // Gray
-        geometry = new THREE.DodecahedronGeometry(0.8, 1);
-        break;
-      case ResourceType.FISH:
-        color = 0x6495ED; // Blue
-        geometry = new THREE.CylinderGeometry(1.5, 1.5, 0.2, 16);
-        break;
-      default:
-        color = 0xFFFFFF; // White
-        geometry = new THREE.BoxGeometry(1, 1, 1);
-        break;
+  /**
+   * Update a resource node's mesh based on its state
+   */
+  private updateResourceNodeMesh(node: ResourceNode): void {
+    // Remove old mesh from scene if it exists
+    if (node.mesh) {
+      this.scene.remove(node.mesh);
+      
+      // Dispose of geometry and materials
+      if (node.mesh.geometry) {
+        node.mesh.geometry.dispose();
+      }
+      
+      if (node.mesh.material) {
+        if (Array.isArray(node.mesh.material)) {
+          node.mesh.material.forEach(m => m.dispose());
+        } else {
+          node.mesh.material.dispose();
+        }
+      }
+      
+      // Also clean up any children
+      node.mesh.children.forEach(child => {
+        if (child instanceof THREE.Mesh) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => m.dispose());
+            } else {
+              child.material.dispose();
+            }
+          }
+        }
+      });
     }
     
-    // Create material
-    const material = new THREE.MeshStandardMaterial({
-      color: color,
-      roughness: 0.8,
-    });
-    
-    // Create mesh
-    const mesh = new THREE.Mesh(geometry, material);
+    // Create new mesh based on node type and state
+    const mesh = createResourceMesh(node.type as ResourceType, node.state || 'normal');
     mesh.position.set(node.x, node.y, node.z);
     
     // Add shadow casting
@@ -222,7 +295,85 @@ export class ResourceController {
     this.scene.add(mesh);
     
     // Store mesh with resource node
-    node.mesh = mesh;
+    node.mesh = mesh as THREE.Mesh;
+    
+    // Play sound effect based on state change
+    if (node.state === 'harvested') {
+      if (node.type === ResourceType.TREE) {
+        soundManager.play('treeFall' as any);
+      } else if (node.type === ResourceType.ROCK) {
+        soundManager.play('rockBreak' as any);
+      }
+    }
+  }
+  
+  public initializeResourceNodeMeshes(): void {
+    console.log(`%c 🔨 Initializing meshes for ${this.resourceNodesRef.current?.length || 0} resources`, "background: #03A9F4; color: white;");
+    
+    // Create meshes for each resource
+    this.resourceNodesRef.current?.forEach(node => {
+      // Check if resource node already has a mesh
+      if (node.mesh) {
+        console.log(`Resource ${node.id} already has a mesh, skipping`);
+        return;
+      }
+      
+      console.log(`Creating mesh for resource ${node.id} (${node.type}) at (${node.x}, ${node.y}, ${node.z})`);
+      this.createResourceNodeMesh(node);
+    });
+  }
+  
+  private initializeWorldItemMeshes(): void {
+    this.worldItemsRef.current.forEach(item => {
+      this.createWorldItemMesh(item);
+    });
+  }
+  
+  private createResourceNodeMesh(node: ResourceNode): void {
+    try {
+      console.log(`Creating mesh for node: ${node.id}, type: ${node.type}, state: ${node.state || 'normal'}`);
+      
+      // Ensure node.type is a valid ResourceType
+      let nodeType: ResourceType;
+      if (typeof node.type === 'string') {
+        // Convert string type to enum if needed
+        const typeStr = String(node.type).toLowerCase();
+        if (typeStr === 'tree') {
+          nodeType = ResourceType.TREE;
+        } else if (typeStr === 'rock') {
+          nodeType = ResourceType.ROCK;
+        } else if (typeStr === 'fish') {
+          nodeType = ResourceType.FISH;
+        } else {
+          console.error(`Invalid resource type: ${node.type}`);
+          nodeType = ResourceType.TREE; // Default to tree as a fallback
+        }
+      } else {
+        nodeType = node.type;
+      }
+      
+      // Create mesh based on node type and state
+      const mesh = createResourceMesh(nodeType, node.state || 'normal');
+      mesh.position.set(node.x, node.y, node.z);
+      
+      // Add shadow casting
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      
+      // Store resource ID in userData for raycasting
+      mesh.userData.resourceId = node.id;
+      mesh.userData.resourceType = nodeType;
+      
+      // Add to scene
+      this.scene.add(mesh);
+      
+      // Store mesh with resource node
+      node.mesh = mesh as THREE.Mesh;
+      
+      console.log(`Successfully created mesh for ${node.id}`);
+    } catch (error) {
+      console.error(`Error creating mesh for resource ${node.id}:`, error);
+    }
   }
   
   private createWorldItemMesh(item: WorldItem): void {
@@ -293,6 +444,33 @@ export class ResourceController {
     // Clear all resources and items
     this.clearResourceNodes();
     this.clearWorldItems();
+  }
+  
+  /**
+   * Creates a set of default resources when none are received from the server
+   */
+  public createDefaultResources(): ResourceNode[] {
+    console.log("%c 🌳 Creating default resource nodes", "background: #4CAF50; color: white; font-size: 14px;");
+    
+    // Define default resource nodes
+    const defaultResources: ResourceNode[] = [
+      // Trees in Lumbridge area
+      { id: 'tree-1', type: ResourceType.TREE, x: 10, y: 0, z: 10 },
+      { id: 'tree-2', type: ResourceType.TREE, x: 15, y: 0, z: 15 },
+      { id: 'tree-3', type: ResourceType.TREE, x: 20, y: 0, z: 10 },
+      
+      // Rocks in Barbarian Village
+      { id: 'rock-1', type: ResourceType.ROCK, x: -20, y: 0, z: -20 },
+      { id: 'rock-2', type: ResourceType.ROCK, x: -25, y: 0, z: -15 },
+      
+      // Fishing spots
+      { id: 'fish-1', type: ResourceType.FISH, x: 30, y: 0, z: -30 },
+    ];
+    
+    console.log(`Created ${defaultResources.length} default resources:`, 
+      defaultResources.map(r => `${r.id} (${r.type}) at (${r.x}, ${r.y}, ${r.z})`));
+    
+    return defaultResources;
   }
 }
 

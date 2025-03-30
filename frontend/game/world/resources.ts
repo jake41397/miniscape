@@ -10,12 +10,14 @@ export enum ResourceType {
 // World resource node
 export interface ResourceNode {
   id: string;
-  type: ResourceType;
+  type: ResourceType | string; // Accept both string and enum types for compatibility with backend
   x: number;
   y: number;
   z: number;
   mesh?: THREE.Mesh;
   lodMeshes?: THREE.Object3D[]; // Array of LOD meshes
+  state?: 'normal' | 'harvested'; // Track the visual state of the resource
+  remainingResources?: number; // Track remaining resources before depletion
 }
 
 // Dropped item in the world
@@ -311,21 +313,100 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
   return mesh;
 };
 
-// Creates a mesh for a resource node based on its type
-export const createResourceMesh = (type: ResourceType): THREE.Object3D => {
-  switch (type) {
-    case ResourceType.TREE:
-      return createTreeMesh();
-    case ResourceType.ROCK:
-      return createRockMesh();
-    case ResourceType.FISH:
-      return createFishingSpotMesh();
-    default:
-      // Default fallback
-      const defaultGeometry = new THREE.BoxGeometry(1, 1, 1);
-      const defaultMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
-      return new THREE.Mesh(defaultGeometry, defaultMaterial);
+// Create a tree stump mesh (harvested tree)
+export const createTreeStumpMesh = (): THREE.Object3D => {
+  // Create stump with a simple cylinder
+  const stumpGeometry = new THREE.CylinderGeometry(0.5, 0.6, 0.5, 8);
+  const stumpMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // Brown
+  const stump = new THREE.Mesh(stumpGeometry, stumpMaterial);
+  stump.position.y = 0.25; // Half of height
+  
+  // Add some wood chips/sawdust around the base
+  const chipsGroup = new THREE.Group();
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2;
+    const radius = 0.8 + Math.random() * 0.3;
+    const chipGeometry = new THREE.BoxGeometry(0.1, 0.05, 0.2);
+    const chipMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0xA0522D, // Sienna brown
+      roughness: 0.9
+    });
+    const chip = new THREE.Mesh(chipGeometry, chipMaterial);
+    chip.position.set(
+      Math.cos(angle) * radius, 
+      0.025, // Just above ground
+      Math.sin(angle) * radius
+    );
+    chip.rotation.y = Math.random() * Math.PI;
+    chipsGroup.add(chip);
   }
+  
+  // Create a group with both the stump and the chips
+  const stumpGroup = new THREE.Group();
+  stumpGroup.add(stump);
+  stumpGroup.add(chipsGroup);
+  
+  return stumpGroup;
+};
+
+// Create a depleted coal deposit (harvested rock)
+export const createDepletedRockMesh = (): THREE.Object3D => {
+  // Create a group of smaller rocks
+  const rocksGroup = new THREE.Group();
+  
+  const rockMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x696969, // Dark gray
+    roughness: 0.8 
+  });
+  
+  // Add several smaller boulders
+  for (let i = 0; i < 5; i++) {
+    const size = 0.4 + Math.random() * 0.3;
+    const rockGeometry = new THREE.DodecahedronGeometry(size, 0);
+    const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+    
+    // Position rocks in a rough circle
+    const angle = (i / 5) * Math.PI * 2;
+    const radius = 0.7;
+    rock.position.set(
+      Math.cos(angle) * radius, 
+      size / 2, // Half height
+      Math.sin(angle) * radius
+    );
+    
+    // Add some random rotation
+    rock.rotation.set(
+      Math.random() * Math.PI,
+      Math.random() * Math.PI,
+      Math.random() * Math.PI
+    );
+    
+    rocksGroup.add(rock);
+  }
+  
+  // Add some coal pieces on the ground
+  for (let i = 0; i < 3; i++) {
+    const coalGeometry = new THREE.DodecahedronGeometry(0.15, 0);
+    const coalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x36454F, // Dark charcoal gray
+      roughness: 0.9,
+      metalness: 0.2
+    });
+    const coal = new THREE.Mesh(coalGeometry, coalMaterial);
+    
+    // Position coal bits randomly around the rocks
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 0.5 + Math.random() * 0.7;
+    coal.position.set(
+      Math.cos(angle) * radius, 
+      0.075, // Just above ground
+      Math.sin(angle) * radius
+    );
+    
+    rocksGroup.add(coal);
+  }
+  
+  return rocksGroup;
 };
 
 // Update LOD based on camera position
@@ -377,4 +458,40 @@ export const updateDroppedItems = (items: WorldItem[], deltaTime: number) => {
       }
     }
   });
+};
+
+// Update the createResourceMesh function to handle harvested states
+export const createResourceMesh = (type: ResourceType, state: 'normal' | 'harvested' = 'normal'): THREE.Object3D => {
+  if (state === 'harvested') {
+    // Return harvested version of the resource
+    switch (type) {
+      case ResourceType.TREE:
+        return createTreeStumpMesh();
+      case ResourceType.ROCK:
+        return createDepletedRockMesh();
+      case ResourceType.FISH:
+        // Fish spots don't have a harvested state, just return normal
+        return createFishingSpotMesh();
+      default:
+        // Default fallback
+        const defaultGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const defaultMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
+        return new THREE.Mesh(defaultGeometry, defaultMaterial);
+    }
+  } else {
+    // Return normal resource
+    switch (type) {
+      case ResourceType.TREE:
+        return createTreeMesh();
+      case ResourceType.ROCK:
+        return createRockMesh();
+      case ResourceType.FISH:
+        return createFishingSpotMesh();
+      default:
+        // Default fallback
+        const defaultGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const defaultMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
+        return new THREE.Mesh(defaultGeometry, defaultMaterial);
+    }
+  }
 }; 

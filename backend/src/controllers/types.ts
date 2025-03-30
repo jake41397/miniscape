@@ -24,6 +24,7 @@ export interface Player {
   z: number;
   rotationY?: number;     // Y-axis rotation in radians
   inventory: InventoryItem[];
+  equippedItem?: InventoryItem; // Currently equipped item (tool, weapon, etc.)
   lastPing?: number;      // Last time player responded to ping
   lastActive?: number;    // Last time player did something (moved, etc)
   latency?: number;       // Player's connection latency in ms
@@ -51,6 +52,8 @@ export interface ResourceNode {
   y: number;
   z: number;
   respawnTime: number;
+  remainingResources?: number; // Track remaining resources before depletion
+  state?: 'normal' | 'harvested'; // Track the visual state of the resource
 }
 
 export interface ExtendedSocket extends Socket {

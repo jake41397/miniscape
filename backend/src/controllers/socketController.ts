@@ -9,6 +9,10 @@ import {
   removeWorldItem
 } from '../models/gameModel';
 import { verifySocketToken } from '../middleware/authMiddleware';
+import { ResourceHandler } from './handlers/ResourceHandler';
+import { InventoryHandler } from './handlers/InventoryHandler';
+import { WorldItemHandler } from './handlers/WorldItemHandler';
+import { ChatHandler } from './handlers/ChatHandler';
 
 // Define interfaces for type safety
 interface WorldBounds {
@@ -26,6 +30,7 @@ interface Player {
   y: number;
   z: number;
   inventory: InventoryItem[];
+  equippedItem?: InventoryItem; // Currently equipped item
 }
 
 interface InventoryItem {
@@ -92,6 +97,20 @@ const players: PlayersStore = {};
 // Add a map to track user ID to socket ID for reconnection handling
 const userIdToSocketId: Record<string, string> = {};
 
+// Handler instances
+let inventoryHandler: InventoryHandler;
+let worldItemHandler: WorldItemHandler;
+let chatHandler: ChatHandler;
+let resourceHandler: ResourceHandler;
+
+// Initialize handlers with IO instance
+const initializeHandlers = (io: Server) => {
+  inventoryHandler = new InventoryHandler(io, players);
+  worldItemHandler = new WorldItemHandler(io, players);
+  chatHandler = new ChatHandler(io, players);
+  resourceHandler = new ResourceHandler(io, players);
+};
+
 // Add function to broadcast player count
 const broadcastPlayerCount = (io: Server) => {
   // Count active connections from socket.io to ensure accuracy
@@ -143,6 +162,9 @@ const initializeGameState = async (): Promise<void> => {
 
 // Setup all socket handlers
 const setupSocketHandlers = (io: Server, socket?: ExtendedSocket): void => {
+  // Initialize handlers first
+  initializeHandlers(io);
+  
   // If socket is provided, we're handling a single connection
   if (socket) {
     console.log(`Setting up handlers for existing socket: ${socket.id}`);
@@ -1138,9 +1160,278 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         console.error(`[${socket.id}] Failed to save inventory:`, error);
       }
     });
+
+    // Initialize handlers
+    inventoryHandler.setupItemDropHandler(socket);
+    inventoryHandler.setupItemUseHandler(socket);
+    inventoryHandler.setupEquipItemHandler(socket); // Register the equip handler
+    worldItemHandler.setupItemPickupHandler(socket);
+    chatHandler.setupChatHandler(socket);
+    resourceHandler.setupResourceGatheringHandler(socket);
+
+    // Create a new handler for chat commands
+    setupChatCommandHandler(io, socket);
+
+    // Add handling for resource nodes request
+    socket.on('getResourceNodes', () => {
+      console.log(`[${socket.id}] Client requested resource nodes`);
+      
+      try {
+        // Send all resource nodes to the client
+        if (resourceHandler) {
+          const nodes = resourceHandler.getResourceNodes();
+          console.log(`[${socket.id}] Sending ${nodes.length} resource nodes to client`);
+          
+          if (nodes.length === 0) {
+            console.warn(`[${socket.id}] ResourceHandler returned 0 nodes, attempting to initialize defaults`);
+            // Force initialization of default resources
+            resourceHandler.initialize().then(() => {
+              const defaultNodes = resourceHandler.getResourceNodes();
+              console.log(`[${socket.id}] Now sending ${defaultNodes.length} default resource nodes`);
+              socket.emit('initResourceNodes', defaultNodes);
+            }).catch(err => {
+              console.error(`[${socket.id}] Failed to initialize default resources:`, err);
+              // Create emergency fallback resources directly
+              const fallbackResources = [
+                { id: 'tree-fallback-1', type: 'tree', x: 10, y: 0, z: 10, respawnTime: 60000, remainingResources: 5, state: 'normal' },
+                { id: 'rock-fallback-1', type: 'rock', x: -20, y: 0, z: -20, respawnTime: 60000, remainingResources: 5, state: 'normal' }
+              ];
+              console.log(`[${socket.id}] Sending ${fallbackResources.length} emergency fallback resources`);
+              socket.emit('initResourceNodes', fallbackResources);
+            });
+          } else {
+            // For each node, log the node ID and type for debugging
+            nodes.forEach((node: any) => {
+              console.log(`[${socket.id}] Resource: ${node.id} (${node.type}) at (${node.x}, ${node.z})`);
+            });
+            
+            socket.emit('initResourceNodes', nodes);
+          }
+        } else {
+          console.error(`[${socket.id}] ResourceHandler not initialized when sending resource nodes`);
+          // Create emergency fallback resources
+          const fallbackResources = [
+            { id: 'tree-emergency-1', type: 'tree', x: 10, y: 0, z: 10, respawnTime: 60000, remainingResources: 5, state: 'normal' },
+            { id: 'rock-emergency-1', type: 'rock', x: -20, y: 0, z: -20, respawnTime: 60000, remainingResources: 5, state: 'normal' }
+          ];
+          console.log(`[${socket.id}] Sending ${fallbackResources.length} emergency fallback resources (handler missing)`);
+          socket.emit('initResourceNodes', fallbackResources);
+        }
+      } catch (error) {
+        console.error(`[${socket.id}] Error sending resource nodes:`, error);
+        // Create emergency fallback resources
+        const fallbackResources = [
+          { id: 'tree-error-1', type: 'tree', x: 10, y: 0, z: 10, respawnTime: 60000, remainingResources: 5, state: 'normal' },
+          { id: 'rock-error-1', type: 'rock', x: -20, y: 0, z: -20, respawnTime: 60000, remainingResources: 5, state: 'normal' }
+        ];
+        console.log(`[${socket.id}] Sending ${fallbackResources.length} emergency fallback resources (error occurred)`);
+        socket.emit('initResourceNodes', fallbackResources);
+      }
+    });
   } catch (error) {
     console.error(`Error in handleSingleConnection for ${socket.id}:`, error);
     socket.disconnect();
+  }
+};
+
+// Create a new handler for chat commands
+const setupChatCommandHandler = (io: Server, socket: ExtendedSocket) => {
+  socket.on('chatCommand', async (data: { command: string, params: any }) => {
+    console.log(`[${socket.id}] Received chat command:`, data);
+    
+    if (!players[socket.id]) {
+      console.error(`[${socket.id}] Player not found for chat command`);
+      socket.emit('chatMessage', { 
+        content: 'Error: You must be logged in to use commands', 
+        type: 'system', 
+        timestamp: Date.now() 
+      });
+      return;
+    }
+    
+    const player = players[socket.id];
+    
+    try {
+      switch (data.command.toLowerCase()) {
+        case 'drop':
+          handleDropCommand(io, socket, player, data.params);
+          break;
+        
+        case 'give':
+          handleGiveCommand(io, socket, player, data.params);
+          break;
+          
+        default:
+          socket.emit('chatMessage', { 
+            content: `Unknown command: ${data.command}`, 
+            type: 'system', 
+            timestamp: Date.now() 
+          });
+          break;
+      }
+    } catch (error) {
+      console.error(`[${socket.id}] Error processing chat command:`, error);
+      socket.emit('chatMessage', { 
+        content: `Error processing command: ${error instanceof Error ? error.message : 'Unknown error'}`, 
+        type: 'system', 
+        timestamp: Date.now() 
+      });
+    }
+  });
+};
+
+// Handle the /drop command
+const handleDropCommand = async (io: Server, socket: ExtendedSocket, player: Player, params: any) => {
+  const { itemName } = params;
+  
+  if (!itemName) {
+    socket.emit('chatMessage', { 
+      content: 'Usage: /drop [item_name] - Drops the specified item on the ground', 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  console.log(`[${socket.id}] Processing drop command for item: ${itemName}`);
+  
+  // Find the item in the player's inventory
+  const itemIndex = player.inventory.findIndex(item => 
+    item.type.toLowerCase() === itemName.toLowerCase()
+  );
+  
+  if (itemIndex === -1) {
+    socket.emit('chatMessage', { 
+      content: `You don't have a "${itemName}" in your inventory.`, 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  // Get the item
+  const item = player.inventory[itemIndex];
+  
+  // Create a unique ID for the dropped item
+  const dropId = `drop-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  
+  // Add small random offset to drop position
+  const dropX = player.x + (Math.random() * 2 - 1);
+  const dropZ = player.z + (Math.random() * 2 - 1);
+  
+  // Remove the item from inventory
+  player.inventory.splice(itemIndex, 1);
+  
+  // Create the world item
+  const worldItem = {
+    dropId,
+    itemType: item.type,
+    x: dropX,
+    y: player.y,
+    z: dropZ,
+    droppedBy: socket.id
+  };
+  
+  try {
+    // Save to database
+    await dropItemInWorld(dropId, item.type, dropX, player.y, dropZ);
+    
+    // Broadcast the dropped item to all players
+    io.emit('itemDropped', worldItem);
+    
+    // Update player's inventory
+    socket.emit('inventoryUpdate', player.inventory);
+    
+    // Save inventory to database if we have a user ID
+    if (socket.user && socket.user.id) {
+      await savePlayerInventory(socket.user.id, player.inventory);
+    }
+    
+    // Send success message
+    socket.emit('chatMessage', { 
+      content: `You dropped: ${itemName}`, 
+      type: 'action', 
+      timestamp: Date.now() 
+    });
+    
+    console.log(`[${socket.id}] Successfully dropped ${itemName} with ID ${dropId}`);
+  } catch (error) {
+    console.error(`[${socket.id}] Error dropping item:`, error);
+    socket.emit('chatMessage', { 
+      content: 'Error dropping item. Please try again.', 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+  }
+};
+
+// Handle the /give command to add an item to inventory
+const handleGiveCommand = async (io: Server, socket: ExtendedSocket, player: Player, params: any) => {
+  const { itemName } = params;
+  
+  if (!itemName) {
+    socket.emit('chatMessage', { 
+      content: 'Usage: /give [item_name] - Adds the specified item to your inventory', 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  console.log(`[${socket.id}] Processing give command for item: ${itemName}`);
+  
+  // List of valid items
+  const validItems = [
+    'log', 'coal', 'fish', 'bronze_pickaxe', 'bronze_axe', 
+    'iron_pickaxe', 'iron_axe', 'steel_pickaxe', 'steel_axe'
+  ];
+  
+  // Check if the requested item is valid
+  const normalizedItemName = itemName.toLowerCase();
+  const validItem = validItems.find(item => item === normalizedItemName);
+  
+  if (!validItem) {
+    socket.emit('chatMessage', { 
+      content: `Invalid item name: "${itemName}". Valid items are: ${validItems.join(', ')}`, 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  // Create a new inventory item with unique ID
+  const newItem = {
+    id: `inv-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    type: validItem,
+    quantity: 1
+  };
+  
+  // Ensure player has an inventory array
+  if (!player.inventory) {
+    player.inventory = [];
+  }
+  
+  // Add to player's inventory
+  player.inventory.push(newItem);
+  
+  // Update inventory on client
+  socket.emit('inventoryUpdate', player.inventory);
+  
+  // Send success message
+  socket.emit('chatMessage', { 
+    content: `Added ${validItem} to your inventory.`, 
+    type: 'system', 
+    timestamp: Date.now() 
+  });
+  
+  // Save to database if we have a user ID
+  try {
+    if (socket.user && socket.user.id) {
+      await savePlayerInventory(socket.user.id, player.inventory);
+      console.log(`[${socket.id}] Saved inventory to database for user: ${socket.user.id}`);
+    }
+  } catch (error) {
+    console.error(`[${socket.id}] Failed to save inventory:`, error);
   }
 };
 

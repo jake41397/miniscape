@@ -95,6 +95,51 @@ export class InventoryHandler {
   }
   
   /**
+   * Handle equip item event
+   */
+  public setupEquipItemHandler(socket: ExtendedSocket): void {
+    socket.on('equipItem', async (data: { itemId: string }) => {
+      if (!this.players[socket.id]) return;
+      
+      const { itemId } = data;
+      const player = this.players[socket.id];
+      const playerInventory = player.inventory;
+      
+      // Find the item in player inventory
+      const itemIndex = playerInventory.findIndex(item => item.id === itemId);
+      
+      if (itemIndex === -1) {
+        // Item not found in inventory
+        console.log(`Player ${socket.id} tried to equip non-existent item: ${itemId}`);
+        return;
+      }
+      
+      const item = playerInventory[itemIndex];
+      
+      try {
+        // Check if this is an equippable item type
+        const equippableTypes = ['bronze_pickaxe', 'bronze_axe'];
+        if (!equippableTypes.includes(item.type)) {
+          console.log(`Player ${socket.id} tried to equip non-equippable item: ${item.type}`);
+          return;
+        }
+        
+        // Set the equipped item
+        player.equippedItem = item;
+        console.log(`Player ${socket.id} equipped item: ${item.type} (${item.id})`);
+        
+        // Notify client about equipped item
+        socket.emit('equippedItem', item);
+        
+        // Save player's state to database if needed
+        // This would depend on your database schema
+      } catch (error) {
+        console.error('Error handling item equip:', error);
+      }
+    });
+  }
+  
+  /**
    * Handle item drop
    */
   public setupItemDropHandler(socket: ExtendedSocket): void {

@@ -102,20 +102,30 @@ const createChatBubbleManager = ({
 
     // Chat message handler
     const handleChatMessage = (message: { 
-      name: string; 
-      text: string; 
-      playerId: string; 
-      timestamp: number;
+      name?: string; 
+      text?: string; 
+      content?: string; // Add support for newer message format
+      playerId?: string; 
+      timestamp?: number;
+      type?: string;
     }) => {
+      // Get the message content from either text or content property
+      const messageContent = message.text || message.content || '';
+      
+      // Skip empty messages
+      if (!messageContent) {
+        return;
+      }
+      
       // If this is our own message, add a chat bubble above our player
-      if (message.playerId === socket.id && playerRef.current) {
-        createChatBubble(message.playerId, message.text, playerRef.current);
+      if (message.playerId && message.playerId === socket.id && playerRef.current) {
+        createChatBubble(message.playerId, messageContent, playerRef.current);
       } 
       // If it's another player's message, find their mesh and add a bubble
       else if (message.playerId && playersRef.current && playersRef.current.has(message.playerId)) {
         const playerMesh = playersRef.current.get(message.playerId);
         if (playerMesh) {
-          createChatBubble(message.playerId, message.text, playerMesh);
+          createChatBubble(message.playerId, messageContent, playerMesh);
         }
       }
     };

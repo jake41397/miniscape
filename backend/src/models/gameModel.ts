@@ -17,6 +17,8 @@ interface ResourceNode {
   y: number;
   z: number;
   respawnTime: number;
+  state: 'normal' | 'harvested';
+  remainingResources: number;
 }
 
 /**
@@ -50,24 +52,49 @@ export const loadWorldItems = async (): Promise<WorldItem[]> => {
  */
 export const loadResourceNodes = async (): Promise<ResourceNode[]> => {
   try {
+    console.log('Executing loadResourceNodes query from database...');
+    
     const { data, error } = await supabase
       .from('resource_nodes')
       .select('*');
     
     if (error) {
+      console.error('Supabase error loading resource_nodes:', error);
       throw error;
     }
     
-    return data.map((node: any): ResourceNode => ({
-      id: node.id,
-      type: node.node_type,
-      x: node.x,
-      y: node.y,
-      z: node.z,
-      respawnTime: node.respawn_time
-    }));
+    console.log(`Raw resource_nodes data from Supabase:`, data);
+    
+    if (!data || data.length === 0) {
+      console.log('No resource nodes found in database');
+      return [];
+    }
+    
+    // Map database fields to our ResourceNode interface
+    // Adjust these mappings if your database columns are named differently
+    const resourceNodes = data.map((node: any): ResourceNode => {
+      // Ensure state is a valid value
+      const stateValue = node.state || 'normal';
+      const validState = stateValue === 'harvested' ? 'harvested' : 'normal';
+      
+      return {
+        id: node.id,
+        type: node.node_type || node.type, // Try both name possibilities
+        x: Number(node.x),
+        y: Number(node.y),
+        z: Number(node.z),
+        respawnTime: Number(node.respawn_time || node.respawnTime || 60000),
+        state: validState,
+        remainingResources: node.remaining_resources || node.remainingResources || 5
+      };
+    });
+    
+    console.log(`Mapped ${resourceNodes.length} resource nodes:`, resourceNodes.map(n => n.id));
+    
+    return resourceNodes;
   } catch (error) {
-    logger.error('Error loading resource nodes', error instanceof Error ? error : new Error('Unknown error'));
+    console.error('Error loading resource nodes', error instanceof Error ? error : new Error('Unknown error'));
+    console.error('Stack trace:', new Error().stack);
     return [];
   }
 };

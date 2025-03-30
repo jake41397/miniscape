@@ -12,9 +12,16 @@ interface WorldItem {
 
 export async function getWorldItems(): Promise<WorldItem[]> {
   try {
-    const db = await getDatabase();
-    const worldItems = await db.collection('worldItems').find({}).toArray();
-    return worldItems as WorldItem[];
+    const supabase = getDatabase();
+    const { data, error } = await supabase
+      .from('world_items')
+      .select('*');
+    
+    if (error) {
+      throw error;
+    }
+    
+    return data as WorldItem[];
   } catch (error) {
     console.error('Error fetching world items:', error);
     return [];
@@ -31,31 +38,51 @@ export async function dropItemInWorld(
   try {
     console.log(`Saving world item to database: ${dropId} (${itemType}) at (${x}, ${y}, ${z})`);
     
-    const db = await getDatabase();
+    const supabase = getDatabase();
     
     // Create the item object
-    const worldItem: WorldItem = {
+    const worldItem = {
       dropId,
       itemType,
       x,
       y,
       z,
-      created: new Date() // Add a timestamp
+      created: new Date()
     };
     
     // Check if this item already exists (by dropId)
-    const existingItem = await db.collection('worldItems').findOne({ dropId });
+    const { data: existingItem, error: checkError } = await supabase
+      .from('world_items')
+      .select('*')
+      .eq('dropId', dropId)
+      .single();
+    
+    if (checkError && checkError.code !== 'PGRST116') {
+      // A real error (not just "no rows returned")
+      throw checkError;
+    }
     
     if (existingItem) {
       console.log(`Item ${dropId} already exists in database, updating`);
       // Update the existing item
-      await db.collection('worldItems').updateOne(
-        { dropId },
-        { $set: { x, y, z, itemType } }
-      );
+      const { error: updateError } = await supabase
+        .from('world_items')
+        .update({ x, y, z, itemType })
+        .eq('dropId', dropId);
+      
+      if (updateError) {
+        throw updateError;
+      }
     } else {
       // Insert the new item
-      await db.collection('worldItems').insertOne(worldItem);
+      const { error: insertError } = await supabase
+        .from('world_items')
+        .insert(worldItem);
+      
+      if (insertError) {
+        throw insertError;
+      }
+      
       console.log(`Inserted new item ${dropId} into database`);
     }
     
@@ -68,9 +95,17 @@ export async function dropItemInWorld(
 
 export async function removeWorldItem(dropId: string): Promise<boolean> {
   try {
-    const db = await getDatabase();
-    const result = await db.collection('worldItems').deleteOne({ dropId });
-    return result.deletedCount > 0;
+    const supabase = getDatabase();
+    const { error } = await supabase
+      .from('world_items')
+      .delete()
+      .eq('dropId', dropId);
+    
+    if (error) {
+      throw error;
+    }
+    
+    return true;
   } catch (error) {
     console.error('Error removing world item:', error);
     return false;
@@ -79,8 +114,16 @@ export async function removeWorldItem(dropId: string): Promise<boolean> {
 
 export async function removeAllWorldItems(): Promise<boolean> {
   try {
-    const db = await getDatabase();
-    await db.collection('worldItems').deleteMany({});
+    const supabase = getDatabase();
+    const { error } = await supabase
+      .from('world_items')
+      .delete()
+      .neq('dropId', 'placeholder'); // Delete all rows
+    
+    if (error) {
+      throw error;
+    }
+    
     return true;
   } catch (error) {
     console.error('Error removing all world items:', error);

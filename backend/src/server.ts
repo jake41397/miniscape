@@ -1,6 +1,16 @@
 // Load world items from database on startup
 import { getWorldItems } from './db/worldItemsDB';
 
+// Import WorldItem interface
+interface WorldItem {
+  dropId: string;
+  itemType: string;
+  x: number;
+  y: number;
+  z: number;
+  droppedBy?: string;
+}
+
 // ... other code
 
 // Initialize game world state

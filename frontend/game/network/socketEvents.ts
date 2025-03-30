@@ -11,6 +11,7 @@ interface ServerToClientEvents {
   
   // Inventory events
   inventoryUpdate: (inventory: Item[]) => void;
+  equippedItem: (item: Item | null) => void;
   
   // World item events
   itemDropped: (item: WorldItem) => void;
@@ -19,6 +20,19 @@ interface ServerToClientEvents {
   
   // Resource events
   resourceUpdate: (resourceData: any) => void;
+  resourceStateChanged: (data: { 
+    resourceId: string, 
+    state?: 'normal' | 'harvested', 
+    available: boolean,
+    remainingResources?: number
+  }) => void;
+  resourceGathered: (data: { 
+    resourceId: string, 
+    resourceType: string, 
+    item: any,
+    remainingResources?: number
+  }) => void;
+  gatheringStarted: (data: { resourceId: string, action: string }) => void;
   
   // Chat events
   chatMessage: (message: any) => void;
@@ -27,6 +41,9 @@ interface ServerToClientEvents {
   error: (error: { message: string }) => void;
   playerData: (data: any) => void;
   zoneInfo: (data: any) => void;
+  playerCount: (count: number) => void;
+  ping: (startTime: number, callback: (startTime: number) => void) => void;
+  initPlayers: (players: any[]) => void;
 }
 
 // Define client-to-server events
@@ -37,6 +54,7 @@ interface ClientToServerEvents {
   
   // Inventory events
   requestInventory: () => void;
+  equipItem: (data: { itemId: string }) => void;
   
   // Item events
   dropItem: (data: { 
@@ -51,9 +69,23 @@ interface ClientToServerEvents {
   
   // Resource events
   gather: (resourceId: string) => void;
+  gatherWithTool: (data: { resourceId: string, action: string }) => void;
   
   // Chat events
-  sendChat: (message: { content: string, targetId?: string }) => void;
+  chat: (message: string) => void;
+  chatCommand: (data: { command: string, params: any }) => void;
+  
+  // Request events
+  getResourceNodes: () => void;
+  getWorldItems: () => void;
+  getPlayers: () => void;
+  getPlayerCount: () => void;
+  requestAllPlayers: () => void;
+  syncPlayerList: (playerIds: string[], callback: (serverPlayerIds: string[]) => void) => void;
+  
+  // System events
+  ping: (startTime: number) => void;
+  pong: (startTime: number) => void;
 }
 
 // Export both interfaces separately instead of combining them

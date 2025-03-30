@@ -12,6 +12,7 @@ interface Player {
   y: number;
   z: number;
   inventory: InventoryItem[];
+  equippedItem?: InventoryItem; // Currently equipped item
 }
 
 interface InventoryItem {
@@ -36,6 +37,8 @@ interface ResourceNode {
   y: number;
   z: number;
   respawnTime: number;
+  remainingResources?: number; // Track remaining resources before depletion
+  state?: 'normal' | 'harvested'; // Track the visual state of the resource
 }
 
 // Make interfaces available globally

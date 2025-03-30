@@ -10,6 +10,7 @@ export interface Player {
   // Optional properties that might be added later
   health?: number;
   inventory?: Item[];
+  equippedItem?: Item; // Currently equipped item (tool, weapon, etc.)
 }
 
 // Player position interface for network updates

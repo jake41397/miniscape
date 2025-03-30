@@ -3,12 +3,14 @@ import { getSocket } from '../../game/network/socket';
 import soundManager from '../../game/audio/soundManager';
 
 interface ChatMessage {
-  name: string;
+  name?: string;
   text: string;
   playerId?: string;
   timestamp?: number;
   sender?: string; // For backward compatibility
   isLocal?: boolean;
+  type?: 'player' | 'system' | 'action'; // Message type for styling
+  content?: string; // For newer message format from server
 }
 
 // Persist messages in localStorage (limited to last 50)
@@ -64,9 +66,10 @@ const ChatPanel: React.FC = () => {
     console.log('🔴 Chat message received in panel:', message);
     
     // Debug check if message has all required fields
-    if (!message.text) {
-      console.warn('Received message with empty text!', message);
-      return; // Skip messages with no text
+    // Check for either text or content field (newer format uses content)
+    if (!message.text && !message.content) {
+      console.warn('Received message with empty content!', message);
+      return; // Skip messages with no text/content
     }
     
     // Determine if this is our own message or from another player
@@ -78,9 +81,12 @@ const ChatPanel: React.FC = () => {
       // Get the latest messages (not from closure)
       const latestMessages = [...messages];
       
+      // Compare using either text or content property
+      const messageContent = message.text || message.content || '';
+      
       const recentOwnMessage = latestMessages.find(msg => 
         msg.isLocal && 
-        msg.text === message.text && 
+        (msg.text === messageContent || msg.content === messageContent) && 
         msg.timestamp && 
         message.timestamp && 
         Math.abs(msg.timestamp - message.timestamp) < 2000
@@ -92,11 +98,13 @@ const ChatPanel: React.FC = () => {
       }
     }
     
-    console.log(`Adding message from ${isOwnMessage ? 'ourselves' : message.name} to chat history`);
+    console.log(`Adding message from ${isOwnMessage ? 'ourselves' : message.name || 'system'} to chat history`);
     
     // Create a formatted message object to add to our state
     const formattedMessage = {
       ...message,
+      // Ensure text property exists for rendering
+      text: message.text || message.content || '',
       // For display consistency
       name: isOwnMessage ? 'You' : message.name || message.sender || 'Unknown'
     };
@@ -108,7 +116,7 @@ const ChatPanel: React.FC = () => {
     if (!isOwnMessage) {
       soundManager.play('chatMessage');
     }
-  }, [messages]); // Depend on messages to get the latest state
+  }, [messages]);
   
   useEffect(() => {
     let socketInstance: any = null;
@@ -163,6 +171,13 @@ const ChatPanel: React.FC = () => {
       return;
     }
     
+    // Check if this is a command (starts with /)
+    if (inputValue.startsWith('/')) {
+      handleChatCommand(inputValue);
+      setInputValue('');
+      return;
+    }
+    
     console.log('Sending chat message:', inputValue);
     
     // Get our own player name
@@ -185,6 +200,92 @@ const ChatPanel: React.FC = () => {
     
     // Clear input
     setInputValue('');
+  };
+  
+  // New function to handle chat commands
+  const handleChatCommand = async (commandString: string) => {
+    const parts = commandString.trim().split(' ');
+    const command = parts[0].toLowerCase();
+    
+    switch (command) {
+      case '/help':
+        // Display available commands
+        setMessages(prev => [...prev, {
+          name: 'System',
+          text: 'Available commands:',
+          timestamp: Date.now(),
+          type: 'system'
+        }, {
+          name: 'System',
+          text: '/drop [item_name] - Drops the specified item on the ground',
+          timestamp: Date.now(),
+          type: 'system'
+        }, {
+          name: 'System',
+          text: '/give [item_name] - Gives you the specified item',
+          timestamp: Date.now(),
+          type: 'system'
+        }, {
+          name: 'System',
+          text: '/help - Shows this help message',
+          timestamp: Date.now(),
+          type: 'system'
+        }]);
+        break;
+        
+      case '/drop':
+        if (parts.length < 2) {
+          // Add error message to chat
+          setMessages(prev => [...prev, {
+            name: 'System',
+            text: 'Usage: /drop [item_name] - Drops the specified item on the ground',
+            timestamp: Date.now(),
+            type: 'system'
+          }]);
+          return;
+        }
+        
+        // Get the item name (combine all words after /drop)
+        const itemName = parts.slice(1).join(' ');
+        console.log(`Attempting to drop item: ${itemName}`);
+        
+        const socket = await getSocket();
+        if (!socket) {
+          console.error('Cannot execute command - socket not connected');
+          setMessages(prev => [...prev, {
+            name: 'System',
+            text: 'Error: Not connected to server',
+            timestamp: Date.now(),
+            type: 'system'
+          }]);
+          return;
+        }
+        
+        // Send drop command to server
+        (socket as any).emit('chatCommand', { 
+          command: 'drop', 
+          params: { itemName } 
+        });
+        
+        // Add feedback message
+        setMessages(prev => [...prev, {
+          name: 'System',
+          text: `Attempting to drop: ${itemName}`,
+          timestamp: Date.now(),
+          type: 'system'
+        }]);
+        break;
+        
+      default:
+        // Unknown command
+        setMessages(prev => [...prev, {
+          name: 'System',
+          text: `Unknown command: ${command}`,
+          timestamp: Date.now(),
+          type: 'system'
+        }]);
+        break;
+    }
   };
   
   // Check if a message is recent (less than 10 seconds old)
@@ -307,7 +408,7 @@ const ChatPanel: React.FC = () => {
             {/* Empty state message */}
             {messages.length === 0 && (
               <div style={{ color: '#888', textAlign: 'center', padding: '20px 0' }}>
-                No messages yet. Start chatting or click 🧪 to add a test message!
+                No messages yet. Start chatting or type /help to see available commands!
               </div>
             )}
             
@@ -316,36 +417,63 @@ const ChatPanel: React.FC = () => {
               // Determine if this is a message from ourselves or another player
               const isOwnMessage = msg.isLocal || (msg.playerId === mySocketIdRef.current);
               
+              // Use type from message, or determine based on properties
+              const messageType = msg.type || 
+                (msg.playerId === 'system' ? 'system' : isOwnMessage ? 'player' : 'player');
+              
+              // Use content field if available (new format) or text (old format)
+              const messageText = msg.content || msg.text || '[Empty message]';
+              
+              // Handle different message type styling
+              let backgroundColor, borderColor, nameColor;
+              let displayName = msg.name || msg.sender || 'Unknown';
+              
+              if (messageType === 'system') {
+                backgroundColor = 'rgba(255, 152, 0, 0.3)'; // Orange for system
+                borderColor = '#ff9800';
+                nameColor = '#ffcc80';
+                displayName = 'System';
+              } else if (messageType === 'action') {
+                backgroundColor = 'rgba(103, 58, 183, 0.3)'; // Purple for actions
+                borderColor = '#673ab7';
+                nameColor = '#d1c4e9';
+                displayName = 'Action';
+              } else { // Default player message
+                backgroundColor = isOwnMessage 
+                  ? 'rgba(25, 118, 210, 0.5)' // Blue for our messages 
+                  : 'rgba(50, 50, 50, 0.5)';  // Dark for others
+                borderColor = isOwnMessage 
+                  ? '#2196f3'   // Blue border for ours
+                  : '#4caf50';  // Green border for others
+                nameColor = isOwnMessage ? '#90caf9' : '#4caf50';
+              }
+              
               return (
                 <div 
                   key={`msg-${index}`} 
                   style={{ 
                     color: 'white', 
                     fontSize: '14px',
-                    backgroundColor: isOwnMessage 
-                      ? 'rgba(25, 118, 210, 0.5)' // Blue for our messages 
-                      : 'rgba(50, 50, 50, 0.5)',  // Dark for others
+                    backgroundColor: backgroundColor,
                     padding: '6px 10px',
                     borderRadius: '4px',
-                    borderLeft: isOwnMessage 
-                      ? '3px solid #2196f3'   // Blue border for ours
-                      : '3px solid #4caf50',  // Green border for others
+                    borderLeft: `3px solid ${borderColor}`,
                     marginBottom: '4px'
                   }}
                 >
                   <div style={{ 
-                    color: isOwnMessage ? '#90caf9' : '#4caf50', 
+                    color: nameColor, 
                     fontWeight: 'bold', 
                     marginBottom: '2px',
                     display: 'flex',
                     justifyContent: 'space-between'
                   }}>
-                    <span>{msg.name || msg.sender || 'Unknown'}</span>
+                    <span>{displayName}</span>
                     <span style={{ fontSize: '10px', color: '#aaa' }}>
                       {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ''}
                     </span>
                   </div>
-                  <div>{msg.text || '[Empty message]'}</div>
+                  <div>{messageText}</div>
                 </div>
               );
             })}
@@ -365,6 +493,7 @@ const ChatPanel: React.FC = () => {
               type="text"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
+              className="chat-input"
               style={{
                 flex: 1,
                 padding: '8px',
@@ -375,6 +504,12 @@ const ChatPanel: React.FC = () => {
                 outline: 'none'
               }}
               placeholder="Type a message..."
+              onKeyDown={(e) => {
+                // Explicitly prevent propagation for space key to ensure it works in the input
+                if (e.key === ' ') {
+                  e.stopPropagation();
+                }
+              }}
             />
             <button 
               type="submit"

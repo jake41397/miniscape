@@ -8,6 +8,7 @@ import {
   updateDroppedItems,
   updateResourceLOD
 } from './resources';
+import { ResourceController } from '../../components/game/ResourceController';
 
 // World boundaries
 const WORLD_BOUNDS = {
@@ -30,6 +31,7 @@ class WorldManager {
   private onResourceNodesCreated: (nodes: ResourceNode[]) => void;
   private onWorldItemsCreated: (items: WorldItem[]) => void;
   private camera: THREE.Camera | null = null;
+  private resourceController: ResourceController | null = null;
   
   // Geometries and materials for proper disposal
   private groundGeometry?: THREE.PlaneGeometry;
@@ -48,6 +50,16 @@ class WorldManager {
   // Set camera for LOD calculations
   public setCamera(camera: THREE.Camera) {
     this.camera = camera;
+  }
+  
+  // Get the resource controller instance
+  public getResourceController(): ResourceController | null {
+    return this.resourceController;
+  }
+  
+  // Set the resource controller
+  public setResourceController(controller: ResourceController): void {
+    this.resourceController = controller;
   }
 
   private initialize() {
@@ -150,6 +162,9 @@ class WorldManager {
       // Fishing spots
       { id: 'fish-1', type: ResourceType.FISH, x: 30, y: 0, z: -30 },
     ];
+    
+    console.log(`%c 🌳 Creating ${resources.length} default resource nodes`, "background: #4CAF50; color: white;");
+    console.log("Default resources:", resources.map(r => ({ id: r.id, type: r.type })));
     
     // Create meshes for each resource and add to scene
     resources.forEach(resource => {

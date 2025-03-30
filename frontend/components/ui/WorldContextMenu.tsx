@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import * as THREE from 'three';
-import { WorldItem } from '../../game/world/resources';
+import { WorldItem, ResourceNode, ResourceType } from '../../game/world/resources';
 import { getSocket } from '../../game/network/socket';
 
 interface WorldContextMenuProps {
   position: { x: number, y: number } | null;
   playerPosition: THREE.Vector3 | null;
   nearbyItems: WorldItem[];
+  nearbyResources?: ResourceNode[];
   onClose: () => void;
   onPickupItem: (itemId: string) => void;
+  onInteractWithResource?: (resourceId: string, action: string) => void;
 }
 
 const MAX_INTERACTION_DISTANCE = 3; // Maximum distance (in world units) for item interaction
@@ -17,8 +19,10 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
   position,
   playerPosition,
   nearbyItems,
+  nearbyResources = [],
   onClose,
-  onPickupItem
+  onPickupItem,
+  onInteractWithResource
 }) => {
   const [menuItems, setMenuItems] = useState<{ label: string; action: () => void; disabled: boolean }[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -27,7 +31,7 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
   useEffect(() => {
     const handleError = (error: any) => {
       console.log("Received error from server:", error);
-      setErrorMessage(typeof error === 'string' ? error : 'Failed to pick up item');
+      setErrorMessage(typeof error === 'string' ? error : 'Failed to perform action');
       
       // Auto-close after showing error
       setTimeout(() => {
@@ -67,40 +71,74 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
     return () => document.removeEventListener('click', handleOutsideClick);
   }, [onClose]);
 
-  // Create menu items based on nearby items
+  // Create menu items based on nearby items and resources
   useEffect(() => {
     if (!playerPosition) {
       setMenuItems([]);
       return;
     }
 
-    const items = nearbyItems.map(item => {
+    const items: { label: string; action: () => void; disabled: boolean }[] = [];
+
+    // Add item pickup options
+    nearbyItems.forEach(item => {
       // Calculate distance from player to this item
       const distance = playerPosition.distanceTo(new THREE.Vector3(item.x, item.y, item.z));
       const tooFar = distance > MAX_INTERACTION_DISTANCE;
 
-      return {
+      items.push({
         label: `Pick up ${item.itemType} ${tooFar ? '(too far)' : ''}`,
         action: () => {
           console.log(`%c 🎯 PICK UP ACTION: ${item.itemType} (${item.dropId})`, "background: purple; color: white; font-size: 16px;");
-          console.log({
-            item,
-            distance,
-            tooFar,
-            playerPosition: playerPosition ? `(${playerPosition.x.toFixed(2)}, ${playerPosition.y.toFixed(2)}, ${playerPosition.z.toFixed(2)})` : null,
-            itemPosition: `(${item.x.toFixed(2)}, ${item.y.toFixed(2)}, ${item.z.toFixed(2)})`
-          });
           onPickupItem(item.dropId);
         },
         disabled: tooFar
-      };
+      });
     });
 
+    // Add resource interaction options
+    if (onInteractWithResource) {
+      nearbyResources.forEach(resource => {
+        // Calculate distance from player to this resource
+        const distance = playerPosition.distanceTo(new THREE.Vector3(resource.x, resource.y, resource.z));
+        const tooFar = distance > MAX_INTERACTION_DISTANCE;
+        
+        // Different options based on resource type
+        if (resource.type === ResourceType.TREE) {
+          items.push({
+            label: `Chop tree ${tooFar ? '(too far)' : ''}`,
+            action: () => {
+              console.log(`%c 🪓 CHOP TREE ACTION: ${resource.id}`, "background: green; color: white; font-size: 16px;");
+              onInteractWithResource(resource.id, 'chop');
+            },
+            disabled: tooFar
+          });
+        } else if (resource.type === ResourceType.ROCK) {
+          items.push({
+            label: `Mine rock ${tooFar ? '(too far)' : ''}`,
+            action: () => {
+              console.log(`%c ⛏️ MINE ROCK ACTION: ${resource.id}`, "background: gray; color: white; font-size: 16px;");
+              onInteractWithResource(resource.id, 'mine');
+            },
+            disabled: tooFar
+          });
+        }
+      });
+    }
+
     setMenuItems(items);
-  }, [nearbyItems, playerPosition, onPickupItem]);
+  }, [nearbyItems, nearbyResources, playerPosition, onPickupItem, onInteractWithResource]);
 
   if (!position || menuItems.length === 0) {
     return null;
+  }
+
+  // Determine menu title based on what's being displayed
+  let menuTitle = 'Items';
+  if (nearbyItems.length === 0 && nearbyResources.length > 0) {
+    menuTitle = 'Resources';
+  } else if (nearbyItems.length > 0 && nearbyResources.length > 0) {
+    menuTitle = 'Interact';
   }
 
   return (
@@ -111,7 +149,7 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
         top: `${position.y}px`
       }}
     >
-      <div className="menu-header">Items</div>
+      <div className="menu-header">{menuTitle}</div>
       
       {errorMessage ? (
         <div className="error-message">{errorMessage}</div>

@@ -333,6 +333,16 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
           setContextMenu(null);
         }
       },
+      // Add 'Equip' option for tools
+      ...(item.type === ItemType.BRONZE_AXE || item.type === ItemType.BRONZE_PICKAXE ? [
+        { 
+          label: 'Equip', 
+          handler: () => {
+            handleEquipItem(item);
+            setContextMenu(null);
+          }
+        }
+      ] : []),
       // Add different actions based on item type
       ...(item.type === ItemType.FISH ? [
         { 
@@ -375,6 +385,21 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
       item,
       actions
     });
+  };
+
+  // Add a handler for equipping items
+  const handleEquipItem = async (item: Item) => {
+    console.log(`Equipping item: ${item.type}`);
+    
+    // Get the socket
+    const socket = await getSocket();
+    if (!socket) {
+      console.error('Failed to get socket for equipping item');
+      return;
+    }
+    
+    // Send equipItem event to server
+    (socket as any).emit('equipItem', { itemId: item.id });
   };
 
   // For testing - will be removed when actual inventory is implemented

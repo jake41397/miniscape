@@ -11,11 +11,6 @@ const DynamicDebugButton = dynamic(() => import('../../components/DebugButton'),
   ssr: false
 });
 
-// Dynamically import the SessionStatus component
-const DynamicSessionStatus = dynamic(() => import('../../components/SessionStatus'), {
-  ssr: false
-});
-
 // Debug logger
 const debugLog = (message: string, data?: any) => {
   const timestamp = new Date().toISOString();
@@ -207,9 +202,6 @@ const SignIn: NextPage = () => {
         
         {/* Add the diagnostics button */}
         {showDebug && <DynamicDebugButton />}
-        
-        {/* Show session status */}
-        <DynamicSessionStatus compact={true} />
       </div>
     );
   }
@@ -252,9 +244,6 @@ const SignIn: NextPage = () => {
         
         {/* Add the diagnostics button */}
         {showDebug && <DynamicDebugButton />}
-        
-        {/* Show session status */}
-        <DynamicSessionStatus compact={true} />
       </div>
     );
   }
@@ -457,9 +446,6 @@ const SignIn: NextPage = () => {
       
       {/* Add the diagnostics button */}
       {showDebug && <DynamicDebugButton />}
-      
-      {/* Show session status */}
-      <DynamicSessionStatus compact={true} />
     </div>
   );
 };

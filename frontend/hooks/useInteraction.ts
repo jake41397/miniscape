@@ -137,6 +137,7 @@ export const useInteraction = ({
     // Add state for context menu
     const [contextMenuPos, setContextMenuPos] = useState<{ x: number, y: number } | null>(null);
     const [nearbyItems, setNearbyItems] = useState<WorldItem[]>([]);
+    const [nearbyResources, setNearbyResources] = useState<ResourceNode[]>([]);
 
     // Add state for pickup progress
     const [pickupInProgress, setPickupInProgress] = useState(false);
@@ -183,6 +184,7 @@ export const useInteraction = ({
     const closeContextMenu = useCallback(() => {
         setContextMenuPos(null);
         setNearbyItems([]);
+        setNearbyResources([]);
     }, []);
 
     // --- Main Click Handler ---
@@ -590,8 +592,32 @@ export const useInteraction = ({
         
         // Get all world items
         const worldItems = worldItemsRef.current || [];
+        // Get all resource nodes
+        const resourceNodes = resourceNodesRef.current || [];
 
-        // Check if we're directly clicking on an item first
+        // Check if we're clicking on a resource node
+        const resourceMeshes = resourceNodes
+            .filter(node => node && node.mesh)
+            .map(node => node.mesh) as THREE.Object3D[];
+            
+        const resourceIntersects = resourceMeshes.length > 0 ? 
+            raycasterRef.current.intersectObjects(resourceMeshes) : [];
+        
+        // If directly clicking on a resource, find that specific resource
+        if (resourceIntersects.length > 0) {
+            const intersectedResourceMesh = resourceIntersects[0].object;
+            const resourceNode = resourceNodes.find(node => node.mesh === intersectedResourceMesh);
+            
+            if (resourceNode) {
+                // Show context menu with just this resource
+                setNearbyResources([resourceNode]);
+                setNearbyItems([]);
+                setContextMenuPos({ x: e.clientX, y: e.clientY });
+                return;
+            }
+        }
+
+        // Check if we're directly clicking on an item
         const itemMeshes = worldItems
             .filter(item => item && item.mesh)
             .map(item => item.mesh) as THREE.Object3D[];
@@ -606,13 +632,14 @@ export const useInteraction = ({
             if (worldItem) {
                 // Show context menu with just this item
                 setNearbyItems([worldItem]);
+                setNearbyResources([]);
                 setContextMenuPos({ x: e.clientX, y: e.clientY });
                 return;
             }
         }
         
-        // If not clicking directly on an item, check for ground intersection
-        // to find nearby items relative to that point
+        // If not clicking directly on an item or resource, check for ground intersection
+        // to find nearby items and resources relative to that point
         const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
         const targetPoint = new THREE.Vector3();
         raycasterRef.current.ray.intersectPlane(groundPlane, targetPoint);
@@ -630,16 +657,29 @@ export const useInteraction = ({
             return horizontalDistSq <= MAX_ITEM_RADIUS * MAX_ITEM_RADIUS;
         });
         
-        // If there are nearby items, show the context menu
-        if (nearbyWorldItems.length > 0) {
+        // Find resources within a certain radius of the ground click
+        const nearbyWorldResources = resourceNodes.filter(resource => {
+            if (!resource.mesh) return false;
+            
+            const resourcePos = new THREE.Vector3(resource.x, resource.y, resource.z);
+            const horizontalDistSq = 
+                Math.pow(resourcePos.x - targetPoint.x, 2) + 
+                Math.pow(resourcePos.z - targetPoint.z, 2);
+                
+            return horizontalDistSq <= MAX_ITEM_RADIUS * MAX_ITEM_RADIUS;
+        });
+        
+        // If there are nearby items or resources, show the context menu
+        if (nearbyWorldItems.length > 0 || nearbyWorldResources.length > 0) {
             setNearbyItems(nearbyWorldItems);
+            setNearbyResources(nearbyWorldResources);
             setContextMenuPos({ x: e.clientX, y: e.clientY });
-            console.log(`Found ${nearbyWorldItems.length} nearby items`, nearbyWorldItems);
+            console.log(`Found ${nearbyWorldItems.length} nearby items and ${nearbyWorldResources.length} nearby resources`);
         } else {
-            // No items nearby, close any open context menu
+            // No items or resources nearby, close any open context menu
             closeContextMenu();
         }
-    }, [sceneRef, cameraRef, canvasRef, playerRef, worldItemsRef, closeContextMenu]);
+    }, [sceneRef, cameraRef, canvasRef, playerRef, worldItemsRef, resourceNodesRef, closeContextMenu]);
     
     // After a failed pickup attempt, refresh the world items list
     const refreshWorldItems = useCallback(() => {
@@ -811,13 +851,111 @@ export const useInteraction = ({
         };
     }, [closeContextMenu]);
 
+    // Handle resource interaction from context menu
+    const handleResourceInteraction = useCallback(async (resourceId: string, action: string) => {
+        console.log(`%c 🪓 Handling ${action} action for resource: ${resourceId}`, "background: #4CAF50; color: white; font-size: 14px;");
+        console.log(`Available resources: ${resourceNodesRef.current?.length || 0}`);
+        
+        // List all available resources for debugging
+        if (resourceNodesRef.current && resourceNodesRef.current.length > 0) {
+            console.table(resourceNodesRef.current.map(r => ({
+                id: r.id,
+                type: r.type,
+                has_mesh: !!r.mesh,
+                position: r.mesh ? `(${r.mesh.position.x.toFixed(1)}, ${r.mesh.position.z.toFixed(1)})` : 'N/A'
+            })));
+        } else {
+            console.error("No resources available in resourceNodesRef");
+        }
+        
+        // Find the resource in resourceNodes
+        const resourceNode = resourceNodesRef.current?.find(node => node.id === resourceId);
+        
+        if (!resourceNode) {
+            console.error(`%c ❌ Resource not found:`, "background: red; color: white; font-size: 14px;", {
+                lookingFor: resourceId,
+                availableResources: resourceNodesRef.current?.map(r => ({ id: r.id, type: r.type }))
+            });
+            return;
+        }
+        
+        if (!resourceNode.mesh) {
+            console.error(`%c ❌ Resource has no mesh:`, "background: red; color: white; font-size: 14px;", resourceNode);
+            return;
+        }
+        
+        if (!playerRef.current) {
+            console.error("Player mesh not available for resource interaction");
+            return;
+        }
+        
+        // Check if player is close enough to the resource
+        const playerPos = playerRef.current.position;
+        const resourcePos = resourceNode.mesh.position;
+        const distance = Math.sqrt(
+            Math.pow(playerPos.x - resourcePos.x, 2) +
+            Math.pow(playerPos.z - resourcePos.z, 2)
+        );
+        
+        console.log(`%c 📏 Distance to resource: ${distance.toFixed(2)}`, "color: #2196F3;");
+        
+        if (distance > 5) {
+            console.log(`%c 🚶 Moving to resource before interacting...`, "color: #FF9800;");
+            
+            // First move close to the resource
+            const movePos = new THREE.Vector3(
+                resourcePos.x + (Math.random() - 0.5) * 2, // Random position near the resource
+                playerPos.y,
+                resourcePos.z + (Math.random() - 0.5) * 2
+            );
+            
+            // Ensure we're not too close
+            const dirToResource = new THREE.Vector3().subVectors(movePos, resourcePos).normalize();
+            movePos.copy(resourcePos).addScaledVector(dirToResource, 2);
+            
+            try {
+                // Use the player controller to move to the position
+                if (playerControllerRef && playerControllerRef.current) {
+                    await playerControllerRef.current.moveToPosition(movePos);
+                    console.log(`%c ✅ Arrived at resource ${resourceId}. Ready to interact.`, "color: #4CAF50;");
+                    
+                    // Now that we're close, send the interaction event
+                    const socket = await getSocket();
+                    if (socket) {
+                        console.log(`%c 🔄 Sending ${action} action to server for resource: ${resourceId}`, "color: #2196F3;");
+                        (socket as any).emit('gatherWithTool', { resourceId, action });
+                    } else {
+                        console.error("Failed to get socket for resource interaction");
+                    }
+                } else {
+                    console.error("No player controller available for movement");
+                }
+            } catch (err) {
+                console.error("Error moving to resource:", err);
+            }
+        } else {
+            console.log(`%c ✅ Already close to resource. Sending interaction directly.`, "color: #4CAF50;");
+            
+            // We're already close, just send the interaction event
+            const socket = await getSocket();
+            if (socket) {
+                console.log(`%c 🔄 Sending ${action} action to server for resource: ${resourceId}`, "color: #2196F3;");
+                (socket as any).emit('gatherWithTool', { resourceId, action });
+            } else {
+                console.error("Failed to get socket for resource interaction");
+            }
+        }
+    }, [resourceNodesRef, playerRef, playerControllerRef]);
+
     // Return the handlers and context menu state
     return { 
         handleMouseClick,
         handleRightClick,
         contextMenuPos,
         nearbyItems,
+        nearbyResources,
         closeContextMenu,
-        handlePickupItemFromMenu
+        handlePickupItemFromMenu,
+        handleResourceInteraction
     };
 }; 

@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 // Make sure this path is correct for your project structure
 import { saveLastKnownPosition } from '../../game/network/socket'; 
+import { isUserTyping } from '../../utils/inputUtils';
 
 // --- Constants ---
 
@@ -614,6 +615,159 @@ export class PlayerController {
 
   // Add methods for handling mouse input for camera controls if they aren't elsewhere
   // handleMouseDown, handleMouseMove, handleMouseUp, handleWheel...
+
+  /**
+   * Update player movement based on the current movement state.
+   * This is called from the animation loop.
+   * @param delta Time in seconds since the last frame
+   * @returns True if movement occurred, false otherwise
+   */
+  updatePlayerMovement(delta: number): boolean {
+    // Simply delegate to the existing update method
+    return this.update(delta);
+  }
+
+  /**
+   * Update camera position based on current camera state
+   */
+  updateCamera(): void {
+    const player = this.playerRef.current;
+    if (player) {
+      this.updateCameraPosition(player.position);
+    }
+  }
+
+  /**
+   * Handle keyboard key down events
+   */
+  handleKeyDown(e: KeyboardEvent): void {
+    // Skip if user is typing in a text input
+    if (isUserTyping()) {
+      return;
+    }
+
+    // Update the keysPressed ref
+    this.keysPressed.current[e.key] = true;
+    
+    // Also update arrow keys with WASD equivalents to support both
+    if (e.key === 'ArrowUp') this.keysPressed.current['w'] = true;
+    if (e.key === 'ArrowDown') this.keysPressed.current['s'] = true;
+    if (e.key === 'ArrowLeft') this.keysPressed.current['a'] = true;
+    if (e.key === 'ArrowRight') this.keysPressed.current['d'] = true;
+    
+    // Stop auto-movement when manual movement keys are pressed
+    if (['w', 'a', 's', 'd', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      this.interruptMovement();
+    }
+    
+    // Update the movement state based on the keys
+    this.updateMovementFromKeys();
+  }
+
+  /**
+   * Handle keyboard key up events
+   */
+  handleKeyUp(e: KeyboardEvent): void {
+    // Skip if user is typing in a text input
+    if (isUserTyping()) {
+      return;
+    }
+    
+    // Update the keysPressed ref
+    this.keysPressed.current[e.key] = false;
+    
+    // Also update arrow keys with WASD equivalents to support both
+    if (e.key === 'ArrowUp') this.keysPressed.current['w'] = false;
+    if (e.key === 'ArrowDown') this.keysPressed.current['s'] = false;
+    if (e.key === 'ArrowLeft') this.keysPressed.current['a'] = false;
+    if (e.key === 'ArrowRight') this.keysPressed.current['d'] = false;
+    
+    // Update the movement state based on the keys
+    this.updateMovementFromKeys();
+  }
+
+  /**
+   * Handle mouse move events for camera control
+   */
+  handleMouseMove(e: MouseEvent): void {
+    if (this.cameraState.current.isMiddleMouseDown) {
+      const deltaX = e.clientX - this.cameraState.current.lastMousePosition.x;
+      const deltaY = e.clientY - this.cameraState.current.lastMousePosition.y;
+      
+      // Apply horizontal inversion if needed
+      const horizontalMultiplier = this.cameraState.current.isHorizontalInverted ? -1 : 1;
+      
+      // Update camera angle (horizontal rotation)
+      this.cameraState.current.angle += deltaX * CAMERA_ROTATE_SPEED_X * horizontalMultiplier;
+      
+      // Update camera tilt (vertical angle)
+      this.cameraState.current.tilt += deltaY * CAMERA_ROTATE_SPEED_Y;
+      
+      // Clamp tilt value
+      this.cameraState.current.tilt = Math.max(CAMERA_TILT_MIN, 
+        Math.min(CAMERA_TILT_MAX, this.cameraState.current.tilt));
+      
+      // Update last mouse position
+      this.cameraState.current.lastMousePosition = { x: e.clientX, y: e.clientY };
+    }
+  }
+
+  /**
+   * Handle mouse down events for camera control
+   */
+  handleMouseDown(e: MouseEvent): void {
+    // Middle mouse button
+    if (e.button === 1) {
+      this.cameraState.current.isMiddleMouseDown = true;
+      this.cameraState.current.lastMousePosition = { x: e.clientX, y: e.clientY };
+    }
+  }
+
+  /**
+   * Handle mouse up events for camera control
+   */
+  handleMouseUp(e: MouseEvent): void {
+    // Middle mouse button
+    if (e.button === 1) {
+      this.cameraState.current.isMiddleMouseDown = false;
+    }
+  }
+
+  /**
+   * Handle mouse wheel events for camera zoom
+   */
+  handleMouseWheel(e: WheelEvent): void {
+    // Adjust camera distance based on wheel direction
+    this.cameraState.current.distance += e.deltaY * 0.01 * CAMERA_ZOOM_SPEED;
+    
+    // Clamp to min/max distance
+    this.cameraState.current.distance = Math.max(
+      CAMERA_MIN_DISTANCE,
+      Math.min(CAMERA_MAX_DISTANCE, this.cameraState.current.distance)
+    );
+  }
+
+  /**
+   * Update movement state based on current key presses
+   */
+  private updateMovementFromKeys(): void {
+    const keys = this.keysPressed.current;
+    
+    // Set movement flags based on WASD and arrow keys
+    this.movementState.current.moveForward = keys['w'] || keys['ArrowUp'] || false;
+    this.movementState.current.moveBackward = keys['s'] || keys['ArrowDown'] || false;
+    this.movementState.current.moveLeft = keys['a'] || keys['ArrowLeft'] || false;
+    this.movementState.current.moveRight = keys['d'] || keys['ArrowRight'] || false;
+    
+    // If all movement keys are up, make sure all movement flags are false
+    if (!keys['w'] && !keys['ArrowUp'] && !keys['s'] && !keys['ArrowDown'] &&
+        !keys['a'] && !keys['ArrowLeft'] && !keys['d'] && !keys['ArrowRight']) {
+      this.movementState.current.moveForward = false;
+      this.movementState.current.moveBackward = false;
+      this.movementState.current.moveLeft = false;
+      this.movementState.current.moveRight = false;
+    }
+  }
 }
 
 export default PlayerController;

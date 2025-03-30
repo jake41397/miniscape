@@ -28,6 +28,7 @@ import FPSCounter from './ui/FPSCounter';
 import { PlayerController } from './game/PlayerController';
 import { SocketController } from './game/SocketController';
 import WorldContextMenu from './ui/WorldContextMenu';
+import { ResourceController } from './game/ResourceController';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -210,6 +211,9 @@ const GameCanvas: React.FC = () => {
     console.log("%c 🏃 MovementState initialized/updated", "color: #2196F3;", movementStateRef.current);
   }, [playerRef.current]); // Re-initialize when player changes
   
+  // Add resource controller ref
+  const resourceControllerRef = useRef<ResourceController | null>(null);
+  
   // --- Hook Initializations ---
 
   // 1. Three.js Setup
@@ -275,6 +279,35 @@ const GameCanvas: React.FC = () => {
     console.log(`Player count updated: ${playerCount}`);
   }, [playerCount]);
 
+  // Initialize ResourceController when scene and other references are ready
+  useEffect(() => {
+    if (scene && playerRef.current && worldManagerRef.current) {
+      console.log("%c 🛠️ Initializing ResourceController...", "background: #4CAF50; color: white;");
+      
+      // Create a new ResourceController
+      const resourceController = new ResourceController({
+        scene,
+        resourceNodesRef,
+        worldItemsRef,
+        worldManagerRef,
+        itemManagerRef,
+        playerRef
+      });
+      
+      // Initialize the resource controller
+      resourceController.initializeWorldManager();
+      resourceController.initializeItemManager();
+      
+      // Store in ref
+      resourceControllerRef.current = resourceController;
+      
+      // Connect it to the WorldManager
+      worldManagerRef.current.setResourceController(resourceController);
+      
+      console.log("%c ✅ ResourceController initialized!", "background: #4CAF50; color: white;");
+    }
+  }, [scene, playerRef.current, worldManagerRef.current]);
+
   // Initialize socket controller
   useEffect(() => {
     if (!scene || !camera || !playerRef.current) return;
@@ -329,7 +362,7 @@ const GameCanvas: React.FC = () => {
       }
       socketControllerRef.current = null;
     };
-  }, [scene, camera, playerRef.current]); // Add playerRef.current as a dependency
+  }, [scene, camera, playerRef.current]);
 
   // Setup Player Controller
   useEffect(() => {
@@ -450,9 +483,11 @@ const GameCanvas: React.FC = () => {
     handleMouseClick, 
     handleRightClick, 
     contextMenuPos, 
-    nearbyItems, 
+    nearbyItems,
+    nearbyResources,
     closeContextMenu, 
-    handlePickupItemFromMenu 
+    handlePickupItemFromMenu,
+    handleResourceInteraction
   } = useInteraction(interactionOptions);
 
   // --- World and Item Management ---
@@ -1023,6 +1058,31 @@ const GameCanvas: React.FC = () => {
     return () => clearInterval(checkInterval);
   }, [scene, camera, playerRef.current, socketControllerRef.current]);
   
+  // Clean up when unmounting
+  useEffect(() => {
+    return () => {
+      // Clean up socket controller
+      if (socketControllerRef.current) {
+        socketControllerRef.current.cleanup();
+        socketControllerRef.current = null;
+      }
+      
+      // Clean up resource controller
+      if (resourceControllerRef.current) {
+        resourceControllerRef.current.cleanup();
+        resourceControllerRef.current = null;
+      }
+      
+      // Clean up player controller
+      playerController.current = null;
+      
+      // Clean up player name labels
+      if (sceneRef.current) {
+        cleanupAllNameLabels(sceneRef.current, nameLabelsRef);
+      }
+    };
+  }, []); // Empty dependency array = run only on mount/unmount
+  
   // --- Render ---
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -1038,8 +1098,10 @@ const GameCanvas: React.FC = () => {
           position={contextMenuPos}
           playerPosition={playerRef.current.position}
           nearbyItems={nearbyItems}
+          nearbyResources={nearbyResources}
           onClose={closeContextMenu}
           onPickupItem={handlePickupItemFromMenu}
+          onInteractWithResource={handleResourceInteraction}
         />
       )}
 
@@ -1088,6 +1150,41 @@ const GameCanvas: React.FC = () => {
         isConnected={isConnected} 
         playerCount={playerCount}
       />
+
+      <DebugButtons socketController={socketControllerRef.current} />
+    </div>
+  );
+};
+
+const DebugButtons = ({ socketController }: { socketController: any }) => {
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '10px',
+      right: '10px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '5px',
+      zIndex: 1000
+    }}>
+      <button 
+        onClick={() => {
+          console.log('🔄 Manual resource refresh requested');
+          if (socketController) {
+            socketController.requestWorldData();
+          }
+        }}
+        style={{
+          padding: '5px 10px',
+          background: 'rgba(0, 0, 0, 0.7)',
+          color: '#fff',
+          border: '1px solid #555',
+          borderRadius: '4px',
+          cursor: 'pointer'
+        }}
+      >
+        Refresh Resources
+      </button>
     </div>
   );
 };

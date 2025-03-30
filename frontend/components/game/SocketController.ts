@@ -13,6 +13,7 @@ import { Player } from '../../types/player';
 import WorldManager from '../../game/world/WorldManager';
 import ItemManager from '../../game/world/ItemManager';
 import { ChatRefHandle } from '../chat/Chat';
+import soundManager from '../../game/audio/soundManager';
 
 // Add chat bubble interface
 interface ChatBubble {
@@ -76,7 +77,6 @@ export class SocketController {
     // Initialize internal properties
     this.lastSentPosition = { x: 0, y: 0, z: 0 };
     this.lastSendTime = 0;
-    this.cleanupTimer = null;
     
     // Force position test to check socket is working
     // This is crucial for diagnosing the issue
@@ -212,13 +212,13 @@ export class SocketController {
       console.log('🔥 Setting up CRITICAL socket event handlers manually');
       
       // Set up ping/heartbeat handler for connection stability
-      socket.on('ping', (startTime: number, callback) => {
+      (socket as any).on('ping', (startTime: number, callback: (startTime: number) => void) => {
         // Respond immediately to pings from server
         if (typeof callback === 'function') {
           callback(startTime);
         } else {
           // If no callback provided, send a pong response
-          socket.emit('pong', startTime);
+          (socket as any).emit('pong', startTime);
         }
         
         // Update our own lastPing time
@@ -287,7 +287,7 @@ export class SocketController {
           this.sendSystemMessageToChat(`${player.name} has joined the game.`);
           
           // Request accurate player count from server
-          socket.emit('getPlayerCount');
+          (socket as any).emit('getPlayerCount');
         } else {
           console.log('This is our own player joining:', player);
           // Make sure we update our player name even for our own join
@@ -298,7 +298,7 @@ export class SocketController {
       });
       
       // CRITICAL: Set up playerLeft handler
-      socket.on('playerLeft', (playerData) => {
+      socket.on('playerLeft', (playerData: any) => {
         const playerId = typeof playerData === 'object' ? playerData.id : playerData;
         console.log('🔥 Received playerLeft event:', playerId);
         
@@ -328,26 +328,26 @@ export class SocketController {
         }
         
         // Request accurate count from server
-        socket.emit('getPlayerCount');
+        (socket as any).emit('getPlayerCount');
       });
       
       // Listen for server's total player count updates
-      socket.on('playerCount', (count) => {
-        console.log(`🔢 Received server player count: ${count}`);
+      socket.on('playerCount', (data: any) => {
+        console.log(`🔢 Received server player count: ${data.count}`);
         
         // Always trust the server's count
-        this.broadcastPlayerCount(count);
+        this.broadcastPlayerCount(data.count);
         
         // If our local tracking doesn't match server, schedule a sync
         const localCount = this.playersRef.current.size + (this.playerRef.current ? 1 : 0);
-        if (localCount !== count) {
-          console.log(`🔄 Count mismatch: server=${count}, local=${localCount}. Scheduling sync...`);
+        if (localCount !== data.count) {
+          console.log(`🔄 Count mismatch: server=${data.count}, local=${localCount}. Scheduling sync...`);
           setTimeout(() => this.syncWithServer(), 500);
         }
       });
       
       // Request an accurate player count from server on initialization
-      socket.emit('getPlayerCount');
+      (socket as any).emit('getPlayerCount');
       
       // Set up a periodic sync with server
       setInterval(() => {
@@ -373,12 +373,136 @@ export class SocketController {
     // Set up additional listeners that aren't handled by gameSocketHandler
     const setupAdditionalListeners = async () => {
       const socket = await getSocket();
-      if (!socket) return;
+      if (!socket) {
+        console.error('Failed to get socket for additional listeners');
+        return;
+      }
       
       // Listen for chat messages and create bubbles
       socket.on('chatMessage', (message) => {
         console.log('🟢 Received chatMessage event:', message);
         this.handleChatMessage(message);
+      });
+      
+      // Resource state change listener
+      (socket as any).on('resourceStateChanged', (data: {
+        resourceId: string,
+        state?: 'normal' | 'harvested',
+        available: boolean,
+        remainingResources?: number
+      }) => {
+        console.log('Resource state changed:', data);
+        
+        // Find the resource controller
+        const resourceController = this.worldManagerRef.current?.getResourceController();
+        if (resourceController) {
+          // Update the resource node state
+          resourceController.updateResourceNodeState(data.resourceId, {
+            state: data.state,
+            available: data.available,
+            remainingResources: data.remainingResources
+          });
+        } else {
+          console.error('Resource controller not available for state change');
+        }
+      });
+      
+      // Resource gathered listener
+      (socket as any).on('resourceGathered', (data: {
+        resourceId: string,
+        resourceType: string,
+        item: any,
+        remainingResources?: number
+      }) => {
+        console.log('Resource gathered:', data);
+        
+        // Play gathering sound
+        if (data.resourceType === 'tree') {
+          soundManager.play('woodcutting' as any);
+        } else if (data.resourceType === 'rock') {
+          soundManager.play('mining' as any);
+        }
+        
+        // Update remaining resources if provided
+        if (data.remainingResources !== undefined) {
+          const resourceController = this.worldManagerRef.current?.getResourceController();
+          if (resourceController) {
+            resourceController.updateResourceNodeState(data.resourceId, {
+              remainingResources: data.remainingResources
+            });
+          }
+        }
+      });
+      
+      // Gathering started listener
+      (socket as any).on('gatheringStarted', (data: {
+        resourceId: string,
+        action: string
+      }) => {
+        console.log('Gathering started:', data);
+        
+        // Could add animation or visual feedback here
+      });
+
+      // Listen for resource nodes from server
+      (socket as any).on('initResourceNodes', (nodes: any[]) => {
+        console.log(`%c 🌳 Received ${nodes.length} resource nodes from server`, "background: #4CAF50; color: white; font-size: 16px;");
+        
+        // Log each resource node for debugging
+        if (nodes.length > 0) {
+          console.log("Resource nodes received:", nodes.map(node => ({
+            id: node.id,
+            type: node.type, 
+            position: `(${node.x}, ${node.y}, ${node.z})`
+          })));
+          
+          // Log the first node's full data structure
+          console.log("Example resource node structure:", JSON.stringify(nodes[0], null, 2));
+        } else {
+          console.warn("%c ⚠️ No resource nodes received from server!", "background: #FFC107; color: black; font-size: 16px;");
+          
+          // Emit the event again after a delay to try again
+          setTimeout(() => {
+            console.log("%c 🔄 Retrying getResourceNodes request", "background: #FF9800; color: white;");
+            (socket as any).emit('getResourceNodes');
+          }, 2000);
+        }
+        
+        // Find the resource controller
+        const resourceController = this.worldManagerRef.current?.getResourceController();
+        if (resourceController) {
+          console.log("%c ✅ Forwarding resource nodes to ResourceController", "background: #4CAF50; color: white;");
+          resourceController.updateResourceNodes(nodes);
+          
+          // Add extra verification
+          setTimeout(() => {
+            // Check if resources are in the scene
+            const scene = this.scene;
+            let resourceMeshCount = 0;
+            scene.traverse((object) => {
+              if (object.userData && object.userData.resourceId) {
+                resourceMeshCount++;
+              }
+            });
+            
+            console.log(`%c 🔍 Scene contains ${resourceMeshCount} resource meshes after update`, 
+              resourceMeshCount > 0 ? "background: #4CAF50; color: white;" : "background: #F44336; color: white;");
+            
+            if (resourceMeshCount === 0) {
+              console.warn("%c ⚠️ No resource meshes found in scene - trying alternative refresh", "background: #F44336; color: white;");
+              // Try to force refresh through the resource controller
+              resourceController.initializeResourceNodeMeshes();
+            }
+          }, 1000);
+        } else {
+          console.error("%c ❌ Resource controller not available for resource nodes update", "background: #F44336; color: white;");
+          
+          // Try to re-initialize the controller through WorldManager
+          if (this.worldManagerRef.current) {
+            console.log("%c 🔄 Attempting to re-initialize ResourceController through WorldManager", "background: #FF9800; color: white;");
+            this.requestWorldData();
+          }
+        }
       });
     };
     
@@ -504,14 +628,7 @@ export class SocketController {
         window.dispatchEvent(directEvent);
         
         // Then send to server for broadcasting to other players
-        socket.emit('chat', message, (error: any, response: any) => {
-          if (error) {
-            console.error('Error sending chat message:', error);
-            this.sendSystemMessageToChat(`Error sending message: ${error}`);
-          } else if (response) {
-            console.log('Server acknowledged chat message:', response);
-          }
-        });
+        (socket as any).emit('chat', message);
       } catch (error) {
         console.error('Exception sending chat message:', error);
         this.sendSystemMessageToChat(`Error: Could not send message`);
@@ -600,10 +717,10 @@ export class SocketController {
     const socket = await getSocket();
     if (socket) {
       // Request resource nodes
-      socket.emit('getResourceNodes');
+      (socket as any).emit('getResourceNodes');
       
       // Request world items
-      socket.emit('getWorldItems');
+      (socket as any).emit('getWorldItems');
       
       // Request existing players
       this.requestPlayersData();
@@ -617,7 +734,7 @@ export class SocketController {
     const socket = await getSocket();
     if (socket) {
       // Request all existing players
-      socket.emit('getPlayers');
+      (socket as any).emit('getPlayers');
       
       console.log('Requested players data from server');
       
@@ -635,7 +752,7 @@ export class SocketController {
     const socket = await getSocket();
     if (socket) {
       console.log('Requesting inventory data from server');
-      socket.emit('requestInventory');
+      (socket as any).emit('requestInventory');
     }
   }
 
@@ -647,7 +764,7 @@ export class SocketController {
     if (!socket) return;
     
     // Server uses requestAllPlayers event to trigger initPlayers
-    socket.emit('requestAllPlayers');
+    (socket as any).emit('requestAllPlayers');
     console.log('🔴 Force-syncing players via requestAllPlayers event');
     
     // Give the server time to send the initPlayers event
@@ -1163,7 +1280,7 @@ export class SocketController {
     this.clearAllPlayers();
     
     // Request fresh player data from server
-    socket.emit('requestAllPlayers');
+    (socket as any).emit('requestAllPlayers');
     
     // Send message to chat
     this.sendSystemMessageToChat('💥 Forced complete player regeneration. All players should reappear in a moment.');
@@ -1240,7 +1357,7 @@ export class SocketController {
     });
     
     // Request server to validate our list
-    socket.emit('syncPlayerList', localPlayerIds, (serverPlayerIds: string[]) => {
+    (socket as any).emit('syncPlayerList', localPlayerIds, (serverPlayerIds: string[]) => {
       console.log('🔄 Received server player list:', {
         serverPlayerCount: serverPlayerIds.length,
         serverPlayerIds
@@ -1289,7 +1406,7 @@ export class SocketController {
         console.log(`🔄 Requesting ${playersMissing.length} missing players from server`);
         
         // Force a full refresh of players - more reliable than just requesting missing ones
-        socket.emit('requestAllPlayers');
+        (socket as any).emit('requestAllPlayers');
         
         // Also perform a scene inspection to catch any orphaned player meshes
         this.scanAndDisplayAllObjectsWithPlayerId();
@@ -1311,7 +1428,21 @@ export class SocketController {
     const socket = await getSocket();
     if (socket) {
       console.log('📊 SocketController requesting player count from server');
-      socket.emit('getPlayerCount');
+      (socket as any).emit('getPlayerCount');
+    }
+  }
+
+  /**
+   * Send a request to gather a resource with a tool
+   */
+  public async sendGatherWithTool(resourceId: string, action: string): Promise<void> {
+    console.log(`Sending gatherWithTool request: ${resourceId}, action: ${action}`);
+    
+    const socket = await getSocket();
+    if (socket) {
+      (socket as any).emit('gatherWithTool', { resourceId, action });
+    } else {
+      console.error('Failed to get socket for gatherWithTool');
     }
   }
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { JUMP_COOLDOWN } from '../constants';
+import { isUserTyping } from '../utils/inputUtils';
 
 // Define the movement keys we care about
 const MOVEMENT_KEYS = ['w', 'a', 's', 'd', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '];
@@ -29,6 +30,11 @@ export const usePlayerInput = () => {
     const movementChanged = useRef<boolean>(false); // Track if state *actually* changed
 
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
+        // Ignore if user is typing in any input field
+        if (isUserTyping()) {
+            return;
+        }
+        
         console.log('🎮 Key pressed:', e.key);
         
         // Only handle keys we care about
@@ -62,8 +68,8 @@ export const usePlayerInput = () => {
     }, []);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
-        // Ignore if typing in input/textarea
-        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        // Ignore if user is typing in any input field
+        if (isUserTyping()) {
             return;
         }
 
