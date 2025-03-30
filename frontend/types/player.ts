@@ -32,5 +32,7 @@ export interface Item {
 export enum ItemType {
   LOG = 'log',
   COAL = 'coal',
-  FISH = 'fish'
+  FISH = 'fish',
+  BRONZE_PICKAXE = 'bronze_pickaxe',
+  BRONZE_AXE = 'bronze_axe'
 } 

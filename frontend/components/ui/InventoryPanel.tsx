@@ -71,6 +71,32 @@ const ItemSprites = {
       <path d="M40,60 Q45,65 50,60" stroke="#4682B4" strokeWidth="1" fill="none" />
     </svg>
   ),
+  [ItemType.BRONZE_PICKAXE]: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
+      {/* Handle */}
+      <rect x="45" y="25" width="10" height="60" rx="2" fill="#8B4513" />
+      {/* Pickaxe head */}
+      <polygon points="45,25 30,10 25,15 40,30" fill="#CD7F32" stroke="#B87333" strokeWidth="1" />
+      <polygon points="55,25 70,10 75,15 60,30" fill="#CD7F32" stroke="#B87333" strokeWidth="1" />
+      {/* Details */}
+      <line x1="45" y1="30" x2="55" y2="30" stroke="#6A3805" strokeWidth="1" />
+      <line x1="45" y1="40" x2="55" y2="40" stroke="#6A3805" strokeWidth="1" />
+      <line x1="45" y1="50" x2="55" y2="50" stroke="#6A3805" strokeWidth="1" />
+    </svg>
+  ),
+  [ItemType.BRONZE_AXE]: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
+      {/* Handle */}
+      <rect x="40" y="25" width="10" height="60" rx="2" fill="#8B4513" />
+      {/* Axe head */}
+      <path d="M50,25 L70,15 Q75,25 70,35 L50,25 Z" fill="#CD7F32" stroke="#B87333" strokeWidth="1" />
+      {/* Details */}
+      <line x1="40" y1="30" x2="50" y2="30" stroke="#6A3805" strokeWidth="1" />
+      <line x1="40" y1="40" x2="50" y2="40" stroke="#6A3805" strokeWidth="1" />
+      <line x1="40" y1="50" x2="50" y2="50" stroke="#6A3805" strokeWidth="1" />
+      <line x1="55" y1="22" x2="65" y2="27" stroke="#B87333" strokeWidth="1" />
+    </svg>
+  ),
   // Default for unknown items
   default: () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">

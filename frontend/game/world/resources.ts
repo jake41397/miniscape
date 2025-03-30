@@ -224,6 +224,51 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
       mesh = new THREE.Mesh(geometry, material);
       break;
       
+    case 'bronze_pickaxe':
+      // Create a pickaxe shape
+      geometry = new THREE.BoxGeometry(0.1, 0.4, 0.1); // Handle
+      material = new THREE.MeshStandardMaterial({
+        color: 0x8B4513, // Brown for handle
+        roughness: 0.8,
+        metalness: 0.1
+      });
+      mesh = new THREE.Mesh(geometry, material);
+      
+      // Create pickaxe head
+      const headGeometry = new THREE.ConeGeometry(0.12, 0.25, 4);
+      const headMaterial = new THREE.MeshStandardMaterial({
+        color: 0xCD7F32, // Bronze color
+        roughness: 0.3,
+        metalness: 0.7
+      });
+      const pickaxeHead = new THREE.Mesh(headGeometry, headMaterial);
+      pickaxeHead.position.set(0, 0.2, 0);
+      pickaxeHead.rotation.x = -Math.PI / 2;
+      mesh.add(pickaxeHead);
+      break;
+      
+    case 'bronze_axe':
+      // Create an axe shape
+      geometry = new THREE.BoxGeometry(0.1, 0.4, 0.1); // Handle
+      material = new THREE.MeshStandardMaterial({
+        color: 0x8B4513, // Brown for handle
+        roughness: 0.8,
+        metalness: 0.1
+      });
+      mesh = new THREE.Mesh(geometry, material);
+      
+      // Create axe head
+      const axeHeadGeometry = new THREE.BoxGeometry(0.22, 0.22, 0.05);
+      const axeHeadMaterial = new THREE.MeshStandardMaterial({
+        color: 0xCD7F32, // Bronze color
+        roughness: 0.3,
+        metalness: 0.7
+      });
+      const axeHead = new THREE.Mesh(axeHeadGeometry, axeHeadMaterial);
+      axeHead.position.set(0.1, 0.15, 0);
+      mesh.add(axeHead);
+      break;
+      
     case 'item': // Handle generic "item" type that might come from SocketController
       // Bright box for generic item
       geometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);

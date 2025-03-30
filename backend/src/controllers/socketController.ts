@@ -1060,6 +1060,20 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
               x: x + 1,
               y: y,
               z: z - 2
+            },
+            {
+              dropId: `drop-${Date.now()}-bronze_pickaxe-1`,
+              itemType: 'bronze_pickaxe',
+              x: x - 1,
+              y: y,
+              z: z - 1
+            },
+            {
+              dropId: `drop-${Date.now()}-bronze_axe-1`,
+              itemType: 'bronze_axe',
+              x: x + 1.5,
+              y: y,
+              z: z + 1.5
             }
           ];
           
