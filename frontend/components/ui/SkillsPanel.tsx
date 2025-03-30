@@ -10,6 +10,7 @@ export enum SkillType {
   MINING = 'mining',
   WOODCUTTING = 'woodcutting',
   FISHING = 'fishing',
+  SMITHING = 'smithing',
 }
 
 // Define skill information
@@ -43,6 +44,11 @@ const skillInfo = {
     name: 'Fishing',
     description: 'Ability to catch various fish',
     icon: '🎣',
+  },
+  [SkillType.SMITHING]: {
+    name: 'Smithing',
+    description: 'Ability to smelt ore into bars and forge items',
+    icon: '🔨',
   },
 };
 

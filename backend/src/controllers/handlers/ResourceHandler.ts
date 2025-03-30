@@ -512,15 +512,18 @@ export class ResourceHandler {
   private async handleRockGathering(socket: ExtendedSocket, resourceNode: ResourceNode): Promise<void> {
     const player = this.players[socket.id];
     
-    // Generate coal (1 coal per gathering)
-    const coal = {
+    // Determine the correct ore type based on the resource metadata
+    const oreType = this.getItemTypeFromResource(resourceNode);
+    
+    // Generate ore (1 ore per gathering)
+    const ore = {
       id: uuidv4(),
-      type: 'coal',
+      type: oreType,
       quantity: 1
     };
     
     // Add to player's inventory
-    player.inventory.push(coal);
+    player.inventory.push(ore);
     
     // Send inventory update to client
     socket.emit('inventoryUpdate', player.inventory);
@@ -529,18 +532,18 @@ export class ResourceHandler {
     socket.emit('resourceGathered', {
       resourceId: resourceNode.id,
       resourceType: resourceNode.type,
-      item: coal,
+      item: ore,
       remainingResources: resourceNode.remainingResources
     });
     
     // Send success message to chat
     socket.emit('chatMessage', { 
-      content: `You get some coal. (${resourceNode.remainingResources} left)`, 
+      content: `You get some ${oreType.replace('_', ' ')}. (${resourceNode.remainingResources} left)`, 
       type: 'action', 
       timestamp: Date.now() 
     });
     
-    console.log(`Player ${socket.id} gathered coal from ${resourceNode.id}`);
+    console.log(`Player ${socket.id} gathered ${oreType} from ${resourceNode.id}`);
     
     // Save inventory update to database if user is authenticated
     if (socket.user && socket.user.id) {
@@ -621,11 +624,14 @@ export class ResourceHandler {
       resourceNode.remainingResources = 5;
     }
     
+    // Determine the correct ore type based on the resource metadata
+    const oreType = this.getItemTypeFromResource(resourceNode);
+    
     // Immediate resource acquisition as a fallback
     const oreCount = 1;
     const ore = {
       id: uuidv4(),
-      type: 'coal', // Use coal for all rocks for now
+      type: oreType, // Use the correct ore type based on rock type
       quantity: oreCount
     };
     

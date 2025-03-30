@@ -6,7 +6,8 @@ import {
   createResourceMesh, 
   createItemMesh,
   updateDroppedItems,
-  updateResourceLOD
+  updateResourceLOD,
+  createWildernessResources
 } from './resources';
 import ResourceController from '../../components/game/ResourceController';
 import LandmarkManager from './LandmarkManager';
@@ -111,7 +112,7 @@ class WorldManager {
     });
     const barbarianGround = new THREE.Mesh(barbarianGeometry, barbarianMaterial);
     barbarianGround.rotation.x = -Math.PI / 2;
-    barbarianGround.position.set(-90, -0.05, 0); // Slightly below other terrain and to the west
+    barbarianGround.position.set(-90, -0.05, -60); // Slightly below other terrain and at the new Barbarian Village position
     this.scene.add(barbarianGround);
     
     // Grand Exchange area (east) - paved/urban
@@ -187,7 +188,7 @@ class WorldManager {
     this.createZoneSign("LUMBRIDGE", 0, 20, 0, 0x4CAF50);
     this.createZoneSign("WILDERNESS", 0, 30, -500, 0xFF5722, 2.0); // Larger sign for the Wilderness
     this.createZoneSign("DEEP WILDERNESS", 0, 40, -2000, 0xF44336, 3.0); // Even larger sign for Deep Wilderness
-    this.createZoneSign("BARBARIAN VILLAGE", -90, 20, 0, 0x795548);
+    this.createZoneSign("BARBARIAN VILLAGE", -90, 20, -60, 0x795548);
     this.createZoneSign("GRAND EXCHANGE", 90, 20, 0, 0x9E9E9E);
     
     // Add additional wilderness warning markers
@@ -325,203 +326,160 @@ class WorldManager {
   }
 
   private createWorldResources() {
-    // Clear existing resources
-    this.resourceNodes.forEach(node => {
-      if (node.mesh) {
-        this.scene.remove(node.mesh);
-      }
-    });
-    this.resourceNodes = [];
-    
-    console.log("%c 🌳 INITIALIZING WORLD RESOURCES", "background: #FF5722; color: white; font-size: 16px; font-weight: bold;");
-    
-    // Define resource nodes - EXPANDED WITH MANY MORE RESOURCES AND ADJUSTED FOR RING LAYOUT
-    const resources: ResourceNode[] = [
-      // LUMBRIDGE AREA (CENTER) - Basic resources
-      // Normal trees in Lumbridge
-      { id: 'tree-1', type: ResourceType.TREE, x: 10, y: 1, z: 10, metadata: { treeType: 'tree' } },
-      { id: 'tree-2', type: ResourceType.TREE, x: 15, y: 1, z: 15, metadata: { treeType: 'tree' } },
-      { id: 'tree-3', type: ResourceType.TREE, x: 20, y: 1, z: 10, metadata: { treeType: 'tree' } },
-      { id: 'tree-4', type: ResourceType.TREE, x: 5, y: 1, z: 20, metadata: { treeType: 'tree' } },
-      { id: 'tree-5', type: ResourceType.TREE, x: 25, y: 1, z: 5, metadata: { treeType: 'tree' } },
-      { id: 'tree-6', type: ResourceType.TREE, x: -5, y: 1, z: 15, metadata: { treeType: 'tree' } },
-      { id: 'tree-7', type: ResourceType.TREE, x: -15, y: 1, z: 10, metadata: { treeType: 'tree' } },
-      { id: 'tree-8', type: ResourceType.TREE, x: 12, y: 1, z: -8, metadata: { treeType: 'tree' } },
-      { id: 'tree-9', type: ResourceType.TREE, x: 8, y: 1, z: -12, metadata: { treeType: 'tree' } },
-      { id: 'tree-10', type: ResourceType.TREE, x: -10, y: 1, z: -5, metadata: { treeType: 'tree' } },
-      
-      // Oak trees near Lumbridge
-      { id: 'oak_tree-1', type: ResourceType.TREE, x: 30, y: 1, z: 20, metadata: { treeType: 'oak_tree' } },
-      { id: 'oak_tree-2', type: ResourceType.TREE, x: 35, y: 1, z: 25, metadata: { treeType: 'oak_tree' } },
-      { id: 'oak_tree-3', type: ResourceType.TREE, x: 40, y: 1, z: 15, metadata: { treeType: 'oak_tree' } },
-      { id: 'oak_tree-4', type: ResourceType.TREE, x: 45, y: 1, z: 20, metadata: { treeType: 'oak_tree' } },
-      { id: 'oak_tree-5', type: ResourceType.TREE, x: 35, y: 1, z: 30, metadata: { treeType: 'oak_tree' } },
-      { id: 'oak_tree-6', type: ResourceType.TREE, x: 25, y: 1, z: 35, metadata: { treeType: 'oak_tree' } },
-      
-      // Willow trees near river
-      { id: 'willow_tree-1', type: ResourceType.TREE, x: -20, y: 1, z: 30, metadata: { treeType: 'willow_tree' } },
-      { id: 'willow_tree-2', type: ResourceType.TREE, x: -25, y: 1, z: 35, metadata: { treeType: 'willow_tree' } },
-      { id: 'willow_tree-3', type: ResourceType.TREE, x: -15, y: 1, z: 40, metadata: { treeType: 'willow_tree' } },
-      { id: 'willow_tree-4', type: ResourceType.TREE, x: -30, y: 1, z: 45, metadata: { treeType: 'willow_tree' } },
-      { id: 'willow_tree-5', type: ResourceType.TREE, x: -35, y: 1, z: 50, metadata: { treeType: 'willow_tree' } },
-      
-      // Basic rocks in Lumbridge
-      { id: 'rock-lumb-1', type: ResourceType.ROCK, x: 15, y: 1, z: -40, metadata: { rockType: 'copper_rock' } },
-      { id: 'rock-lumb-2', type: ResourceType.ROCK, x: 20, y: 1, z: -45, metadata: { rockType: 'tin_rock' } },
-      { id: 'rock-lumb-3', type: ResourceType.ROCK, x: 25, y: 1, z: -40, metadata: { rockType: 'copper_rock' } },
-      { id: 'rock-lumb-4', type: ResourceType.ROCK, x: 30, y: 1, z: -45, metadata: { rockType: 'tin_rock' } },
-      
-      // BARBARIAN VILLAGE (WEST) - Mining focused
-      // Rocks in Barbarian Village
-      { id: 'rock-1', type: ResourceType.ROCK, x: -80, y: 1, z: -20, metadata: { rockType: 'copper_rock' } },
-      { id: 'rock-2', type: ResourceType.ROCK, x: -85, y: 1, z: -15, metadata: { rockType: 'tin_rock' } },
-      { id: 'rock-3', type: ResourceType.ROCK, x: -90, y: 1, z: -20, metadata: { rockType: 'iron_rock' } },
-      { id: 'rock-4', type: ResourceType.ROCK, x: -95, y: 1, z: -25, metadata: { rockType: 'coal_rock' } },
-      { id: 'rock-5', type: ResourceType.ROCK, x: -100, y: 1, z: -30, metadata: { rockType: 'copper_rock' } },
-      { id: 'rock-6', type: ResourceType.ROCK, x: -105, y: 1, z: -15, metadata: { rockType: 'tin_rock' } },
-      { id: 'rock-7', type: ResourceType.ROCK, x: -110, y: 1, z: -20, metadata: { rockType: 'iron_rock' } },
-      { id: 'rock-8', type: ResourceType.ROCK, x: -115, y: 1, z: -25, metadata: { rockType: 'coal_rock' } },
-      { id: 'rock-9', type: ResourceType.ROCK, x: -90, y: 1, z: -30, metadata: { rockType: 'iron_rock' } },
-      { id: 'rock-10', type: ResourceType.ROCK, x: -100, y: 1, z: -35, metadata: { rockType: 'coal_rock' } },
-      
-      // Some trees in Barbarian Village
-      { id: 'barb-tree-1', type: ResourceType.TREE, x: -80, y: 1, z: 20, metadata: { treeType: 'tree' } },
-      { id: 'barb-tree-2', type: ResourceType.TREE, x: -90, y: 1, z: 25, metadata: { treeType: 'tree' } },
-      { id: 'barb-oak-1', type: ResourceType.TREE, x: -100, y: 1, z: 15, metadata: { treeType: 'oak_tree' } },
-      
-      // GRAND EXCHANGE (EAST) - Mixed resources
-      // Trees near Grand Exchange
-      { id: 'ge-tree-1', type: ResourceType.TREE, x: 80, y: 1, z: 20, metadata: { treeType: 'tree' } },
-      { id: 'ge-tree-2', type: ResourceType.TREE, x: 90, y: 1, z: 15, metadata: { treeType: 'tree' } },
-      { id: 'ge-oak-1', type: ResourceType.TREE, x: 100, y: 1, z: 25, metadata: { treeType: 'oak_tree' } },
-      { id: 'ge-oak-2', type: ResourceType.TREE, x: 110, y: 1, z: 30, metadata: { treeType: 'oak_tree' } },
-      { id: 'ge-willow-1', type: ResourceType.TREE, x: 105, y: 1, z: 40, metadata: { treeType: 'willow_tree' } },
-      
-      // Rocks near Grand Exchange
-      { id: 'ge-rock-1', type: ResourceType.ROCK, x: 90, y: 1, z: -20, metadata: { rockType: 'copper_rock' } },
-      { id: 'ge-rock-2', type: ResourceType.ROCK, x: 100, y: 1, z: -25, metadata: { rockType: 'tin_rock' } },
-      { id: 'ge-rock-3', type: ResourceType.ROCK, x: 110, y: 1, z: -30, metadata: { rockType: 'iron_rock' } },
-      
-      // WILDERNESS RING - High level resources scattered around the ring
-      // Make these way further out in the expanded wilderness
-      // Maple trees in wilderness (northern section)
-      { id: 'maple_tree-1', type: ResourceType.TREE, x: 0, y: 1, z: -2000, metadata: { treeType: 'maple_tree' } },
-      { id: 'maple_tree-2', type: ResourceType.TREE, x: 200, y: 1, z: -2200, metadata: { treeType: 'maple_tree' } },
-      { id: 'maple_tree-3', type: ResourceType.TREE, x: 400, y: 1, z: -1950, metadata: { treeType: 'maple_tree' } },
-      { id: 'maple_tree-4', type: ResourceType.TREE, x: -200, y: 1, z: -2000, metadata: { treeType: 'maple_tree' } },
-      { id: 'maple_tree-5', type: ResourceType.TREE, x: -400, y: 1, z: -1950, metadata: { treeType: 'maple_tree' } },
-      { id: 'maple_tree-6', type: ResourceType.TREE, x: 600, y: 1, z: -2400, metadata: { treeType: 'maple_tree' } },
-      { id: 'maple_tree-7', type: ResourceType.TREE, x: -600, y: 1, z: -2400, metadata: { treeType: 'maple_tree' } },
-      
-      // Yew trees in wilderness (eastern section)
-      { id: 'yew_tree-1', type: ResourceType.TREE, x: 2000, y: 1, z: 200, metadata: { treeType: 'yew_tree' } },
-      { id: 'yew_tree-2', type: ResourceType.TREE, x: 2000, y: 1, z: 400, metadata: { treeType: 'yew_tree' } },
-      { id: 'yew_tree-3', type: ResourceType.TREE, x: 1950, y: 1, z: 600, metadata: { treeType: 'yew_tree' } },
-      { id: 'yew_tree-4', type: ResourceType.TREE, x: 1950, y: 1, z: -200, metadata: { treeType: 'yew_tree' } },
-      { id: 'yew_tree-5', type: ResourceType.TREE, x: 2200, y: 1, z: 0, metadata: { treeType: 'yew_tree' } },
-      { id: 'yew_tree-6', type: ResourceType.TREE, x: 2400, y: 1, z: 300, metadata: { treeType: 'yew_tree' } },
-      
-      // Gold rocks in wilderness (western section)
-      { id: 'wild-rock-1', type: ResourceType.ROCK, x: -2000, y: 1, z: 200, metadata: { rockType: 'gold_rock' } },
-      { id: 'wild-rock-2', type: ResourceType.ROCK, x: -2000, y: 1, z: 400, metadata: { rockType: 'gold_rock' } },
-      { id: 'wild-rock-3', type: ResourceType.ROCK, x: -1950, y: 1, z: 600, metadata: { rockType: 'gold_rock' } },
-      { id: 'wild-rock-4', type: ResourceType.ROCK, x: -2200, y: 1, z: 0, metadata: { rockType: 'gold_rock' } },
-      { id: 'wild-rock-5', type: ResourceType.ROCK, x: -2400, y: 1, z: 300, metadata: { rockType: 'gold_rock' } },
-      
-      // Mithril rocks in wilderness (southern section)
-      { id: 'wild-rock-6', type: ResourceType.ROCK, x: 200, y: 1, z: 2000, metadata: { rockType: 'mithril_rock' } },
-      { id: 'wild-rock-7', type: ResourceType.ROCK, x: 400, y: 1, z: 1950, metadata: { rockType: 'mithril_rock' } },
-      { id: 'wild-rock-8', type: ResourceType.ROCK, x: -200, y: 1, z: 2000, metadata: { rockType: 'mithril_rock' } },
-      { id: 'wild-rock-9', type: ResourceType.ROCK, x: -400, y: 1, z: 1950, metadata: { rockType: 'mithril_rock' } },
-      { id: 'wild-rock-10', type: ResourceType.ROCK, x: 0, y: 1, z: 2200, metadata: { rockType: 'mithril_rock' } },
-      { id: 'wild-rock-11', type: ResourceType.ROCK, x: 300, y: 1, z: 2400, metadata: { rockType: 'mithril_rock' } },
-      
-      // Adamantite rocks in wilderness (northeastern section)
-      { id: 'wild-rock-addy-1', type: ResourceType.ROCK, x: 1500, y: 1, z: -1500, metadata: { rockType: 'adamantite_rock' } },
-      { id: 'wild-rock-addy-2', type: ResourceType.ROCK, x: 1600, y: 1, z: -1600, metadata: { rockType: 'adamantite_rock' } },
-      { id: 'wild-rock-addy-3', type: ResourceType.ROCK, x: 1700, y: 1, z: -1700, metadata: { rockType: 'adamantite_rock' } },
-      { id: 'wild-rock-addy-4', type: ResourceType.ROCK, x: 1800, y: 1, z: -1800, metadata: { rockType: 'adamantite_rock' } },
-      { id: 'wild-rock-addy-5', type: ResourceType.ROCK, x: 1900, y: 1, z: -1900, metadata: { rockType: 'adamantite_rock' } },
-      
-      // Runite rocks in wilderness (northwestern section)
-      { id: 'wild-rock-rune-1', type: ResourceType.ROCK, x: -1500, y: 1, z: -1500, metadata: { rockType: 'runite_rock' } },
-      { id: 'wild-rock-rune-2', type: ResourceType.ROCK, x: -1600, y: 1, z: -1600, metadata: { rockType: 'runite_rock' } },
-      { id: 'wild-rock-rune-3', type: ResourceType.ROCK, x: -1700, y: 1, z: -1700, metadata: { rockType: 'runite_rock' } },
-      
-      // Magic trees in deep wilderness (southwestern section)
-      { id: 'magic_tree-1', type: ResourceType.TREE, x: -1500, y: 1, z: 1500, metadata: { treeType: 'magic_tree' } },
-      { id: 'magic_tree-2', type: ResourceType.TREE, x: -1600, y: 1, z: 1600, metadata: { treeType: 'magic_tree' } },
-      { id: 'magic_tree-3', type: ResourceType.TREE, x: -1700, y: 1, z: 1700, metadata: { treeType: 'magic_tree' } },
-      { id: 'magic_tree-4', type: ResourceType.TREE, x: -1800, y: 1, z: 1800, metadata: { treeType: 'magic_tree' } },
-      
-      // Fishing spots inside safe area
-      { id: 'fishing_spot-1', type: ResourceType.FISHING_SPOT, x: 30, y: 0.3, z: -30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot-2', type: ResourceType.FISHING_SPOT, x: 25, y: 0.3, z: -30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot-3', type: ResourceType.FISHING_SPOT, x: 35, y: 0.3, z: -35, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot-4', type: ResourceType.FISHING_SPOT, x: 40, y: 0.3, z: -40, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+    // Trees - Lumbridge area
+    const treePositions = [
+      new THREE.Vector3(20, 0, 20),
+      new THREE.Vector3(25, 0, 10),
+      new THREE.Vector3(30, 0, 25),
+      new THREE.Vector3(15, 0, 35),
+      new THREE.Vector3(35, 0, 15),
+      new THREE.Vector3(40, 0, 40),
+      new THREE.Vector3(-20, 0, 20),
+      new THREE.Vector3(-25, 0, 10),
+      new THREE.Vector3(-30, 0, 25),
+      new THREE.Vector3(-15, 0, 35),
+      new THREE.Vector3(-35, 0, 15),
+      new THREE.Vector3(-40, 0, 40),
     ];
     
-    console.log(`%c 🌳 Creating ${resources.length} default resource nodes`, "background: #4CAF50; color: white; font-size: 14px;");
-    
-    // Create meshes for each resource and add to scene
-    resources.forEach(resource => {
-      console.log(`Creating resource: ${resource.id} of type ${resource.type} at (${resource.x}, ${resource.y}, ${resource.z})`);
-      try {
-        const mesh = createResourceMesh(resource.type as ResourceType, resource.state || 'normal', resource.metadata);
-        mesh.position.set(resource.x, resource.y, resource.z);
-        
-        // Store resource ID in userData for raycasting identification
-        mesh.userData.resourceId = resource.id;
-        mesh.userData.resourceType = resource.type;
-        mesh.userData.metadata = resource.metadata;
-        
-        // Create label for the resource
-        this.createResourceLabel(resource, mesh);
-        
-        this.scene.add(mesh);
-        
-        // Store reference to mesh in resource node
-        this.resourceNodes.push({
-          ...resource,
-          mesh: mesh as unknown as THREE.Mesh
-        });
-      } catch (error) {
-        console.error(`Failed to create resource mesh for ${resource.id} of type ${resource.type}:`, error);
+    // More complex tree distribution - different tree types
+    const treeNodes: ResourceNode[] = treePositions.map(position => {
+      // Randomize tree type - mostly normal with some oak and maple
+      let treeType = ResourceType.TREE;
+      const treeRandom = Math.random();
+      if (treeRandom > 0.7) {
+        treeType = ResourceType.TREE;
+        // We'll specify the type in metadata
+      } else if (treeRandom > 0.9) {
+        treeType = ResourceType.TREE;
+        // We'll specify the type in metadata
       }
+      
+      const treeId = `tree_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      const treeMesh = createResourceMesh(treeType, 'normal', { 
+        treeType: treeRandom > 0.9 ? 'maple_tree' : treeRandom > 0.7 ? 'oak_tree' : 'normal_tree' 
+      });
+      treeMesh.position.copy(position);
+      this.scene.add(treeMesh);
+      
+      return {
+        id: treeId,
+        type: treeType,
+        position: position.clone(),
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        state: 'normal',
+        depleteTime: null,
+        respawnTime: treeRandom > 0.7 ? 20000 : 10000, // Oak/maple trees respawn slower
+        mesh: treeMesh,
+        label: null
+      };
     });
-
-    // Define and create fishing spots - near water areas and in wilderness areas
-    const fishingSpots: ResourceNode[] = [
-      // Lumbridge fishing spots
-      { id: 'fishing_spot_lumbridge_1', type: ResourceType.FISHING_SPOT, x: 20, y: 0.3, z: 30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot_lumbridge_2', type: ResourceType.FISHING_SPOT, x: 25, y: 0.3, z: 30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+    
+    // Rocks - Barbarian Village area centered at (-90, -60) to match the sign
+    const miningCenterX = -90;
+    const miningCenterZ = -60;
+    
+    const rockPositions = [
+      // Copper rocks (more common, positioned on the southern side)
+      new THREE.Vector3(miningCenterX - 20, 0, miningCenterZ - 25),
+      new THREE.Vector3(miningCenterX - 24, 0, miningCenterZ - 30),
+      new THREE.Vector3(miningCenterX - 16, 0, miningCenterZ - 35),
+      new THREE.Vector3(miningCenterX - 20, 0, miningCenterZ - 40),
+      new THREE.Vector3(miningCenterX - 28, 0, miningCenterZ - 28),
       
-      // Wilderness fishing spots (higher level fish) - around the lava pools
-      { id: 'fishing_spot_wilderness_1', type: ResourceType.FISHING_SPOT, x: 800, y: 0.3, z: 800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon'] } },
-      { id: 'fishing_spot_wilderness_2', type: ResourceType.FISHING_SPOT, x: -800, y: 0.3, z: -800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon'] } },
-      { id: 'fishing_spot_wilderness_3', type: ResourceType.FISHING_SPOT, x: -800, y: 0.3, z: 800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon', 'shark'] } },
-      { id: 'fishing_spot_wilderness_4', type: ResourceType.FISHING_SPOT, x: 800, y: 0.3, z: -800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon', 'shark'] } },
+      // Tin rocks (positioned on the eastern side)
+      new THREE.Vector3(miningCenterX + 25, 0, miningCenterZ - 20),
+      new THREE.Vector3(miningCenterX + 30, 0, miningCenterZ - 25),
+      new THREE.Vector3(miningCenterX + 22, 0, miningCenterZ - 30),
+      new THREE.Vector3(miningCenterX + 32, 0, miningCenterZ - 18),
       
-      // Deep wilderness fishing spots (highest level)
-      { id: 'fishing_spot_deep_wild_1', type: ResourceType.FISHING_SPOT, x: 1200, y: 0.3, z: 0, metadata: { spotType: 'harpoon', fishTypes: ['shark', 'swordfish'] } },
-      { id: 'fishing_spot_deep_wild_2', type: ResourceType.FISHING_SPOT, x: 0, y: 0.3, z: 1200, metadata: { spotType: 'harpoon', fishTypes: ['shark', 'swordfish'] } },
+      // Coal (fewer and positioned to the northeast)
+      new THREE.Vector3(miningCenterX + 20, 0, miningCenterZ + 25),
+      new THREE.Vector3(miningCenterX + 28, 0, miningCenterZ + 30),
       
-      // Barbarian Village fishing spots
-      { id: 'fishing_spot_barbarian_1', type: ResourceType.FISHING_SPOT, x: -80, y: 0.3, z: 50, metadata: { spotType: 'cage', fishTypes: ['trout', 'salmon', 'pike'] } },
-      { id: 'fishing_spot_barbarian_2', type: ResourceType.FISHING_SPOT, x: -85, y: 0.3, z: 55, metadata: { spotType: 'cage', fishTypes: ['trout', 'salmon', 'pike'] } },
-      
-      // Grand Exchange area fishing spots
-      { id: 'fishing_spot_ge_1', type: ResourceType.FISHING_SPOT, x: 90, y: 0.3, z: 70, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot_ge_2', type: ResourceType.FISHING_SPOT, x: 95, y: 0.3, z: 75, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      // Iron (rare, positioned to the northwest)
+      new THREE.Vector3(miningCenterX - 25, 0, miningCenterZ + 30),
+      new THREE.Vector3(miningCenterX - 30, 0, miningCenterZ + 35),
     ];
     
-    console.log(`%c 🎣 Adding ${fishingSpots.length} fishing spots`, "background: #2196F3; color: white; font-size: 14px;");
+    // Various rock types
+    const rockNodes: ResourceNode[] = rockPositions.map((position, index) => {
+      // Distribute rock types
+      let rockType = ResourceType.ROCK;
+      let rockMetadata;
+      
+      // First 5 positions are copper, next 4 are tin, next 2 are coal, last 2 are iron
+      if (index < 5) {
+        rockMetadata = { rockType: 'copper_rock' };
+      } else if (index < 9) {
+        rockMetadata = { rockType: 'tin_rock' };
+      } else if (index < 11) {
+        rockMetadata = { rockType: 'coal_rock' };
+      } else {
+        rockMetadata = { rockType: 'iron_rock' };
+      }
+      
+      const rockId = `rock_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      const rockMesh = createResourceMesh(rockType, 'normal', rockMetadata);
+      rockMesh.position.copy(position);
+      this.scene.add(rockMesh);
+      
+      return {
+        id: rockId,
+        type: rockType,
+        position: position.clone(),
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        state: 'normal',
+        depleteTime: null,
+        respawnTime: index < 7 ? 15000 : 25000, // Copper/tin respawn faster than coal/iron
+        mesh: rockMesh,
+        metadata: rockMetadata,
+        label: null
+      };
+    });
     
-    // Add fishing spots to resources
-    this.addResourcesToScene(fishingSpots);
-
-    // Pass the created resource nodes to parent component
-    console.log(`%c 🏆 Total resources created: ${this.resourceNodes.length}`, "background: #9C27B0; color: white; font-size: 14px;");
+    // Fishing spots - Around water areas
+    const fishingPositions = [
+      new THREE.Vector3(50, 0, -50),
+      new THREE.Vector3(60, 0, -55),
+      new THREE.Vector3(55, 0, -70),
+      new THREE.Vector3(70, 0, -60),
+      new THREE.Vector3(-50, 0, -50),
+      new THREE.Vector3(-60, 0, -55),
+    ];
+    
+    const fishingNodes: ResourceNode[] = fishingPositions.map(position => {
+      const fishingId = `fishing_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      const fishingMesh = createResourceMesh(ResourceType.FISHING_SPOT, 'normal');
+      fishingMesh.position.copy(position);
+      this.scene.add(fishingMesh);
+      
+      return {
+        id: fishingId,
+        type: ResourceType.FISHING_SPOT,
+        position: position.clone(),
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        state: 'normal',
+        depleteTime: null,
+        respawnTime: 10000, // Fishing spots respawn quickly
+        mesh: fishingMesh,
+        label: null
+      };
+    });
+    
+    // Add high-value wilderness resources
+    const wildernessResources = createWildernessResources(this.scene);
+    
+    // Combine all resources
+    this.resourceNodes = [...treeNodes, ...rockNodes, ...fishingNodes, ...wildernessResources];
+    
+    // Provide resource nodes to the parent component
     this.onResourceNodesCreated(this.resourceNodes);
   }
 
@@ -537,18 +495,19 @@ class WorldManager {
       if (node.mesh) {
         this.scene.remove(node.mesh);
         
-        // Handle standard meshes
-        if (node.mesh.geometry) {
-          node.mesh.geometry.dispose();
+        // Handle standard meshes - use type assertion for Mesh properties
+        const mesh = node.mesh as THREE.Mesh;
+        if (mesh.geometry) {
+          mesh.geometry.dispose();
         }
         
         // Handle materials
-        if (Array.isArray(node.mesh.material)) {
-          node.mesh.material.forEach(mat => {
+        if (Array.isArray(mesh.material)) {
+          mesh.material.forEach((mat: THREE.Material) => {
             if (mat) mat.dispose();
           });
-        } else if (node.mesh.material) {
-          node.mesh.material.dispose();
+        } else if (mesh.material) {
+          mesh.material.dispose();
         }
         
         // Check if it's actually a LOD object

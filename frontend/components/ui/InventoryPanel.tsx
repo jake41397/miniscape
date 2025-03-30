@@ -26,8 +26,8 @@ interface ContextMenu {
 }
 
 // Render item sprites directly as React components
-const ItemSprites = {
-  [ItemType.LOG]: () => (
+const ItemSprites: Record<string, () => JSX.Element> = {
+  'log': () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
       <rect x="10" y="30" width="80" height="40" rx="5" fill="#8B4513" />
       <path d="M20 40 L80 40" stroke="#6A3805" strokeWidth="3" strokeLinecap="round" />
@@ -41,7 +41,7 @@ const ItemSprites = {
       <circle cx="90" cy="50" r="3" fill="none" stroke="#6A3805" strokeWidth="1" />
     </svg>
   ),
-  [ItemType.COAL]: () => (
+  'coal': () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
       <path d="M20,30 C15,40 10,60 30,75 C50,85 80,70 85,55 C90,40 70,25 50,30 C30,35 25,30 20,30 Z" 
             fill="#36454F" />
@@ -53,7 +53,33 @@ const ItemSprites = {
       <ellipse cx="45" cy="60" rx="2" ry="1" fill="#888" transform="rotate(-5 45 60)" />
     </svg>
   ),
-  [ItemType.FISH]: () => (
+  'copper_ore': () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
+      <path d="M20,30 C15,40 10,60 30,75 C50,85 80,70 85,55 C90,40 70,25 50,30 C30,35 25,30 20,30 Z" 
+            fill="#B87333" />
+      <ellipse cx="35" cy="45" rx="6" ry="4" fill="#A0522D" transform="rotate(-15 35 45)" />
+      <ellipse cx="60" cy="60" rx="10" ry="5" fill="#A0522D" transform="rotate(20 60 60)" />
+      <ellipse cx="40" cy="65" rx="7" ry="4" fill="#A0522D" transform="rotate(-5 40 65)" />
+      <ellipse cx="30" cy="40" rx="2" ry="1" fill="#CD7F32" transform="rotate(-15 30 40)" />
+      <ellipse cx="65" cy="55" rx="3" ry="1.5" fill="#CD7F32" transform="rotate(20 65 55)" />
+      <ellipse cx="45" cy="60" rx="2" ry="1" fill="#CD7F32" transform="rotate(-5 45 60)" />
+      <path d="M25,35 L35,45 M55,30 L50,50 M75,50 L60,60" stroke="#8B4513" strokeWidth="1.5" />
+    </svg>
+  ),
+  'tin_ore': () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
+      <path d="M20,30 C15,40 10,60 30,75 C50,85 80,70 85,55 C90,40 70,25 50,30 C30,35 25,30 20,30 Z" 
+            fill="#C0C0C0" />
+      <ellipse cx="35" cy="45" rx="6" ry="4" fill="#A8A8A8" transform="rotate(-15 35 45)" />
+      <ellipse cx="60" cy="60" rx="10" ry="5" fill="#A8A8A8" transform="rotate(20 60 60)" />
+      <ellipse cx="40" cy="65" rx="7" ry="4" fill="#A8A8A8" transform="rotate(-5 40 65)" />
+      <ellipse cx="30" cy="40" rx="2" ry="1" fill="#D8D8D8" transform="rotate(-15 30 40)" />
+      <ellipse cx="65" cy="55" rx="3" ry="1.5" fill="#D8D8D8" transform="rotate(20 65 55)" />
+      <ellipse cx="45" cy="60" rx="2" ry="1" fill="#D8D8D8" transform="rotate(-5 45 60)" />
+      <path d="M25,35 L35,55 M55,30 L60,45 M75,50 L65,65" stroke="#707070" strokeWidth="1.5" />
+    </svg>
+  ),
+  'fish': () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
       <path d="M30,50 C40,30 60,30 75,50 C60,70 40,70 30,50 Z" 
             fill="#6495ED" stroke="#4682B4" strokeWidth="2" />
@@ -71,7 +97,7 @@ const ItemSprites = {
       <path d="M40,60 Q45,65 50,60" stroke="#4682B4" strokeWidth="1" fill="none" />
     </svg>
   ),
-  [ItemType.BRONZE_PICKAXE]: () => (
+  'bronze_pickaxe': () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
       {/* Handle */}
       <rect x="45" y="25" width="10" height="60" rx="2" fill="#8B4513" />
@@ -84,7 +110,7 @@ const ItemSprites = {
       <line x1="45" y1="50" x2="55" y2="50" stroke="#6A3805" strokeWidth="1" />
     </svg>
   ),
-  [ItemType.BRONZE_AXE]: () => (
+  'bronze_axe': () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
       {/* Handle */}
       <rect x="40" y="25" width="10" height="60" rx="2" fill="#8B4513" />
@@ -98,7 +124,7 @@ const ItemSprites = {
     </svg>
   ),
   // Default for unknown items
-  default: () => (
+  'default': () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
       <rect x="10" y="10" width="80" height="80" rx="5" fill="#888" />
       <text x="50" y="70" fontSize="70" fontWeight="bold" textAnchor="middle" fill="#333">?</text>
@@ -305,7 +331,7 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
   
   // Get sprite component for an item type
   const getItemSprite = (type: ItemType) => {
-    const SpriteComponent = ItemSprites[type] || ItemSprites.default;
+    const SpriteComponent = ItemSprites[type] || ItemSprites['default'];
     return <SpriteComponent />;
   };
   

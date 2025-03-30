@@ -149,6 +149,19 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
             },
             disabled: tooFar
           });
+        } else if (resource.metadata?.isFurnace || resource.id === 'barbarian_furnace') {
+          // Handle furnace interaction for smelting
+          items.push({
+            label: `Smith at Furnace ${tooFar ? '(too far)' : ''}`,
+            action: () => {
+              console.log(`%c 🔥 SMELT ACTION: ${resource.id}`, "background: orange; color: white; font-size: 16px;");
+              // Dispatch the open-smithing event that the SmithingController listens for
+              document.dispatchEvent(new CustomEvent('open-smithing', { 
+                detail: { mode: 'smelting' } 
+              }));
+            },
+            disabled: tooFar
+          });
         }
       });
     }

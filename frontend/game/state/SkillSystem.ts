@@ -64,6 +64,16 @@ export const XP_REWARDS = {
     'lobster': 90,
     'swordfish': 100,
   },
+  SMITHING: {
+    'bronze_bar': 6,
+    'iron_bar': 12,
+    'steel_bar': 17,
+    'gold_bar': 22,
+    'mithril_bar': 30,
+    'bronze_item': 12,
+    'iron_item': 25,
+    'steel_item': 37,
+  },
   COMBAT: {
     // Base XP per hit point of damage
     BASE_XP_PER_DAMAGE: 4,
@@ -130,6 +140,7 @@ export const initializePlayerSkills = (): PlayerSkills => {
     [SkillType.MINING]: { level: 1, experience: 0 },
     [SkillType.WOODCUTTING]: { level: 1, experience: 0 },
     [SkillType.FISHING]: { level: 1, experience: 0 },
+    [SkillType.SMITHING]: { level: 1, experience: 0 },
   };
 };
 

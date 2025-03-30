@@ -5,7 +5,10 @@ export enum ResourceType {
   TREE = 'tree',
   ROCK = 'rock',
   FISH = 'fish',
-  FISHING_SPOT = 'fishing_spot'
+  FISHING_SPOT = 'fishing_spot',
+  ROCK_MITHRIL = 'rock_mithril',
+  TREE_YEW = 'tree_yew',
+  FISHING_SPOT_ADVANCED = 'fishing_spot_advanced'
 }
 
 // World resource node
@@ -15,11 +18,15 @@ export interface ResourceNode {
   x: number;
   y: number;
   z: number;
-  mesh?: THREE.Mesh;
+  mesh?: THREE.Object3D;
   lodMeshes?: THREE.Object3D[]; // Array of LOD meshes
   state?: 'normal' | 'harvested'; // Track the visual state of the resource
   remainingResources?: number; // Track remaining resources before depletion
   metadata?: Record<string, any>; // Additional metadata for the resource
+  position: THREE.Vector3;
+  depleteTime: number | null;
+  respawnTime: number;
+  label: string | null;
 }
 
 // Dropped item in the world
@@ -195,6 +202,32 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
         color: 0x36454F, // Dark charcoal gray
         roughness: 0.9,
         metalness: 0.2,
+        emissive: 0x222222,
+        emissiveIntensity: 0.1
+      });
+      mesh = new THREE.Mesh(geometry, material);
+      break;
+      
+    case 'copper_ore':
+      // Create a copper ore rock
+      geometry = new THREE.IcosahedronGeometry(0.2, 0);
+      material = new THREE.MeshStandardMaterial({
+        color: 0xB87333, // Copper/bronze color
+        roughness: 0.7,
+        metalness: 0.3,
+        emissive: 0x3D1C02,
+        emissiveIntensity: 0.1
+      });
+      mesh = new THREE.Mesh(geometry, material);
+      break;
+      
+    case 'tin_ore':
+      // Create a tin ore rock
+      geometry = new THREE.IcosahedronGeometry(0.2, 0);
+      material = new THREE.MeshStandardMaterial({
+        color: 0xC0C0C0, // Silver/tin color
+        roughness: 0.7,
+        metalness: 0.4,
         emissive: 0x222222,
         emissiveIntensity: 0.1
       });
@@ -1439,4 +1472,105 @@ export const createResourceMesh = (
       console.error(`Unknown resource type: ${type}`);
       return new THREE.Group();
   }
+};
+
+// Add the following code to create high-value resources in the Wilderness
+export const createWildernessResources = (scene: THREE.Scene): ResourceNode[] => {
+  const wildernessResources: ResourceNode[] = [];
+  
+  // High-value ore nodes (Mithril)
+  const mithrilPositions = [
+    new THREE.Vector3(350, 0, 400),
+    new THREE.Vector3(370, 0, 420),
+    new THREE.Vector3(390, 0, 380),
+    new THREE.Vector3(410, 0, 410),
+    new THREE.Vector3(430, 0, 430)
+  ];
+  
+  mithrilPositions.forEach(position => {
+    const mithrilNode: ResourceNode = {
+      id: `mithril_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      type: ResourceType.ROCK_MITHRIL,
+      position: position.clone(),
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      state: 'normal' as 'normal',
+      depleteTime: null,
+      respawnTime: 30000, // 30 seconds
+      mesh: undefined, // Initialize as undefined
+      label: null
+    };
+    
+    const rockMesh = createResourceMesh(ResourceType.ROCK_MITHRIL, 'normal');
+    rockMesh.position.copy(position);
+    scene.add(rockMesh);
+    mithrilNode.mesh = rockMesh;
+    
+    wildernessResources.push(mithrilNode);
+  });
+  
+  // High-value yew trees
+  const yewPositions = [
+    new THREE.Vector3(450, 0, 350),
+    new THREE.Vector3(470, 0, 370),
+    new THREE.Vector3(490, 0, 390),
+    new THREE.Vector3(430, 0, 380),
+    new THREE.Vector3(450, 0, 400)
+  ];
+  
+  yewPositions.forEach(position => {
+    const yewNode: ResourceNode = {
+      id: `yew_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      type: ResourceType.TREE_YEW,
+      position: position.clone(),
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      state: 'normal' as 'normal',
+      depleteTime: null,
+      respawnTime: 45000, // 45 seconds
+      mesh: undefined, // Initialize as undefined
+      label: null
+    };
+    
+    const treeMesh = createResourceMesh(ResourceType.TREE_YEW, 'normal');
+    treeMesh.position.copy(position);
+    scene.add(treeMesh);
+    yewNode.mesh = treeMesh;
+    
+    wildernessResources.push(yewNode);
+  });
+  
+  // Special fishing spots with high-level fish (Swordfish)
+  const fishingPositions = [
+    new THREE.Vector3(380, 0, 450),
+    new THREE.Vector3(400, 0, 480),
+    new THREE.Vector3(420, 0, 460)
+  ];
+  
+  fishingPositions.forEach(position => {
+    const fishingNode: ResourceNode = {
+      id: `fishing_deep_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      type: ResourceType.FISHING_SPOT_ADVANCED,
+      position: position.clone(),
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      state: 'normal' as 'normal',
+      depleteTime: null,
+      respawnTime: 20000, // 20 seconds
+      mesh: undefined, // Initialize as undefined
+      label: null
+    };
+    
+    const fishingMesh = createResourceMesh(ResourceType.FISHING_SPOT_ADVANCED, 'normal');
+    fishingMesh.position.copy(position);
+    scene.add(fishingMesh);
+    fishingNode.mesh = fishingMesh;
+    
+    wildernessResources.push(fishingNode);
+  });
+  
+  return wildernessResources;
 }; 

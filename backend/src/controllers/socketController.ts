@@ -13,6 +13,7 @@ import { ResourceHandler } from './handlers/ResourceHandler';
 import { InventoryHandler } from './handlers/InventoryHandler';
 import { WorldItemHandler } from './handlers/WorldItemHandler';
 import { ChatHandler } from './handlers/ChatHandler';
+import { SmithingHandler } from './handlers/SmithingHandler';
 
 // Define interfaces for type safety
 interface WorldBounds {
@@ -105,6 +106,7 @@ let inventoryHandler: InventoryHandler;
 let worldItemHandler: WorldItemHandler;
 let chatHandler: ChatHandler;
 let resourceHandler: ResourceHandler;
+let smithingHandler: SmithingHandler;
 
 // Initialize handlers with IO instance
 const initializeHandlers = (io: Server) => {
@@ -112,6 +114,7 @@ const initializeHandlers = (io: Server) => {
   worldItemHandler = new WorldItemHandler(io, players);
   chatHandler = new ChatHandler(io, players);
   resourceHandler = new ResourceHandler(io, players);
+  smithingHandler = new SmithingHandler(io, players);
 };
 
 // Add function to broadcast player count
@@ -650,6 +653,12 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         case 'tree': itemType = 'wood'; break;
         case 'rock': itemType = 'stone'; break;
         case 'bush': itemType = 'berries'; break;
+        case 'copper_rock': itemType = 'copper_ore'; break;
+        case 'tin_rock': itemType = 'tin_ore'; break;
+        case 'iron_rock': itemType = 'iron_ore'; break;
+        case 'coal_rock': itemType = 'coal'; break;
+        case 'gold_rock': itemType = 'gold_ore'; break;
+        case 'mithril_rock': itemType = 'mithril_ore'; break;
         default: itemType = 'unknown';
       }
       
@@ -1171,6 +1180,7 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     worldItemHandler.setupItemPickupHandler(socket);
     chatHandler.setupChatHandler(socket);
     resourceHandler.setupResourceGatheringHandler(socket);
+    smithingHandler.setupSmithingHandlers(socket); // Register the smithing handlers
 
     // Create a new handler for chat commands
     setupChatCommandHandler(io, socket);

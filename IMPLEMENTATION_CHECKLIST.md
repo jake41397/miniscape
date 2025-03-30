@@ -9,10 +9,10 @@
 
 - [x] Wilderness (PvP-Enabled Zone)
   - [x] Define wilderness boundaries
-  - [ ] Implement PvP combat mechanics  
+  - [x] Implement PvP combat mechanics  
   - [x] Add visual indicators for wilderness entry
   - [x] Create warning message when entering
-  - [ ] Add high-value resource nodes
+  - [x] Add high-value resource nodes
 
 - [x] Grand Exchange (Trading Hub)
   - [x] Design central marketplace area
@@ -23,7 +23,7 @@
   - [x] Create and render mesh for barbarian huts
   - [x] Add multiple ore rock types (tin, coal)
   - [x] Create non-aggressive NPCs
-  - [ ] Link to smithing activities
+  - [x] Link to smithing activities
 
 ## Skills Implementation
 - [x] Fishing
@@ -47,12 +47,19 @@
   - [x] Add mining interaction mechanics
   - [x] Implement XP gains for mining
 
-- [ ] Combat
-  - [ ] Implement basic melee combat
-  - [ ] Add targeting system
-  - [ ] Create health and damage mechanics
-  - [ ] Implement combat XP rewards
-  - [ ] Add PvP toggle for wilderness
+- [x] Combat
+  - [x] Implement basic melee combat
+  - [x] Add targeting system
+  - [x] Create health and damage mechanics
+  - [x] Implement combat XP rewards
+  - [x] Add PvP toggle for wilderness
+
+- [x] Smithing
+  - [x] Create smelting system for turning ores into bars
+  - [x] Implement smithing interface for crafting items
+  - [x] Add furnace and anvil to Barbarian Village
+  - [x] Create recipes for different metal types
+  - [x] Implement XP gains for smithing
 
 ## Core Game Systems
 - [x] Skills System

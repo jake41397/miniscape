@@ -33,6 +33,7 @@ import SkillsPanel from './ui/SkillsPanel';
 import NPCInteractionController from './game/NPCInteractionController';
 import PlayerSocialController from './game/PlayerSocialController';
 import TutorialOverlay from './ui/TutorialOverlay';
+import SmithingController from './game/SmithingController';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -1187,6 +1188,13 @@ const GameCanvas: React.FC = () => {
           onPlayerFollow={handleFollowPlayer}
           onPlayerMessage={handleMessagePlayer}
           socketController={socketControllerRef.current}
+        />
+      )}
+
+      {/* Add Smithing Controller */}
+      {playerRef.current && (
+        <SmithingController
+          playerRef={playerRef}
         />
       )}
 

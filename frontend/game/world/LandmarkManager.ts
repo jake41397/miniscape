@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { NPC, Landmark, createTutorialGuideNPC, createSignpost, createLumbridgeCastleMesh, createComingSoonSign, createBarbarianHut, createNPC } from './landmarks';
 import { ZONES } from './zones';
+import { SmithingSystem, SmithingMode } from '../systems/SmithingSystem';
 
 interface LandmarkManagerProps {
   scene: THREE.Scene;
@@ -142,39 +143,95 @@ class LandmarkManager {
   }
 
   private addBarbarianVillage() {
-    // Create multiple huts in Barbarian Village
+    // Center of Barbarian Village at (-90, -60) to align with the village sign
+    const centerX = -90;
+    const centerZ = -60;
+    
+    // Create multiple huts in Barbarian Village with increased spacing
+    
+    // Positions for barbarian huts around the center with more spread
     const hutPositions = [
-      { x: -150, z: 120 },
-      { x: -160, z: 150 },
-      { x: -130, z: 140 },
-      { x: -140, z: 170 },
-      { x: -120, z: 160 }
+      new THREE.Vector3(centerX - 12, 0, centerZ - 12),  // Southwest hut
+      new THREE.Vector3(centerX + 12, 0, centerZ - 12),  // Southeast hut
+      new THREE.Vector3(centerX - 12, 0, centerZ + 12),  // Northwest hut
+      new THREE.Vector3(centerX + 12, 0, centerZ + 12)   // Northeast hut
     ];
     
-    hutPositions.forEach((pos, index) => {
+    // Create huts
+    hutPositions.forEach((position, index) => {
+      // Create hut mesh
       const hut = createBarbarianHut();
-      hut.position.set(pos.x, 0, pos.z);
+      hut.position.copy(position);
       hut.rotation.y = Math.random() * Math.PI * 2; // Random rotation
-      
       this.scene.add(hut);
       
-      // Create landmark for hut
-      const hutLandmark: Landmark = {
+      // Add as a landmark
+      this.landmarks.push({
         id: `barbarian_hut_${index}`,
-        name: 'Barbarian Hut',
-        position: new THREE.Vector3(pos.x, 0, pos.z),
+        name: `Barbarian Hut ${index + 1}`,
+        position: position.clone(),
         mesh: hut,
-        interactable: false
-      };
-      
-      this.landmarks.push(hutLandmark);
+        interactable: true,
+        interactionRadius: 3,
+        onInteract: () => {
+          console.log(`Interacted with Barbarian Hut ${index + 1}`);
+        }
+      });
     });
     
-    // Add some barbarian NPCs
+    // Add smithing facilities - furnace and anvil
+    
+    // Create furnace - positioned in the southern part of the village
+    const furnacePosition = new THREE.Vector3(centerX, 0, centerZ - 16);
+    const furnaceMesh = SmithingSystem.createFurnaceMesh();
+    furnaceMesh.position.copy(furnacePosition);
+    this.scene.add(furnaceMesh);
+    
+    // Add furnace as an interactable landmark
+    this.landmarks.push({
+      id: 'barbarian_furnace',
+      name: 'Barbarian Furnace',
+      position: furnacePosition.clone(),
+      mesh: furnaceMesh,
+      interactable: true,
+      interactionRadius: 3,
+      onInteract: () => {
+        console.log('Interacted with Barbarian Furnace');
+        // Emit an event to open the smelting interface
+        document.dispatchEvent(new CustomEvent('open-smithing', { 
+          detail: { mode: SmithingMode.SMELTING } 
+        }));
+      }
+    });
+    
+    // Create anvil - positioned in the northern part of the village
+    const anvilPosition = new THREE.Vector3(centerX, 0, centerZ + 8);
+    const anvilMesh = SmithingSystem.createAnvilMesh();
+    anvilMesh.position.copy(anvilPosition);
+    this.scene.add(anvilMesh);
+    
+    // Add anvil as an interactable landmark
+    this.landmarks.push({
+      id: 'barbarian_anvil',
+      name: 'Barbarian Anvil',
+      position: anvilPosition.clone(),
+      mesh: anvilMesh,
+      interactable: true,
+      interactionRadius: 2,
+      onInteract: () => {
+        console.log('Interacted with Barbarian Anvil');
+        // Emit an event to open the smithing interface
+        document.dispatchEvent(new CustomEvent('open-smithing', { 
+          detail: { mode: SmithingMode.SMITHING } 
+        }));
+      }
+    });
+    
+    // Add NPCs to the village with better positioning
     const npcPositions = [
-      { name: 'Gunnar', position: new THREE.Vector3(-155, 0, 135) },
-      { name: 'Hilda', position: new THREE.Vector3(-135, 0, 155) },
-      { name: 'Bjorn', position: new THREE.Vector3(-145, 0, 125) }
+      { name: 'Bjorn the Blacksmith', position: new THREE.Vector3(centerX + 4, 0, centerZ + 8) }, // Near the anvil
+      { name: 'Sigurd the Warrior', position: new THREE.Vector3(centerX, 0, centerZ) },           // Center of village
+      { name: 'Astrid the Miner', position: new THREE.Vector3(centerX - 6, 0, centerZ - 16) }     // Near the furnace/mining area
     ];
     
     npcPositions.forEach(npcData => {
@@ -192,6 +249,10 @@ class LandmarkManager {
               nextDialogueId: 'mining'
             },
             {
+              text: 'Tell me about smithing.',
+              nextDialogueId: 'smithing'
+            },
+            {
               text: 'Goodbye.',
               nextDialogueId: 'default'
             }
@@ -203,6 +264,30 @@ class LandmarkManager {
           responses: [
             {
               text: 'Thanks for the information.',
+              nextDialogueId: 'default'
+            }
+          ]
+        },
+        {
+          id: 'smithing',
+          text: 'We have a furnace for smelting ore into bars, and an anvil for crafting weapons and tools. Use the furnace to smelt your ores, then use the anvil to smith the bars into useful items.',
+          responses: [
+            {
+              text: 'Tell me more about the process.',
+              nextDialogueId: 'smithing_detail'
+            },
+            {
+              text: 'Thanks for the information.',
+              nextDialogueId: 'default'
+            }
+          ]
+        },
+        {
+          id: 'smithing_detail',
+          text: 'First, gather ores through mining. Then use our furnace to turn them into metal bars. Bronze bars need copper and tin. Iron bars just need iron ore. Once you have bars, use the anvil to craft tools and weapons. A higher smithing level lets you work with better metals.',
+          responses: [
+            {
+              text: 'Thanks for explaining.',
               nextDialogueId: 'default'
             }
           ]

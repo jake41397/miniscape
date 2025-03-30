@@ -57,6 +57,13 @@ export enum ItemType {
   SWORDFISH = 'swordfish',
   FISH = 'fish', // Generic fish (for backward compatibility)
   
+  // Smithing items - Bars
+  BRONZE_BAR = 'bronze_bar',
+  IRON_BAR = 'iron_bar',
+  STEEL_BAR = 'steel_bar',
+  GOLD_BAR = 'gold_bar',
+  MITHRIL_BAR = 'mithril_bar',
+  
   // Tools
   BRONZE_PICKAXE = 'bronze_pickaxe',
   IRON_PICKAXE = 'iron_pickaxe',
