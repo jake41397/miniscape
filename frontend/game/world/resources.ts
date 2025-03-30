@@ -119,35 +119,38 @@ export const createRockMesh = (): THREE.Object3D => {
 
 // Create a fishing spot mesh
 export const createFishingSpotMesh = (): THREE.Mesh => {
-  const spotGeometry = new THREE.CircleGeometry(2, 16);
-  const spotMaterial = new THREE.MeshStandardMaterial({ 
+  // Create a simple cylinder with minimal height as requested
+  const cylinderGeometry = new THREE.CylinderGeometry(2, 2, 0.05, 24);
+  const cylinderMaterial = new THREE.MeshStandardMaterial({ 
     color: 0x6495ED, // Cornflower blue
     transparent: true,
-    opacity: 0.7
+    opacity: 0.7,
+    emissive: 0x3366CC,
+    emissiveIntensity: 0.2
   });
-  const spot = new THREE.Mesh(spotGeometry, spotMaterial);
-  // Rotate to be horizontal
-  spot.rotation.x = -Math.PI / 2;
-  spot.position.y = 0.05; // Just above ground
+  const mesh = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+  mesh.position.y = 0.025; // Half of height to place on ground
   
-  // Add ripple animation
-  const startScale = 1.0;
-  const animate = () => {
+  // Make the mesh raycaster-friendly - critical for right-click detection
+  mesh.userData.isInteractable = true;
+  mesh.userData.isFishingSpot = true; // Additional marker for easy identification
+  mesh.name = "fishing_spot"; // Add a consistent name for debugging
+  
+  // Add animate function to keep ripple effect
+  (mesh as any).update = () => {
     const time = Date.now() * 0.001; // Convert to seconds
-    spot.scale.set(
-      startScale + Math.sin(time * 2) * 0.1,
-      startScale,
-      startScale + Math.sin(time * 2) * 0.1
+    // Subtle pulsing effect
+    mesh.scale.set(
+      1.0 + Math.sin(time * 2) * 0.1,
+      1.0,
+      1.0 + Math.sin(time * 2) * 0.1
     );
     
     // Update opacity for shimmering effect
-    (spot.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 3) * 0.2;
+    (mesh.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 2) * 0.2;
   };
   
-  // Add update function to mesh for animation
-  (spot as any).update = animate;
-  
-  return spot;
+  return mesh;
 };
 
 // Create a dropped item mesh
@@ -1240,86 +1243,108 @@ export const createMagicTreeMesh = (): THREE.Object3D => {
 
 // Create different types of fishing spots
 export const createNetFishingSpotMesh = (): THREE.Mesh => {
-  // Basic fishing spot with blue color for net fishing (shrimps, sardines)
-  const spotGeometry = new THREE.CircleGeometry(2, 16);
-  const spotMaterial = new THREE.MeshStandardMaterial({ 
+  // Create a simple cylinder with minimal height as requested
+  const cylinderGeometry = new THREE.CylinderGeometry(2, 2, 0.05, 24);
+  const cylinderMaterial = new THREE.MeshStandardMaterial({ 
     color: 0x6495ED, // Cornflower blue
     transparent: true,
-    opacity: 0.7
+    opacity: 0.7,
+    emissive: 0x3366CC,
+    emissiveIntensity: 0.2
   });
-  const spot = new THREE.Mesh(spotGeometry, spotMaterial);
-  spot.rotation.x = -Math.PI / 2;
-  spot.position.y = 0.05;
+  const mesh = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+  mesh.position.y = 0.025; // Half of height to place on ground
   
-  // Add animation
-  const animate = () => {
-    const time = Date.now() * 0.001;
-    spot.scale.set(
+  // Make the mesh raycaster-friendly
+  mesh.userData.isInteractable = true;
+  mesh.userData.isFishingSpot = true; // Additional marker for easy identification
+  mesh.name = "net_fishing_spot"; // Add a consistent name for debugging
+  
+  // Add animate function to keep ripple effect
+  (mesh as any).update = () => {
+    const time = Date.now() * 0.001; // Convert to seconds
+    // Subtle pulsing effect
+    mesh.scale.set(
       1.0 + Math.sin(time * 2) * 0.1,
       1.0,
       1.0 + Math.sin(time * 2) * 0.1
     );
-    (spot.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 3) * 0.2;
+    
+    // Update opacity for shimmering effect
+    (mesh.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 2) * 0.2;
   };
   
-  (spot as any).update = animate;
-  return spot;
+  return mesh;
 };
 
 export const createCageFishingSpotMesh = (): THREE.Mesh => {
-  // Cage fishing spot with deeper blue for trout, salmon, pike
-  const spotGeometry = new THREE.CircleGeometry(2.2, 16);
-  const spotMaterial = new THREE.MeshStandardMaterial({ 
-    color: 0x0000CD, // Medium blue
+  // Create a simple cylinder with minimal height as requested
+  const cylinderGeometry = new THREE.CylinderGeometry(2.2, 2.2, 0.05, 24);
+  const cylinderMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x3CB371, // Medium sea green
     transparent: true,
-    opacity: 0.7
+    opacity: 0.7,
+    emissive: 0x2E8B57,
+    emissiveIntensity: 0.2
   });
-  const spot = new THREE.Mesh(spotGeometry, spotMaterial);
-  spot.rotation.x = -Math.PI / 2;
-  spot.position.y = 0.05;
+  const mesh = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+  mesh.position.y = 0.025; // Half of height to place on ground
   
-  // Add animation
-  const animate = () => {
-    const time = Date.now() * 0.001;
-    spot.scale.set(
+  // Make the mesh raycaster-friendly
+  mesh.userData.isInteractable = true;
+  mesh.userData.isFishingSpot = true; // Additional marker for easy identification
+  mesh.name = "cage_fishing_spot"; // Add a consistent name for debugging
+  
+  // Add animate function to keep ripple effect
+  (mesh as any).update = () => {
+    const time = Date.now() * 0.001; // Convert to seconds
+    // Subtle pulsing effect
+    mesh.scale.set(
       1.0 + Math.sin(time * 1.5) * 0.15,
       1.0,
       1.0 + Math.sin(time * 1.5) * 0.15
     );
-    (spot.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 2.5) * 0.2;
+    
+    // Update opacity for shimmering effect
+    (mesh.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 1.5) * 0.2;
   };
   
-  (spot as any).update = animate;
-  return spot;
+  return mesh;
 };
 
 export const createHarpoonFishingSpotMesh = (): THREE.Mesh => {
-  // Harpoon fishing spot with dark blue for larger fish
-  const spotGeometry = new THREE.CircleGeometry(2.5, 20);
-  const spotMaterial = new THREE.MeshStandardMaterial({ 
+  // Create a simple cylinder with minimal height as requested
+  const cylinderGeometry = new THREE.CylinderGeometry(2.5, 2.5, 0.05, 24);
+  const cylinderMaterial = new THREE.MeshStandardMaterial({ 
     color: 0x000080, // Navy blue
     transparent: true,
     opacity: 0.7,
     emissive: 0x000033,
     emissiveIntensity: 0.2
   });
-  const spot = new THREE.Mesh(spotGeometry, spotMaterial);
-  spot.rotation.x = -Math.PI / 2;
-  spot.position.y = 0.05;
+  const mesh = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+  mesh.position.y = 0.025; // Half of height to place on ground
   
-  // Add animation
-  const animate = () => {
-    const time = Date.now() * 0.001;
-    spot.scale.set(
+  // Make the mesh raycaster-friendly
+  mesh.userData.isInteractable = true;
+  mesh.userData.isFishingSpot = true; // Additional marker for easy identification
+  mesh.name = "harpoon_fishing_spot"; // Add a consistent name for debugging
+  
+  // Add animate function to keep ripple effect
+  (mesh as any).update = () => {
+    const time = Date.now() * 0.001; // Convert to seconds
+    // Subtle pulsing effect
+    mesh.scale.set(
       1.0 + Math.sin(time) * 0.2,
       1.0,
       1.0 + Math.sin(time) * 0.2
     );
-    (spot.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 2) * 0.25;
+    
+    // Update opacity for shimmering effect
+    (mesh.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 2) * 0.25;
   };
   
-  (spot as any).update = animate;
-  return spot;
+  return mesh;
 };
 
 // Create resource mesh based on type and metadata
@@ -1394,7 +1419,7 @@ export const createResourceMesh = (
       return createRockMesh();
       
     case ResourceType.FISHING_SPOT:
-    case 'fish':
+    case 'fish': // Handle 'fish' type same as FISHING_SPOT for database compatibility
       // Use metadata to determine specific fishing spot type
       if (metadata?.spotType) {
         switch (metadata.spotType) {

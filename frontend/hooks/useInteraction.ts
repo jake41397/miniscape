@@ -2,7 +2,7 @@ import { useRef, useCallback, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { getSocket } from '../game/network/socket';
 import soundManager from '../game/audio/soundManager';
-import { ResourceNode, WorldItem } from '../game/world/resources';
+import { ResourceNode, WorldItem, ResourceType } from '../game/world/resources';
 import { GATHERING_COOLDOWN } from '../constants';
 import { PlayerController } from '../components/game/PlayerController';
 import ItemManager from '../game/world/ItemManager';
@@ -356,99 +356,61 @@ export const useInteraction = ({
             return null;
         }).filter(Boolean) as THREE.Object3D[] || [];
         
-        const resourceIntersects = resourceMeshes.length > 0 ? raycasterRef.current.intersectObjects(resourceMeshes) : [];
-
+        console.log(`%c 👁️ Checking ${resourceMeshes.length} resource meshes for intersection`, "color: #673AB7;");
+        console.log(`Resource types:`, resourceNodesRef.current?.map(node => `${node.id}: ${node.type}`).slice(0, 5));
+        
+        // Set recursive to true to check children of meshes (important for fishing spots)
+        const resourceIntersects = resourceMeshes.length > 0 ? 
+            raycasterRef.current.intersectObjects(resourceMeshes, true) : [];
+        
+        console.log(`%c 🎯 Found ${resourceIntersects.length} resource intersections`, 
+            resourceIntersects.length > 0 ? "color: #4CAF50; font-weight: bold;" : "color: #F44336;");
+        
+        // If directly clicking on a resource, find that specific resource
         if (resourceIntersects.length > 0) {
-            const intersectedResourceMesh = resourceIntersects[0].object;
-            const resourceNode = resourceNodesRef.current?.find(node => node.mesh === intersectedResourceMesh);
-
-            if (resourceNode && resourceNode.id) {
-                const resourceType = resourceNode.type || 'Unknown';
-                console.log(`Clicked on resource: ${resourceType} (ID: ${resourceNode.id})`);
-                soundManager.play('uiSelect' as any); // Use a consistent select sound
-
-                // Make sure we have a valid mesh with a position
-                if (!resourceNode.mesh || !resourceNode.mesh.position) {
-                    console.error("Resource has no valid mesh position");
-                    return;
+            const intersectedObject = resourceIntersects[0].object;
+            console.log(`%c ✓ Hit detected on object:`, "color: #4CAF50;", {
+                name: intersectedObject.name,
+                id: intersectedObject.id,
+                type: intersectedObject.type,
+                userData: intersectedObject.userData,
+                parent: intersectedObject.parent ? intersectedObject.parent.id : 'none'
+            });
+            
+            // Find the resource node - this could be the top mesh or a child mesh
+            const resourceNode = resourceNodesRef.current?.find(node => {
+                // Direct match
+                if (node.mesh === intersectedObject) return true;
+                
+                // Check if it's a child of the resource mesh
+                if (node.mesh && intersectedObject.parent === node.mesh) return true;
+                
+                // For nested hierarchies
+                let parent = intersectedObject.parent;
+                while (parent) {
+                    if (parent === node.mesh) return true;
+                    parent = parent.parent;
                 }
-
-                const resourcePosition = resourceNode.mesh.position;
-                const distance = player.position.distanceTo(resourcePosition);
-                const interactionRange = 2.5; // How close player needs to be
-
-                if (distance <= interactionRange) {
-                    // Already in range - interact immediately
-                    if (!isGathering.current) {
-                        isGathering.current = true;
-                        console.log(`Gathering resource ${resourceNode.id} (already in range).`);
-                        
-                        socketPromise.then(socket => {
-                            if (socket) {
-                                socket.emit('gather', resourceNode.id);
-                            }
-                        });
-                        
-                        soundManager.play('resourceGather' as any); // Play gathering sound
-                        gatheringTimeoutRef.current = setTimeout(() => {
-                            isGathering.current = false;
-                        }, GATHERING_COOLDOWN);
-                    }
-                } else {
-                    // Out of range - move closer, but only if controller is available
-                    if (controller) {
-                        const direction = new THREE.Vector3().subVectors(resourcePosition, player.position).normalize();
-                        // Target position slightly away from the node center
-                        const targetPosition = new THREE.Vector3()
-                            .copy(resourcePosition)
-                            .addScaledVector(direction, -interactionRange * 0.8); // Move to edge of range
-                        targetPosition.y = player.position.y; // Maintain player height
-
-                        // Create new indicator near the resource
-                        clickIndicatorRef.current = createClickIndicator(scene, targetPosition);
-
-                        // Reset movement completion flag
-                        movementCompletedRef.current = false;
-
-                        // Start moving towards the resource edge
-                        currentInteractionPromise.current = controller.moveToPosition(targetPosition);
-                        if (currentInteractionPromise.current) {
-                            currentInteractionPromise.current.then(() => {
-                                // Movement finished
-                                movementCompletedRef.current = true;
-                                
-                                // Check if movement completed naturally & still out of gather cooldown
-                                if (!isGathering.current && movementCompletedRef.current) {
-                                    const currentDistance = player.position.distanceTo(resourcePosition);
-                                    if (currentDistance <= interactionRange) {
-                                        isGathering.current = true;
-                                        console.log(`Arrived at resource ${resourceNode.id}. Sending gather request.`);
-                                        
-                                        socketPromise.then(socket => {
-                                            if (socket) {
-                                                socket.emit('gather', resourceNode.id);
-                                            }
-                                        });
-                                        
-                                        soundManager.play('resourceGather' as any);
-                                        gatheringTimeoutRef.current = setTimeout(() => {
-                                            isGathering.current = false;
-                                        }, GATHERING_COOLDOWN);
-                                    } else {
-                                        console.warn("Arrived near resource but still out of range.");
-                                    }
-                                }
-                                removeClickIndicator(); // Clean up indicator
-                            }).catch(err => {
-                                console.error("Error during walk-to-resource:", err);
-                                removeClickIndicator();
-                            });
-                        }
-                    } else {
-                        console.warn("%c ⏳ Cannot move to resource - PlayerController not available", "color: orange; font-weight: bold;");
-                    }
-                }
-                return; // Stop further processing
+                
+                return false;
+            });
+            
+            if (resourceNode) {
+                console.log("%c 🎯 Right-click hit on resource:", "background: #4CAF50; color: white;", {
+                    resourceId: resourceNode.id,
+                    resourceType: resourceNode.type,
+                    metadata: resourceNode.metadata,
+                    position: `(${resourceNode.x}, ${resourceNode.y}, ${resourceNode.z})`
+                });
+                
+                // Show context menu with just this resource
+                setNearbyResources([resourceNode]);
+                setNearbyItems([]);
+                setContextMenuPos({ x: e.clientX, y: e.clientY });
+                return;
+            } else {
+                console.log("%c ❌ Could not find matching resource node for intersected object", 
+                    "background: #F44336; color: white;");
             }
         }
 
@@ -600,20 +562,61 @@ export const useInteraction = ({
             .filter(node => node && node.mesh)
             .map(node => node.mesh) as THREE.Object3D[];
             
+        console.log(`%c 👁️ Checking ${resourceMeshes.length} resource meshes for intersection`, "color: #673AB7;");
+        console.log(`Resource types:`, resourceNodes.map(node => `${node.id}: ${node.type}`).slice(0, 5));
+        
+        // Set recursive to true to check children of meshes (important for fishing spots)
         const resourceIntersects = resourceMeshes.length > 0 ? 
-            raycasterRef.current.intersectObjects(resourceMeshes) : [];
+            raycasterRef.current.intersectObjects(resourceMeshes, true) : [];
+        
+        console.log(`%c 🎯 Found ${resourceIntersects.length} resource intersections`, 
+            resourceIntersects.length > 0 ? "color: #4CAF50; font-weight: bold;" : "color: #F44336;");
         
         // If directly clicking on a resource, find that specific resource
         if (resourceIntersects.length > 0) {
-            const intersectedResourceMesh = resourceIntersects[0].object;
-            const resourceNode = resourceNodes.find(node => node.mesh === intersectedResourceMesh);
+            const intersectedObject = resourceIntersects[0].object;
+            console.log(`%c ✓ Hit detected on object:`, "color: #4CAF50;", {
+                name: intersectedObject.name,
+                id: intersectedObject.id,
+                type: intersectedObject.type,
+                userData: intersectedObject.userData,
+                parent: intersectedObject.parent ? intersectedObject.parent.id : 'none'
+            });
+            
+            // Find the resource node - this could be the top mesh or a child mesh
+            const resourceNode = resourceNodes.find(node => {
+                // Direct match
+                if (node.mesh === intersectedObject) return true;
+                
+                // Check if it's a child of the resource mesh
+                if (node.mesh && intersectedObject.parent === node.mesh) return true;
+                
+                // For nested hierarchies
+                let parent = intersectedObject.parent;
+                while (parent) {
+                    if (parent === node.mesh) return true;
+                    parent = parent.parent;
+                }
+                
+                return false;
+            });
             
             if (resourceNode) {
+                console.log("%c 🎯 Right-click hit on resource:", "background: #4CAF50; color: white;", {
+                    resourceId: resourceNode.id,
+                    resourceType: resourceNode.type,
+                    metadata: resourceNode.metadata,
+                    position: `(${resourceNode.x}, ${resourceNode.y}, ${resourceNode.z})`
+                });
+                
                 // Show context menu with just this resource
                 setNearbyResources([resourceNode]);
                 setNearbyItems([]);
                 setContextMenuPos({ x: e.clientX, y: e.clientY });
                 return;
+            } else {
+                console.log("%c ❌ Could not find matching resource node for intersected object", 
+                    "background: #F44336; color: white;");
             }
         }
 
@@ -923,7 +926,12 @@ export const useInteraction = ({
                     const socket = await getSocket();
                     if (socket) {
                         console.log(`%c 🔄 Sending ${action} action to server for resource: ${resourceId}`, "color: #2196F3;");
-                        (socket as any).emit('gatherWithTool', { resourceId, action });
+                        // Use appropriate event based on the action type
+                        if (action === 'fish' && resourceNode.type === ResourceType.FISHING_SPOT) {
+                            (socket as any).emit('interactWithResource', { resourceId });
+                        } else {
+                            (socket as any).emit('gatherWithTool', { resourceId, action });
+                        }
                     } else {
                         console.error("Failed to get socket for resource interaction");
                     }
@@ -940,7 +948,12 @@ export const useInteraction = ({
             const socket = await getSocket();
             if (socket) {
                 console.log(`%c 🔄 Sending ${action} action to server for resource: ${resourceId}`, "color: #2196F3;");
-                (socket as any).emit('gatherWithTool', { resourceId, action });
+                // Use appropriate event based on the action type
+                if (action === 'fish' && resourceNode.type === ResourceType.FISHING_SPOT) {
+                    (socket as any).emit('interactWithResource', { resourceId });
+                } else {
+                    (socket as any).emit('gatherWithTool', { resourceId, action });
+                }
             } else {
                 console.error("Failed to get socket for resource interaction");
             }

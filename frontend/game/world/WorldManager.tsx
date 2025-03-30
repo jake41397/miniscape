@@ -450,10 +450,10 @@ class WorldManager {
       { id: 'magic_tree-4', type: ResourceType.TREE, x: -1800, y: 1, z: 1800, metadata: { treeType: 'magic_tree' } },
       
       // Fishing spots inside safe area
-      { id: 'fishing_spot-1', type: ResourceType.FISHING_SPOT, x: 30, y: 1, z: -30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot-2', type: ResourceType.FISHING_SPOT, x: 25, y: 1, z: -30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot-3', type: ResourceType.FISHING_SPOT, x: 35, y: 1, z: -35, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot-4', type: ResourceType.FISHING_SPOT, x: 40, y: 1, z: -40, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      { id: 'fishing_spot-1', type: ResourceType.FISHING_SPOT, x: 30, y: 0.3, z: -30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      { id: 'fishing_spot-2', type: ResourceType.FISHING_SPOT, x: 25, y: 0.3, z: -30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      { id: 'fishing_spot-3', type: ResourceType.FISHING_SPOT, x: 35, y: 0.3, z: -35, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      { id: 'fishing_spot-4', type: ResourceType.FISHING_SPOT, x: 40, y: 0.3, z: -40, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
     ];
     
     console.log(`%c 🌳 Creating ${resources.length} default resource nodes`, "background: #4CAF50; color: white; font-size: 14px;");
@@ -488,26 +488,26 @@ class WorldManager {
     // Define and create fishing spots - near water areas and in wilderness areas
     const fishingSpots: ResourceNode[] = [
       // Lumbridge fishing spots
-      { id: 'fishing_spot_lumbridge_1', type: ResourceType.FISHING_SPOT, x: 20, y: 1, z: 30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot_lumbridge_2', type: ResourceType.FISHING_SPOT, x: 25, y: 1, z: 30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      { id: 'fishing_spot_lumbridge_1', type: ResourceType.FISHING_SPOT, x: 20, y: 0.3, z: 30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      { id: 'fishing_spot_lumbridge_2', type: ResourceType.FISHING_SPOT, x: 25, y: 0.3, z: 30, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
       
       // Wilderness fishing spots (higher level fish) - around the lava pools
-      { id: 'fishing_spot_wilderness_1', type: ResourceType.FISHING_SPOT, x: 800, y: 1, z: 800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon'] } },
-      { id: 'fishing_spot_wilderness_2', type: ResourceType.FISHING_SPOT, x: -800, y: 1, z: -800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon'] } },
-      { id: 'fishing_spot_wilderness_3', type: ResourceType.FISHING_SPOT, x: -800, y: 1, z: 800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon', 'shark'] } },
-      { id: 'fishing_spot_wilderness_4', type: ResourceType.FISHING_SPOT, x: 800, y: 1, z: -800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon', 'shark'] } },
+      { id: 'fishing_spot_wilderness_1', type: ResourceType.FISHING_SPOT, x: 800, y: 0.3, z: 800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon'] } },
+      { id: 'fishing_spot_wilderness_2', type: ResourceType.FISHING_SPOT, x: -800, y: 0.3, z: -800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon'] } },
+      { id: 'fishing_spot_wilderness_3', type: ResourceType.FISHING_SPOT, x: -800, y: 0.3, z: 800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon', 'shark'] } },
+      { id: 'fishing_spot_wilderness_4', type: ResourceType.FISHING_SPOT, x: 800, y: 0.3, z: -800, metadata: { spotType: 'harpoon', fishTypes: ['trout', 'salmon', 'shark'] } },
       
       // Deep wilderness fishing spots (highest level)
-      { id: 'fishing_spot_deep_wild_1', type: ResourceType.FISHING_SPOT, x: 1200, y: 1, z: 0, metadata: { spotType: 'harpoon', fishTypes: ['shark', 'swordfish'] } },
-      { id: 'fishing_spot_deep_wild_2', type: ResourceType.FISHING_SPOT, x: 0, y: 1, z: 1200, metadata: { spotType: 'harpoon', fishTypes: ['shark', 'swordfish'] } },
+      { id: 'fishing_spot_deep_wild_1', type: ResourceType.FISHING_SPOT, x: 1200, y: 0.3, z: 0, metadata: { spotType: 'harpoon', fishTypes: ['shark', 'swordfish'] } },
+      { id: 'fishing_spot_deep_wild_2', type: ResourceType.FISHING_SPOT, x: 0, y: 0.3, z: 1200, metadata: { spotType: 'harpoon', fishTypes: ['shark', 'swordfish'] } },
       
       // Barbarian Village fishing spots
-      { id: 'fishing_spot_barbarian_1', type: ResourceType.FISHING_SPOT, x: -80, y: 1, z: 50, metadata: { spotType: 'cage', fishTypes: ['trout', 'salmon', 'pike'] } },
-      { id: 'fishing_spot_barbarian_2', type: ResourceType.FISHING_SPOT, x: -85, y: 1, z: 55, metadata: { spotType: 'cage', fishTypes: ['trout', 'salmon', 'pike'] } },
+      { id: 'fishing_spot_barbarian_1', type: ResourceType.FISHING_SPOT, x: -80, y: 0.3, z: 50, metadata: { spotType: 'cage', fishTypes: ['trout', 'salmon', 'pike'] } },
+      { id: 'fishing_spot_barbarian_2', type: ResourceType.FISHING_SPOT, x: -85, y: 0.3, z: 55, metadata: { spotType: 'cage', fishTypes: ['trout', 'salmon', 'pike'] } },
       
       // Grand Exchange area fishing spots
-      { id: 'fishing_spot_ge_1', type: ResourceType.FISHING_SPOT, x: 90, y: 1, z: 70, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
-      { id: 'fishing_spot_ge_2', type: ResourceType.FISHING_SPOT, x: 95, y: 1, z: 75, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      { id: 'fishing_spot_ge_1', type: ResourceType.FISHING_SPOT, x: 90, y: 0.3, z: 70, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
+      { id: 'fishing_spot_ge_2', type: ResourceType.FISHING_SPOT, x: 95, y: 0.3, z: 75, metadata: { spotType: 'net', fishTypes: ['shrimp', 'sardine'] } },
     ];
     
     console.log(`%c 🎣 Adding ${fishingSpots.length} fishing spots`, "background: #2196F3; color: white; font-size: 14px;");

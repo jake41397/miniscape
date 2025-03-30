@@ -97,7 +97,17 @@ export class ResourceController {
         } else if (typeStr === 'rock') {
           node.type = ResourceType.ROCK;
         } else if (typeStr === 'fish') {
-          node.type = ResourceType.FISH;
+          // Important: Convert 'fish' type nodes to FISHING_SPOT instead of FISH
+          // This is necessary because database stores them as 'fish' but UI expects FISHING_SPOT
+          node.type = ResourceType.FISHING_SPOT;
+          
+          // Ensure they have spotType in metadata for proper mesh creation
+          if (!node.metadata) node.metadata = {};
+          if (!node.metadata.spotType) node.metadata.spotType = 'net';
+          if (!node.metadata.fishTypes) node.metadata.fishTypes = ['shrimp'];
+          
+          console.log(`%c 🎣 Converted 'fish' type to FISHING_SPOT for ${node.id}`, 
+            "background: #03A9F4; color: white; font-size: 12px;");
         }
       });
       
@@ -299,6 +309,9 @@ export class ResourceController {
     // Add to scene
     this.scene.add(mesh);
     
+    // Create label for the resource
+    this.createResourceLabel(node, mesh);
+    
     // Store mesh with resource node
     node.mesh = mesh as THREE.Mesh;
     
@@ -308,6 +321,79 @@ export class ResourceController {
         soundManager.play('treeFall' as any);
       } else if (node.type === ResourceType.ROCK) {
         soundManager.play('rockBreak' as any);
+      }
+    }
+  }
+  
+  // Create a label for a resource node
+  private createResourceLabel(resource: ResourceNode, mesh: THREE.Object3D): void {
+    // Determine label text based on resource type and metadata
+    let labelText = "";
+    
+    if (resource.type === ResourceType.TREE || resource.type === 'tree') {
+      const treeType = resource.metadata?.treeType || 'tree';
+      const displayTreeType = treeType.replace('_tree', '').replace('_', ' ');
+      labelText = `Chop ${displayTreeType}`;
+    } 
+    else if (resource.type === ResourceType.ROCK || resource.type === 'rock') {
+      const rockType = resource.metadata?.rockType || 'rock';
+      const displayRockType = rockType.replace('_rock', '').replace('_', ' ');
+      labelText = `Mine ${displayRockType}`;
+    }
+    else if (resource.type === ResourceType.FISHING_SPOT || resource.type === 'fish') {
+      const spotType = resource.metadata?.spotType || 'fishing spot';
+      const fishTypes = resource.metadata?.fishTypes || [];
+      
+      if (fishTypes.length > 0) {
+        const displayFishType = fishTypes[0].replace('_', ' ');
+        labelText = `Fish ${displayFishType}`;
+      } else {
+        labelText = `Fishing spot`;
+      }
+    }
+    
+    if (labelText) {
+      // Create canvas for label text
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 64;
+      const context = canvas.getContext('2d');
+      
+      if (context) {
+        // Draw background with transparency
+        context.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw border
+        context.strokeStyle = '#FFFFFF';
+        context.lineWidth = 2;
+        context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+        
+        // Draw text
+        context.font = 'bold 20px Arial';
+        context.fillStyle = '#FFFFFF';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(labelText, canvas.width / 2, canvas.height / 2);
+        
+        // Create sprite from canvas
+        const texture = new THREE.CanvasTexture(canvas);
+        const material = new THREE.SpriteMaterial({ 
+          map: texture, 
+          transparent: true,
+          depthTest: false // Always show on top
+        });
+        
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(5, 1.5, 1);
+        
+        // Position label above resource
+        const meshHeight = mesh.scale.y || 1;
+        const labelHeight = resource.type === ResourceType.TREE ? 6 : 2; // Trees are taller
+        sprite.position.set(0, labelHeight, 0);
+        
+        // Add label as a child of the resource mesh
+        mesh.add(sprite);
       }
     }
   }
@@ -348,7 +434,11 @@ export class ResourceController {
         } else if (typeStr === 'rock') {
           nodeType = ResourceType.ROCK;
         } else if (typeStr === 'fish') {
-          nodeType = ResourceType.FISH;
+          nodeType = ResourceType.FISHING_SPOT;
+          // Ensure fishing spot has proper metadata
+          if (!node.metadata) node.metadata = {};
+          if (!node.metadata.spotType) node.metadata.spotType = 'net';
+          if (!node.metadata.fishTypes) node.metadata.fishTypes = ['shrimp'];
         } else {
           console.error(`Invalid resource type: ${node.type}`);
           nodeType = ResourceType.TREE; // Default to tree as a fallback
@@ -368,9 +458,13 @@ export class ResourceController {
       // Store resource ID in userData for raycasting
       mesh.userData.resourceId = node.id;
       mesh.userData.resourceType = nodeType;
+      mesh.userData.isInteractable = true; // Make sure it's marked as interactable
       
       // Add to scene
       this.scene.add(mesh);
+      
+      // Create label for the resource
+      this.createResourceLabel(node, mesh);
       
       // Store mesh with resource node
       node.mesh = mesh as THREE.Mesh;

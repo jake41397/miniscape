@@ -105,20 +105,47 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
         
         // Different options based on resource type
         if (resource.type === ResourceType.TREE) {
+          // Get specific tree type from metadata
+          const treeType = resource.metadata?.treeType || 'normal_tree';
+          // Convert tree type to display name (e.g., oak_tree -> Oak)
+          const treeDisplayName = treeType.replace('_tree', '').replace(/_/g, ' ');
+          const displayName = treeDisplayName === 'normal' ? 'Tree' : treeDisplayName.charAt(0).toUpperCase() + treeDisplayName.slice(1);
+          
           items.push({
-            label: `Chop tree ${tooFar ? '(too far)' : ''}`,
+            label: `Chop ${displayName} ${tooFar ? '(too far)' : ''}`,
             action: () => {
-              console.log(`%c 🪓 CHOP TREE ACTION: ${resource.id}`, "background: green; color: white; font-size: 16px;");
+              console.log(`%c 🪓 CHOP TREE ACTION: ${resource.id} (${treeType})`, "background: green; color: white; font-size: 16px;");
               onInteractWithResource(resource.id, 'chop');
             },
             disabled: tooFar
           });
         } else if (resource.type === ResourceType.ROCK) {
+          // Get specific rock type from metadata
+          const rockType = resource.metadata?.rockType || 'stone';
+          // Convert rock type to display name (e.g., copper_rock -> Copper)
+          const rockDisplayName = rockType.replace('_rock', '').replace(/_/g, ' ');
+          const displayName = rockDisplayName === 'stone' ? 'Rock' : rockDisplayName.charAt(0).toUpperCase() + rockDisplayName.slice(1);
+          
           items.push({
-            label: `Mine rock ${tooFar ? '(too far)' : ''}`,
+            label: `Mine ${displayName} ${tooFar ? '(too far)' : ''}`,
             action: () => {
-              console.log(`%c ⛏️ MINE ROCK ACTION: ${resource.id}`, "background: gray; color: white; font-size: 16px;");
+              console.log(`%c ⛏️ MINE ROCK ACTION: ${resource.id} (${rockType})`, "background: gray; color: white; font-size: 16px;");
               onInteractWithResource(resource.id, 'mine');
+            },
+            disabled: tooFar
+          });
+        } else if (resource.type === ResourceType.FISHING_SPOT || resource.type === 'fish') {
+          // Get fishing spot details
+          const spotType = resource.metadata?.spotType || 'net';
+          const fishTypes = resource.metadata?.fishTypes || ['fish'];
+          const primaryFish = fishTypes[0].replace(/_/g, ' ');
+          const displayName = primaryFish.charAt(0).toUpperCase() + primaryFish.slice(1);
+          
+          items.push({
+            label: `Fish ${displayName} ${tooFar ? '(too far)' : ''}`,
+            action: () => {
+              console.log(`%c 🎣 FISH ACTION: ${resource.id} (${spotType}) [type=${resource.type}]`, "background: blue; color: white; font-size: 16px;");
+              onInteractWithResource(resource.id, 'fish');
             },
             disabled: tooFar
           });
