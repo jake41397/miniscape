@@ -4,7 +4,7 @@
 - [x] Lumbridge (Starter Town)
   - [x] Create Lumbridge zone with defined boundaries
   - [ ] Add tutorial elements (guide NPC, signposts)
-  - [ ] Implement key landmarks (Lumbridge castle, shops)
+  - [ ] Implement key landmarks meshes (Lumbridge castle, shops)
   - [x] Designate as a safe zone (no PvP)
 
 - [x] Wilderness (PvP-Enabled Zone)
@@ -16,13 +16,11 @@
 
 - [x] Grand Exchange (Trading Hub)
   - [x] Design central marketplace area
-  - [ ] Create buy/sell offer UI
-  - [ ] Implement escrow system for transactions
-  - [ ] Add order matching system
-  - [ ] Build offer status tracking
+  - [ ] Create and render mesh for grand exchange with coming soon sign
 
 - [x] Barbarian Village (Mining Area)
   - [x] Design village layout with mining theme
+  - [ ] Create and render mesh for barbarian huts
   - [x] Add multiple ore rock types (tin, coal)
   - [ ] Create non-aggressive NPCs
   - [ ] Link to smithing activities
@@ -63,21 +61,8 @@
   - [x] Add level-up notifications
   - [x] Link skills to relevant activities
 
-- [ ] Trading System
-  - [ ] Create player-to-player trading interface
-  - [ ] Implement trade request system
-  - [ ] Add secure item exchange mechanics
-  - [ ] Link with Grand Exchange for asynchronous trading
-
 - [ ] Social System
-  - [ ] Enhance chat with channels (global, local, trade)
-  - [ ] Add friends list
-  - [ ] Implement player interaction options
-  - [ ] Add emotes/gestures
+  - [ ] Implement player interaction options, right click player context menu
 
-## Performance and Polish
-- [ ] Optimize resource loading and rendering
-- [x] Add sound effects for actions
-- [ ] Implement responsive UI for different devices
-- [ ] Add tutorial popups for new players
+## Tutorial
 - [ ] Create intro sequence for first-time players 
