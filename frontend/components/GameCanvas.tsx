@@ -29,6 +29,7 @@ import { PlayerController } from './game/PlayerController';
 import { SocketController } from './game/SocketController';
 import WorldContextMenu from './ui/WorldContextMenu';
 import { ResourceController } from './game/ResourceController';
+import SkillsPanel from './ui/SkillsPanel';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -1123,17 +1124,27 @@ const GameCanvas: React.FC = () => {
             )
           },
           {
+            icon: <span style={{ fontSize: '16px' }}>📊</span>,
+            label: "Skills",
+            content: (
+              <SkillsPanel
+                visible={true}
+                onClose={() => {}} // This will be handled by TabMenu
+              />
+            )
+          },
+          {
             icon: <span style={{ fontSize: '16px' }}>⚙️</span>,
             label: "Settings",
             content: (
-      <GameSettings
-        playerName={playerName}
-        setPlayerName={setPlayerName}
-        soundEnabled={soundEnabled}
-        setSoundEnabled={setSoundEnabled}
-        isHorizontalInverted={isHorizontalInverted}
-        setIsHorizontalInverted={setIsHorizontalInverted}
-        isHorizontalInvertedRef={isHorizontalInvertedRef}
+              <GameSettings
+                playerName={playerName}
+                setPlayerName={setPlayerName}
+                soundEnabled={soundEnabled}
+                setSoundEnabled={setSoundEnabled}
+                isHorizontalInverted={isHorizontalInverted}
+                setIsHorizontalInverted={setIsHorizontalInverted}
+                isHorizontalInvertedRef={isHorizontalInvertedRef}
               />
             )
           }

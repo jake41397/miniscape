@@ -65,6 +65,11 @@ export class ResourceController {
     // Log the full node data structure for debugging
     console.log("Complete resource nodes data:", JSON.stringify(nodes));
     
+    // Add extra debug logging for metadata
+    nodes.forEach(node => {
+      console.log(`Node ${node.id} (${node.type}) metadata:`, node.metadata);
+    });
+    
     // If no nodes received, create default resources
     if (nodes.length === 0) {
       console.warn("%c ⚠️ No resource nodes received from server! Creating default resources.", "background: #FFC107; color: black; font-size: 14px;");
@@ -280,7 +285,7 @@ export class ResourceController {
     }
     
     // Create new mesh based on node type and state
-    const mesh = createResourceMesh(node.type as ResourceType, node.state || 'normal');
+    const mesh = createResourceMesh(node.type as ResourceType, node.state || 'normal', node.metadata);
     mesh.position.set(node.x, node.y, node.z);
     
     // Add shadow casting
@@ -353,7 +358,7 @@ export class ResourceController {
       }
       
       // Create mesh based on node type and state
-      const mesh = createResourceMesh(nodeType, node.state || 'normal');
+      const mesh = createResourceMesh(nodeType, node.state || 'normal', node.metadata);
       mesh.position.set(node.x, node.y, node.z);
       
       // Add shadow casting
@@ -455,22 +460,141 @@ export class ResourceController {
     // Define default resource nodes
     const defaultResources: ResourceNode[] = [
       // Trees in Lumbridge area
-      { id: 'tree-1', type: ResourceType.TREE, x: 10, y: 0, z: 10 },
-      { id: 'tree-2', type: ResourceType.TREE, x: 15, y: 0, z: 15 },
-      { id: 'tree-3', type: ResourceType.TREE, x: 20, y: 0, z: 10 },
+      { id: 'tree-1', type: ResourceType.TREE, x: 10, y: 1, z: 10 },
+      { id: 'tree-2', type: ResourceType.TREE, x: 15, y: 1, z: 15 },
+      { id: 'tree-3', type: ResourceType.TREE, x: 20, y: 1, z: 10 },
       
       // Rocks in Barbarian Village
-      { id: 'rock-1', type: ResourceType.ROCK, x: -20, y: 0, z: -20 },
-      { id: 'rock-2', type: ResourceType.ROCK, x: -25, y: 0, z: -15 },
+      { id: 'rock-1', type: ResourceType.ROCK, x: -20, y: 1, z: -20 },
+      { id: 'rock-2', type: ResourceType.ROCK, x: -25, y: 1, z: -15 },
       
       // Fishing spots
-      { id: 'fish-1', type: ResourceType.FISH, x: 30, y: 0, z: -30 },
+      { id: 'fish-1', type: ResourceType.FISH, x: 30, y: 1, z: -30 },
     ];
     
     console.log(`Created ${defaultResources.length} default resources:`, 
       defaultResources.map(r => `${r.id} (${r.type}) at (${r.x}, ${r.y}, ${r.z})`));
     
     return defaultResources;
+  }
+
+  /**
+   * Handle clicking on a resource node
+   * @param resourceId The ID of the resource that was clicked
+   * @param socket The socket connection to use
+   */
+  public handleResourceClick(resourceId: string, socket: any): void {
+    // Find the resource node
+    const resourceNode = this.resourceNodesRef.current.find(n => n.id === resourceId);
+    if (!resourceNode) {
+      console.error(`Resource node not found: ${resourceId}`);
+      return;
+    }
+
+    console.log(`Clicked on resource: ${resourceId} (${resourceNode.type})`);
+
+    // Start gathering
+    socket.emit('start_gathering', { resourceId });
+    
+    // Set up listeners for resource gathering events if they don't exist yet
+    if (!socket._resourceListenersInitialized) {
+      // Listen for gathering success
+      socket.on('gather_success', (data: { resourceId: string, itemType: string, remainingResources: number }) => {
+        console.log(`Gathered ${data.itemType} from ${data.resourceId} (${data.remainingResources} remaining)`);
+        
+        // Update the resource node state
+        this.updateResourceNodeState(data.resourceId, { 
+          remainingResources: data.remainingResources 
+        });
+        
+        // Play appropriate sound based on resource type
+        const node = this.resourceNodesRef.current.find(n => n.id === data.resourceId);
+        if (node) {
+          if (node.type === ResourceType.TREE || node.type === 'tree') {
+            soundManager.play('chop');
+          } else if (node.type === ResourceType.ROCK || node.type === 'rock') {
+            soundManager.play('mine');
+          } else if (node.type === ResourceType.FISHING_SPOT || node.type === 'fish') {
+            soundManager.play('splash');
+          }
+        }
+      });
+      
+      // Listen for gathering errors
+      socket.on('gather_error', (data: { message: string }) => {
+        console.error(`Gathering error: ${data.message}`);
+      });
+      
+      // Listen for resource depletion
+      socket.on('resource_depleted', (data: { resourceId: string }) => {
+        console.log(`Resource ${data.resourceId} depleted`);
+        
+        // Update resource visual state
+        this.updateResourceNodeState(data.resourceId, { 
+          state: 'harvested',
+          remainingResources: 0
+        });
+        
+        // Play depletion sound
+        const node = this.resourceNodesRef.current.find(n => n.id === data.resourceId);
+        if (node) {
+          if (node.type === ResourceType.TREE || node.type === 'tree') {
+            soundManager.play('treeFall');
+          } else if (node.type === ResourceType.ROCK || node.type === 'rock') {
+            soundManager.play('rockBreak');
+          }
+        }
+      });
+      
+      // Listen for resource respawn
+      socket.on('resource_respawned', (data: { resourceId: string }) => {
+        console.log(`Resource ${data.resourceId} respawned`);
+        
+        // Update resource visual state
+        this.updateResourceNodeState(data.resourceId, { 
+          state: 'normal'
+        });
+        
+        // Play respawn sound (subtle pop or shimmer)
+        soundManager.play('respawn');
+      });
+      
+      // Listen for XP gained
+      socket.on('xp_gained', (data: { 
+        skill: string, 
+        amount: number, 
+        total: number, 
+        level: number, 
+        leveledUp: boolean 
+      }) => {
+        console.log(`Gained ${data.amount} ${data.skill} XP (total: ${data.total}, level: ${data.level})`);
+        
+        // Update XP UI if you have one
+        // You might dispatch this to your UI state manager
+        
+        // Play XP sound
+        soundManager.play('xp');
+      });
+      
+      // Listen for level up
+      socket.on('level_up', (data: { skill: string, level: number }) => {
+        console.log(`Leveled up ${data.skill} to ${data.level}!`);
+        
+        // Show level up message and play celebration sound
+        soundManager.play('levelUp');
+      });
+      
+      // Mark that we've initialized the resource listeners
+      socket._resourceListenersInitialized = true;
+    }
+  }
+
+  /**
+   * Stop gathering resources
+   * @param socket The socket connection to use
+   */
+  public stopGathering(socket: any): void {
+    socket.emit('stop_gathering');
   }
 }
 

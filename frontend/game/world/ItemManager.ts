@@ -446,7 +446,7 @@ class ItemManager {
       }
       
       // Set position - make sure it's slightly above ground to prevent z-fighting
-      const posY = Math.max(item.y, 0.2); // Ensure minimum height
+      const posY = Math.max(item.y, 0.25); // Ensure minimum height
       mesh.position.set(item.x, posY, item.z);
       
       // Add a unique ID to the mesh itself for easier debugging

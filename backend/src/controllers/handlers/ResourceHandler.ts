@@ -1,7 +1,19 @@
-import { Server } from 'socket.io';
+import { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
-import { loadResourceNodes, savePlayerInventory } from '../../models/gameModel';
-import { ExtendedSocket, PlayersStore, ResourceNode } from '../types';
+import { loadResourceNodes, savePlayerInventory, savePlayerSkills } from '../../models/gameModel';
+import { ExtendedSocket, PlayersStore } from '../types';
+
+interface ResourceNode {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  z: number;
+  respawnTime: number;
+  state: 'normal' | 'harvested';
+  remainingResources: number;
+  metadata?: Record<string, any>;
+}
 
 export class ResourceHandler {
   private io: Server;
@@ -23,7 +35,7 @@ export class ResourceHandler {
       // Load resource nodes from database
       console.log('Attempting to load resource nodes from database...');
       this.resourceNodes = await loadResourceNodes();
-      console.log(`Loaded ${this.resourceNodes.length} resource nodes from database:`, this.resourceNodes.map(node => node.id));
+      console.log(`Loaded ${this.resourceNodes.length} resource nodes from database:`, this.resourceNodes.map(node => node.id).slice(0, 10), this.resourceNodes.length > 10 ? '...(and more)' : '');
       
       // Display exact object structure for debugging
       if (this.resourceNodes.length > 0) {
@@ -32,8 +44,20 @@ export class ResourceHandler {
       
       // Initialize default resources if none were loaded from database
       if (this.resourceNodes.length === 0) {
-        console.log('No resources found in database, initializing defaults');
-        this.initializeDefaultResources();
+        console.warn('No resources found in database, waiting 3 seconds before initializing defaults...');
+        
+        // Wait a bit before falling back to defaults, in case DB is still connecting
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Try loading one more time
+        this.resourceNodes = await loadResourceNodes();
+        
+        if (this.resourceNodes.length === 0) {
+          console.warn('Still no resources after retry, initializing defaults');
+          this.initializeDefaultResources();
+        } else {
+          console.log(`Successfully loaded ${this.resourceNodes.length} resource nodes on second attempt`);
+        }
         return;
       }
       
@@ -46,8 +70,12 @@ export class ResourceHandler {
           node.state = 'normal'; // Default to normal state
         }
       });
+      
+      // Start respawn checker in case server was restarted while resources were depleted
+      this.startRespawnChecker();
     } catch (error) {
       console.error('Failed to initialize resource nodes:', error);
+      console.error('Stack trace:', new Error().stack);
       // Initialize with some default resources if database load fails
       this.initializeDefaultResources();
     }
@@ -156,7 +184,7 @@ export class ResourceHandler {
             });
             
             // Start the gathering process
-            this.startGathering(socket, resourceNode, 'chop');
+            this.startResourceGathering(socket, resourceNode, 'chop');
           } else {
             socket.emit('error', 'You need an axe to chop down this tree');
             socket.emit('chatMessage', { 
@@ -176,7 +204,7 @@ export class ResourceHandler {
             });
             
             // Start the gathering process
-            this.startGathering(socket, resourceNode, 'mine');
+            this.startResourceGathering(socket, resourceNode, 'mine');
           } else {
             socket.emit('error', 'You need a pickaxe to mine this rock');
             socket.emit('chatMessage', { 
@@ -220,9 +248,9 @@ export class ResourceHandler {
   }
   
   /**
-   * Start the gathering process for a player
+   * Start gathering with a tool
    */
-  private startGathering(socket: ExtendedSocket, resourceNode: ResourceNode, action: string): void {
+  private startResourceGathering(socket: ExtendedSocket, resourceNode: ResourceNode, action: string): void {
     const playerId = socket.id;
     
     // Initialize remaining resources if not set
@@ -263,10 +291,10 @@ export class ResourceHandler {
         }
         
         // Decrement remaining resources
-        resourceNode.remainingResources!--;
+        resourceNode.remainingResources--;
         
         // Check if resource is depleted
-        if (resourceNode.remainingResources! <= 0) {
+        if (resourceNode.remainingResources <= 0) {
           // Resource is depleted, mark as harvested
           resourceNode.state = 'harvested';
           this.stopGatheringForPlayer(playerId);
@@ -296,17 +324,144 @@ export class ResourceHandler {
     
     socket.emit('gatheringStarted', { resourceId: resourceNode.id, action });
   }
-  
+
   /**
-   * Stop gathering for a specific player
+   * Start gathering from a resource
    */
-  private stopGatheringForPlayer(playerId: string): void {
-    const gatheringInfo = this.gatheringPlayers.get(playerId);
-    if (gatheringInfo) {
-      clearInterval(gatheringInfo.intervalId);
-      this.gatheringPlayers.delete(playerId);
-      console.log(`Stopped gathering for player ${playerId}`);
+  public startGathering(socket: ExtendedSocket, resourceId: string): void {
+    // Find the resource node
+    const resourceNode = this.resourceNodes.find(node => node.id === resourceId);
+    if (!resourceNode) {
+      socket.emit('gather_error', { message: 'Resource not found' });
+      return;
     }
+
+    // Check if resource is depleted
+    if (resourceNode.state === 'harvested') {
+      socket.emit('gather_error', { message: 'This resource is depleted' });
+      return;
+    }
+
+    // Check if player is already gathering
+    if (this.gatheringPlayers.has(socket.id)) {
+      this.stopGathering(socket.id);
+    }
+
+    // Get player
+    const player = this.players[socket.id];
+    if (!player) {
+      socket.emit('gather_error', { message: 'Player not found' });
+      return;
+    }
+
+    // Start gathering interval
+    const gatherInterval = setInterval(() => {
+      this.gatherResource(socket, resourceNode);
+    }, 3000); // Gather every 3 seconds
+
+    // Store gathering state
+    this.gatheringPlayers.set(socket.id, { 
+      resourceId, 
+      intervalId: gatherInterval 
+    });
+
+    // Notify client
+    socket.emit('start_gathering', { resourceId });
+  }
+
+  /**
+   * Harvest a resource
+   */
+  private gatherResource(socket: ExtendedSocket, resourceNode: ResourceNode): void {
+    // Decrease remaining resources
+    resourceNode.remainingResources--;
+
+    // Determine item type based on resource
+    const itemType = this.getItemTypeFromResource(resourceNode);
+    
+    // Add item to player inventory
+    const player = this.players[socket.id];
+    if (player) {
+      player.inventory.push({
+        id: uuidv4(),
+        type: itemType,
+        quantity: 1
+      });
+      
+      // Save player inventory
+      this.savePlayerInventory(socket, player.inventory);
+      
+      // Notify client
+      socket.emit('gather_success', { 
+        resourceId: resourceNode.id,
+        itemType,
+        remainingResources: resourceNode.remainingResources
+      });
+    }
+
+    // Check if resource is now depleted
+    if (resourceNode.remainingResources <= 0) {
+      this.depleteResource(resourceNode.id);
+      this.stopGathering(socket.id);
+    }
+  }
+
+  /**
+   * Get the type of item obtained from a resource
+   */
+  private getItemTypeFromResource(resourceNode: ResourceNode): string {
+    const { type, metadata } = resourceNode;
+    
+    if (type === 'tree') {
+      const treeType = metadata?.treeType || 'normal_tree';
+      
+      // Different logs based on tree type
+      if (treeType === 'normal_tree') return 'logs';
+      if (treeType === 'oak_tree') return 'oak_logs';
+      if (treeType === 'willow_tree') return 'willow_logs';
+      if (treeType === 'maple_tree') return 'maple_logs';
+      if (treeType === 'yew_tree') return 'yew_logs';
+      if (treeType === 'magic_tree') return 'magic_logs';
+      
+      return 'logs';
+    }
+    
+    if (type === 'rock') {
+      const rockType = metadata?.rockType || 'stone';
+      
+      // Different ores based on rock type
+      if (rockType === 'copper_rock') return 'copper_ore';
+      if (rockType === 'tin_rock') return 'tin_ore';
+      if (rockType === 'iron_rock') return 'iron_ore';
+      if (rockType === 'coal_rock') return 'coal';
+      if (rockType === 'gold_rock') return 'gold_ore';
+      if (rockType === 'mithril_rock') return 'mithril_ore';
+      if (rockType === 'adamantite_rock') return 'adamantite_ore';
+      if (rockType === 'runite_rock') return 'runite_ore';
+      
+      return 'stone';
+    }
+    
+    if (type === 'fish') {
+      const fishTypes = metadata?.fishTypes || ['shrimp'];
+      return `raw_${fishTypes[0]}`;
+    }
+    
+    return 'unknown_item';
+  }
+
+  /**
+   * Stop a player from gathering
+   */
+  public stopGathering(socketId: string): void {
+    const gatherData = this.gatheringPlayers.get(socketId);
+    if (!gatherData) return;
+
+    // Clear gathering interval
+    clearInterval(gatherData.intervalId);
+    
+    // Remove from gathering players
+    this.gatheringPlayers.delete(socketId);
   }
   
   /**
@@ -610,87 +765,329 @@ export class ResourceHandler {
   /**
    * Initialize default resources if database load fails
    */
-  private initializeDefaultResources(): void {
-    this.resourceNodes = [
+  private async initializeDefaultResources(): Promise<void> {
+    console.log('Initializing default resources...');
+    
+    // Define default resource nodes
+    const defaultNodes = [
       {
         id: 'tree-1',
         type: 'tree',
-        x: 10,
-        y: 0,
-        z: 10,
-        respawnTime: 60000, // 60 seconds in ms
-        remainingResources: 5,
-        state: 'normal'
+        node_type: 'tree',
+        specific_type: 'normal_tree',
+        x: 10, y: 1, z: 10,
+        respawn_time: 60
       },
       {
         id: 'tree-2',
         type: 'tree',
-        x: 15,
-        y: 0,
-        z: 15,
-        respawnTime: 60000,
-        remainingResources: 5,
-        state: 'normal'
+        node_type: 'tree',
+        specific_type: 'normal_tree',
+        x: 15, y: 1, z: 15,
+        respawn_time: 60
       },
       {
         id: 'tree-3',
         type: 'tree',
-        x: 20,
-        y: 0,
-        z: 10,
-        respawnTime: 60000,
-        remainingResources: 5,
-        state: 'normal'
+        node_type: 'tree',
+        specific_type: 'normal_tree',
+        x: 20, y: 1, z: 10,
+        respawn_time: 60
       },
       {
         id: 'rock-1',
         type: 'rock',
-        x: -20,
-        y: 0,
-        z: -20,
-        respawnTime: 60000,
-        remainingResources: 5,
-        state: 'normal'
+        node_type: 'rock',
+        specific_type: 'copper_rock',
+        x: -20, y: 1, z: -20,
+        respawn_time: 60
       },
       {
         id: 'rock-2',
         type: 'rock',
-        x: -25,
-        y: 0,
-        z: -15,
-        respawnTime: 60000,
-        remainingResources: 5,
-        state: 'normal'
+        node_type: 'rock',
+        specific_type: 'tin_rock',
+        x: -25, y: 1, z: -15,
+        respawn_time: 60
       },
       {
         id: 'fish-1',
         type: 'fish',
-        x: 30,
-        y: 0,
-        z: -30,
-        respawnTime: 60000,
-        remainingResources: 5,
-        state: 'normal'
+        node_type: 'fish',
+        specific_type: 'shrimp_spot',
+        x: 30, y: 1, z: -30,
+        respawn_time: 60
       }
     ];
-    console.log('Initialized default resources:', this.resourceNodes.map(r => r.id).join(', '));
+    
+    // First try to insert them into database
+    try {
+      console.log('Attempting to save default resources to database...');
+      
+      const { insertResourceNode } = await import('../../models/gameModel');
+      
+      // For each default node, try to insert it into the database
+      for (const node of defaultNodes) {
+        const nodeData = {
+          node_type: node.node_type,
+          specific_type: node.specific_type,
+          x: node.x,
+          y: node.y,
+          z: node.z,
+          respawn_time: node.respawn_time
+        };
+        
+        const id = await insertResourceNode(nodeData);
+        console.log(`Inserted default resource into database: ${node.type} at (${node.x}, ${node.z}) with ID: ${id || 'failed'}`);
+      }
+      
+      // Try loading from database again after inserts
+      console.log('Reloading resources from database after inserting defaults...');
+      const { loadResourceNodes } = await import('../../models/gameModel');
+      this.resourceNodes = await loadResourceNodes();
+      
+      if (this.resourceNodes.length > 0) {
+        console.log(`Successfully loaded ${this.resourceNodes.length} resource nodes after inserting defaults.`);
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to save default resources to database:', error);
+    }
+    
+    // If database operations failed, use in-memory defaults
+    console.log('Using in-memory default resources as fallback');
+    
+    this.resourceNodes = defaultNodes.map(node => ({
+      id: node.id,
+      type: node.type,
+      x: node.x,
+      y: node.y,
+      z: node.z,
+      respawnTime: node.respawn_time * 1000, // Convert to milliseconds
+      remainingResources: 5,
+      state: 'normal',
+      metadata: node.node_type === 'tree' ? { treeType: node.specific_type } : 
+                node.node_type === 'rock' ? { rockType: node.specific_type } :
+                node.node_type === 'fish' ? { fishTypes: [node.specific_type.replace('_spot', '')] } : {}
+    }));
+    
+    console.log(`Initialized ${this.resourceNodes.length} default resources:`, this.resourceNodes.map(r => r.id).join(', '));
   }
   
   /**
    * Get all resource nodes
    */
-  public getResourceNodes(): ResourceNode[] {
+  public async getResourceNodes(): Promise<ResourceNode[]> {
     console.log(`getResourceNodes called, returning ${this.resourceNodes.length} nodes:`, 
-      this.resourceNodes.map(node => ({ id: node.id, type: node.type })));
+      this.resourceNodes.map(node => ({ id: node.id, type: node.type })).slice(0, 5));
     
-    // If no resources exist, initialize defaults
+    // If no resources exist, try loading from database again before falling back to defaults
     if (this.resourceNodes.length === 0) {
-      console.warn('No resources found in getResourceNodes, initializing defaults');
-      this.initializeDefaultResources();
-      console.log(`Now returning ${this.resourceNodes.length} default nodes`);
+      console.warn('No resources found in getResourceNodes, attempting to reload from database');
+      
+      try {
+        // Try loading from database first
+        this.resourceNodes = await loadResourceNodes();
+        
+        // Only initialize defaults if database load fails
+        if (this.resourceNodes.length === 0) {
+          console.warn('Still no resources after database retry, initializing defaults');
+          this.initializeDefaultResources();
+        } else {
+          console.log(`Successfully loaded ${this.resourceNodes.length} resource nodes from database in getResourceNodes`);
+        }
+      } catch (error) {
+        console.error('Error reloading resources:', error);
+        this.initializeDefaultResources();
+      }
     }
     
     return this.resourceNodes as ResourceNode[];
+  }
+
+  /**
+   * Start a periodic check for respawning resources and persist resources to DB
+   */
+  private startRespawnChecker(): void {
+    // Check for resources to respawn every 10 seconds
+    setInterval(() => {
+      const now = Date.now();
+      
+      // Check all unavailable resources
+      this.unavailableResources.forEach((respawnAt, resourceId) => {
+        if (now >= respawnAt) {
+          this.respawnResource(resourceId);
+        }
+      });
+    }, 10000); // Check every 10 seconds
+    
+    // Persist current resource state to database every 5 minutes
+    setInterval(() => {
+      this.persistResourcesToDB();
+    }, 5 * 60 * 1000); // Every 5 minutes
+  }
+
+  /**
+   * Persist all resource nodes back to the database to maintain state across restarts
+   */
+  private async persistResourcesToDB(): Promise<void> {
+    try {
+      console.log('Persisting resource states to database...');
+      
+      // Use Supabase to store the current state of all resources
+      const supabase = (await import('../../config/supabase')).default;
+      
+      // For each resource node, update its state in the database
+      let successCount = 0;
+      let errorCount = 0;
+      
+      // Process in batches to avoid overwhelming the database
+      const batchSize = 10;
+      const batches = Math.ceil(this.resourceNodes.length / batchSize);
+      
+      for (let i = 0; i < batches; i++) {
+        const start = i * batchSize;
+        const end = Math.min(start + batchSize, this.resourceNodes.length);
+        const batch = this.resourceNodes.slice(start, end);
+        
+        const promises = batch.map(async (node) => {
+          try {
+            // Update only the state and respawn time, not position/type
+            const { error } = await supabase
+              .from('resource_nodes')
+              .update({
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', node.id);
+            
+            if (error) {
+              console.error(`Error updating resource node ${node.id}:`, error);
+              errorCount++;
+              return false;
+            }
+            
+            successCount++;
+            return true;
+          } catch (err) {
+            console.error(`Error in database operation for node ${node.id}:`, err);
+            errorCount++;
+            return false;
+          }
+        });
+        
+        await Promise.all(promises);
+      }
+      
+      console.log(`Resource persistence complete. Success: ${successCount}, Errors: ${errorCount}`);
+    } catch (error) {
+      console.error('Failed to persist resources to database:', error);
+    }
+  }
+
+  /**
+   * Mark a resource as depleted and schedule its respawn
+   */
+  private depleteResource(resourceId: string): void {
+    const resourceNode = this.resourceNodes.find(node => node.id === resourceId);
+    if (!resourceNode) return;
+
+    // Update resource state
+    resourceNode.state = 'harvested';
+    resourceNode.remainingResources = 0;
+    
+    // Broadcast resource depletion to all clients
+    this.io.emit('resource_depleted', { resourceId });
+
+    // Schedule resource respawn
+    const respawnTime = resourceNode.respawnTime;
+    this.scheduleRespawn(resourceId, respawnTime);
+  }
+
+  /**
+   * Schedule a resource to respawn after the specified time
+   */
+  private scheduleRespawn(resourceId: string, respawnTime: number): void {
+    // Store when the resource should respawn
+    const respawnAt = Date.now() + respawnTime;
+    this.unavailableResources.set(resourceId, respawnAt);
+
+    // Set timeout to respawn the resource
+    setTimeout(() => {
+      this.respawnResource(resourceId);
+    }, respawnTime);
+  }
+
+  /**
+   * Respawn a depleted resource
+   */
+  private respawnResource(resourceId: string): void {
+    const resourceNode = this.resourceNodes.find(node => node.id === resourceId);
+    if (!resourceNode) return;
+
+    // Reset resource state
+    resourceNode.state = 'normal';
+    
+    // Set remaining resources based on resource type
+    const specificType = 
+      resourceNode.type === 'tree' ? resourceNode.metadata?.treeType :
+      resourceNode.type === 'rock' ? resourceNode.metadata?.rockType :
+      resourceNode.type === 'fish' ? (resourceNode.metadata?.fishTypes?.[0] + '_spot') : null;
+    
+    if (specificType) {
+      if (specificType.includes('magic') || specificType.includes('runite')) {
+        resourceNode.remainingResources = 2;
+      } else if (specificType.includes('yew') || specificType.includes('adamantite')) {
+        resourceNode.remainingResources = 3;
+      } else if (specificType.includes('maple') || specificType.includes('mithril')) {
+        resourceNode.remainingResources = 4;
+      } else {
+        resourceNode.remainingResources = 5;
+      }
+    } else {
+      resourceNode.remainingResources = 5; // Default
+    }
+    
+    // Remove from unavailable resources
+    this.unavailableResources.delete(resourceId);
+
+    // Broadcast resource respawn to all clients
+    this.io.emit('resource_respawned', { resourceId });
+  }
+
+  /**
+   * Save player inventory to database
+   */
+  private async savePlayerInventory(socket: ExtendedSocket, inventory: any[]): Promise<void> {
+    if (!socket.user?.id) return;
+    
+    try {
+      await savePlayerInventory(socket.user.id, inventory);
+    } catch (error) {
+      console.error('Failed to save player inventory:', error);
+    }
+  }
+
+  /**
+   * Save player skills to database
+   */
+  private async savePlayerSkills(userId: string, skills: any): Promise<void> {
+    try {
+      await savePlayerSkills(userId, skills);
+    } catch (error) {
+      console.error('Failed to save player skills:', error);
+    }
+  }
+
+  /**
+   * Stop gathering for a specific player
+   */
+  private stopGatheringForPlayer(playerId: string): void {
+    const gatheringInfo = this.gatheringPlayers.get(playerId);
+    if (gatheringInfo) {
+      clearInterval(gatheringInfo.intervalId);
+      this.gatheringPlayers.delete(playerId);
+      console.log(`Stopped gathering for player ${playerId}`);
+    }
   }
 }
 

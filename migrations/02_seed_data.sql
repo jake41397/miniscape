@@ -1,4 +1,6 @@
 -- Seed resource nodes (similar to the ones we had in-memory)
+-- Note: Metadata for resource nodes (tree types, rock types) is dynamically added based on
+-- coordinates in the backend/src/models/gameModel.ts loadResourceNodes function.
 INSERT INTO public.resource_nodes (id, node_type, x, y, z, respawn_time)
 VALUES 
   -- Trees in Lumbridge area
@@ -11,7 +13,27 @@ VALUES
   (uuid_generate_v4(), 'rock', -25, 1, -15, 60),
   
   -- Fishing spots
-  (uuid_generate_v4(), 'fish', 30, 1, -30, 45)
+  (uuid_generate_v4(), 'fish', 30, 1, -30, 45),
+  
+  -- New high-value resource nodes in Wilderness areas
+
+  -- Adamantite rocks in wilderness (northeastern section)
+  (uuid_generate_v4(), 'rock', 1500, 1, -1500, 120),
+  (uuid_generate_v4(), 'rock', 1600, 1, -1600, 120),
+  (uuid_generate_v4(), 'rock', 1700, 1, -1700, 120),
+  (uuid_generate_v4(), 'rock', 1800, 1, -1800, 120),
+  (uuid_generate_v4(), 'rock', 1900, 1, -1900, 120),
+  
+  -- Runite rocks in wilderness (northwestern section)
+  (uuid_generate_v4(), 'rock', -1500, 1, -1500, 180),
+  (uuid_generate_v4(), 'rock', -1600, 1, -1600, 180),
+  (uuid_generate_v4(), 'rock', -1700, 1, -1700, 180),
+  
+  -- Magic trees in deep wilderness (southwestern section)
+  (uuid_generate_v4(), 'tree', -1500, 1, 1500, 150),
+  (uuid_generate_v4(), 'tree', -1600, 1, 1600, 150),
+  (uuid_generate_v4(), 'tree', -1700, 1, 1700, 150),
+  (uuid_generate_v4(), 'tree', -1800, 1, 1800, 150)
 ON CONFLICT DO NOTHING;
 
 -- Add any other seed data here as needed 

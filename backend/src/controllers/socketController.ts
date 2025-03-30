@@ -56,6 +56,9 @@ interface ResourceNode {
   y: number;
   z: number;
   respawnTime: number;
+  remainingResources?: number;
+  state?: 'normal' | 'harvested';
+  metadata?: Record<string, any>;
 }
 
 interface ExtendedSocket extends Socket {
@@ -1173,60 +1176,29 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     setupChatCommandHandler(io, socket);
 
     // Add handling for resource nodes request
-    socket.on('getResourceNodes', () => {
-      console.log(`[${socket.id}] Client requested resource nodes`);
-      
+    socket.on('getResourceNodes', async () => {
       try {
-        // Send all resource nodes to the client
-        if (resourceHandler) {
-          const nodes = resourceHandler.getResourceNodes();
-          console.log(`[${socket.id}] Sending ${nodes.length} resource nodes to client`);
-          
-          if (nodes.length === 0) {
-            console.warn(`[${socket.id}] ResourceHandler returned 0 nodes, attempting to initialize defaults`);
-            // Force initialization of default resources
-            resourceHandler.initialize().then(() => {
-              const defaultNodes = resourceHandler.getResourceNodes();
-              console.log(`[${socket.id}] Now sending ${defaultNodes.length} default resource nodes`);
-              socket.emit('initResourceNodes', defaultNodes);
-            }).catch(err => {
-              console.error(`[${socket.id}] Failed to initialize default resources:`, err);
-              // Create emergency fallback resources directly
-              const fallbackResources = [
-                { id: 'tree-fallback-1', type: 'tree', x: 10, y: 0, z: 10, respawnTime: 60000, remainingResources: 5, state: 'normal' },
-                { id: 'rock-fallback-1', type: 'rock', x: -20, y: 0, z: -20, respawnTime: 60000, remainingResources: 5, state: 'normal' }
-              ];
-              console.log(`[${socket.id}] Sending ${fallbackResources.length} emergency fallback resources`);
-              socket.emit('initResourceNodes', fallbackResources);
-            });
-          } else {
-            // For each node, log the node ID and type for debugging
-            nodes.forEach((node: any) => {
-              console.log(`[${socket.id}] Resource: ${node.id} (${node.type}) at (${node.x}, ${node.z})`);
-            });
-            
-            socket.emit('initResourceNodes', nodes);
-          }
-        } else {
-          console.error(`[${socket.id}] ResourceHandler not initialized when sending resource nodes`);
-          // Create emergency fallback resources
-          const fallbackResources = [
-            { id: 'tree-emergency-1', type: 'tree', x: 10, y: 0, z: 10, respawnTime: 60000, remainingResources: 5, state: 'normal' },
-            { id: 'rock-emergency-1', type: 'rock', x: -20, y: 0, z: -20, respawnTime: 60000, remainingResources: 5, state: 'normal' }
-          ];
-          console.log(`[${socket.id}] Sending ${fallbackResources.length} emergency fallback resources (handler missing)`);
-          socket.emit('initResourceNodes', fallbackResources);
-        }
+        const nodes = await resourceHandler.getResourceNodes();
+        socket.emit('initResourceNodes', nodes);
       } catch (error) {
-        console.error(`[${socket.id}] Error sending resource nodes:`, error);
-        // Create emergency fallback resources
-        const fallbackResources = [
-          { id: 'tree-error-1', type: 'tree', x: 10, y: 0, z: 10, respawnTime: 60000, remainingResources: 5, state: 'normal' },
-          { id: 'rock-error-1', type: 'rock', x: -20, y: 0, z: -20, respawnTime: 60000, remainingResources: 5, state: 'normal' }
-        ];
-        console.log(`[${socket.id}] Sending ${fallbackResources.length} emergency fallback resources (error occurred)`);
-        socket.emit('initResourceNodes', fallbackResources);
+        console.error('Error sending resource nodes to client:', error);
+        socket.emit('error', 'Failed to load resource nodes');
       }
+    });
+
+    // Setup resource interaction handlers
+    resourceHandler.setupResourceInteractionHandler(socket);
+    resourceHandler.setupResourceGatheringHandler(socket);
+    
+    // Add resource gathering event handlers for the new database format
+    socket.on('start_gathering', (data: { resourceId: string }) => {
+      console.log(`Player ${socket.id} started gathering resource ${data.resourceId}`);
+      resourceHandler.startGathering(socket, data.resourceId);
+    });
+
+    socket.on('stop_gathering', () => {
+      console.log(`Player ${socket.id} stopped gathering`);
+      resourceHandler.stopGathering(socket.id);
     });
   } catch (error) {
     console.error(`Error in handleSingleConnection for ${socket.id}:`, error);

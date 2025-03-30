@@ -44,7 +44,7 @@ export interface PlayerMoveData {
 }
 
 // Player constants
-export const PLAYER_DEFAULT_Y = 1; // Default Y position when on ground
+export const PLAYER_DEFAULT_Y = 1;
 
 // Interaction
 export const GATHERING_COOLDOWN = 2000; // milliseconds 

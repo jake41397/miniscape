@@ -54,6 +54,7 @@ export interface ResourceNode {
   respawnTime: number;
   remainingResources?: number; // Track remaining resources before depletion
   state?: 'normal' | 'harvested'; // Track the visual state of the resource
+  metadata?: Record<string, any>; // Additional metadata for resource type
 }
 
 export interface ExtendedSocket extends Socket {

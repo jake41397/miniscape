@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.3",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "framer-motion": "^12.6.2"
   }
 }

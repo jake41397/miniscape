@@ -4,7 +4,8 @@ import * as THREE from 'three';
 export enum ResourceType {
   TREE = 'tree',
   ROCK = 'rock',
-  FISH = 'fish'
+  FISH = 'fish',
+  FISHING_SPOT = 'fishing_spot'
 }
 
 // World resource node
@@ -18,6 +19,7 @@ export interface ResourceNode {
   lodMeshes?: THREE.Object3D[]; // Array of LOD meshes
   state?: 'normal' | 'harvested'; // Track the visual state of the resource
   remainingResources?: number; // Track remaining resources before depletion
+  metadata?: Record<string, any>; // Additional metadata for the resource
 }
 
 // Dropped item in the world
@@ -127,6 +129,23 @@ export const createFishingSpotMesh = (): THREE.Mesh => {
   // Rotate to be horizontal
   spot.rotation.x = -Math.PI / 2;
   spot.position.y = 0.05; // Just above ground
+  
+  // Add ripple animation
+  const startScale = 1.0;
+  const animate = () => {
+    const time = Date.now() * 0.001; // Convert to seconds
+    spot.scale.set(
+      startScale + Math.sin(time * 2) * 0.1,
+      startScale,
+      startScale + Math.sin(time * 2) * 0.1
+    );
+    
+    // Update opacity for shimmering effect
+    (spot.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 3) * 0.2;
+  };
+  
+  // Add update function to mesh for animation
+  (spot as any).update = animate;
   
   return spot;
 };
@@ -460,38 +479,939 @@ export const updateDroppedItems = (items: WorldItem[], deltaTime: number) => {
   });
 };
 
-// Update the createResourceMesh function to handle harvested states
-export const createResourceMesh = (type: ResourceType, state: 'normal' | 'harvested' = 'normal'): THREE.Object3D => {
+// Create tree meshes for different types
+export const createNormalTreeMesh = (): THREE.Object3D => {
+  const treeLOD = new THREE.LOD();
+  
+  // Basic tree - smaller with green leaves
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // Brown
+  const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x2E8B57 }); // Sea green
+  
+  // High detail
+  const highDetailGroup = new THREE.Group();
+  const trunkGeometryHigh = new THREE.CylinderGeometry(0.4, 0.5, 2.5, 8);
+  const trunkHigh = new THREE.Mesh(trunkGeometryHigh, trunkMaterial);
+  trunkHigh.position.y = 1.25;
+  
+  const leavesGeometryHigh = new THREE.SphereGeometry(1.5, 8, 8);
+  const leavesHigh = new THREE.Mesh(leavesGeometryHigh, leavesMaterial);
+  leavesHigh.position.y = 3;
+  
+  highDetailGroup.add(trunkHigh);
+  highDetailGroup.add(leavesHigh);
+  treeLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail
+  const mediumDetailGroup = new THREE.Group();
+  const trunkGeometryMed = new THREE.CylinderGeometry(0.4, 0.5, 2.5, 6);
+  const trunkMed = new THREE.Mesh(trunkGeometryMed, trunkMaterial);
+  trunkMed.position.y = 1.25;
+  
+  const leavesGeometryMed = new THREE.SphereGeometry(1.5, 6, 6);
+  const leavesMed = new THREE.Mesh(leavesGeometryMed, leavesMaterial);
+  leavesMed.position.y = 3;
+  
+  mediumDetailGroup.add(trunkMed);
+  mediumDetailGroup.add(leavesMed);
+  treeLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail
+  const lowDetailGroup = new THREE.Group();
+  const trunkGeometryLow = new THREE.CylinderGeometry(0.4, 0.5, 2.5, 4);
+  const trunkLow = new THREE.Mesh(trunkGeometryLow, trunkMaterial);
+  trunkLow.position.y = 1.25;
+  
+  const leavesGeometryLow = new THREE.SphereGeometry(1.5, 4, 4);
+  const leavesLow = new THREE.Mesh(leavesGeometryLow, leavesMaterial);
+  leavesLow.position.y = 3;
+  
+  lowDetailGroup.add(trunkLow);
+  lowDetailGroup.add(leavesLow);
+  treeLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return treeLOD;
+};
+
+export const createOakTreeMesh = (): THREE.Object3D => {
+  const treeLOD = new THREE.LOD();
+  
+  // Oak tree - thicker trunk with darker green leaves
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x654321 }); // Darker brown
+  const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x006400 }); // Dark green
+  
+  // High detail
+  const highDetailGroup = new THREE.Group();
+  const trunkGeometryHigh = new THREE.CylinderGeometry(0.6, 0.8, 3.5, 8);
+  const trunkHigh = new THREE.Mesh(trunkGeometryHigh, trunkMaterial);
+  trunkHigh.position.y = 1.75;
+  
+  const leavesGeometryHigh = new THREE.SphereGeometry(2.2, 8, 8);
+  const leavesHigh = new THREE.Mesh(leavesGeometryHigh, leavesMaterial);
+  leavesHigh.position.y = 4.5;
+  
+  highDetailGroup.add(trunkHigh);
+  highDetailGroup.add(leavesHigh);
+  treeLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail
+  const mediumDetailGroup = new THREE.Group();
+  const trunkGeometryMed = new THREE.CylinderGeometry(0.6, 0.8, 3.5, 6);
+  const trunkMed = new THREE.Mesh(trunkGeometryMed, trunkMaterial);
+  trunkMed.position.y = 1.75;
+  
+  const leavesGeometryMed = new THREE.SphereGeometry(2.2, 6, 6);
+  const leavesMed = new THREE.Mesh(leavesGeometryMed, leavesMaterial);
+  leavesMed.position.y = 4.5;
+  
+  mediumDetailGroup.add(trunkMed);
+  mediumDetailGroup.add(leavesMed);
+  treeLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail
+  const lowDetailGroup = new THREE.Group();
+  const trunkGeometryLow = new THREE.CylinderGeometry(0.6, 0.8, 3.5, 4);
+  const trunkLow = new THREE.Mesh(trunkGeometryLow, trunkMaterial);
+  trunkLow.position.y = 1.75;
+  
+  const leavesGeometryLow = new THREE.SphereGeometry(2.2, 4, 4);
+  const leavesLow = new THREE.Mesh(leavesGeometryLow, leavesMaterial);
+  leavesLow.position.y = 4.5;
+  
+  lowDetailGroup.add(trunkLow);
+  lowDetailGroup.add(leavesLow);
+  treeLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return treeLOD;
+};
+
+export const createWillowTreeMesh = (): THREE.Object3D => {
+  const treeLOD = new THREE.LOD();
+  
+  // Willow tree - slender with drooping leaves
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B7355 }); // Light brown
+  const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x7CFC00 }); // Light green
+  
+  // High detail
+  const highDetailGroup = new THREE.Group();
+  const trunkGeometryHigh = new THREE.CylinderGeometry(0.4, 0.6, 4, 8);
+  const trunkHigh = new THREE.Mesh(trunkGeometryHigh, trunkMaterial);
+  trunkHigh.position.y = 2;
+  
+  // Create droopy leaves effect with multiple spheres
+  const leavesGroup = new THREE.Group();
+  
+  const mainLeavesGeometryHigh = new THREE.SphereGeometry(2, 8, 8);
+  const mainLeavesHigh = new THREE.Mesh(mainLeavesGeometryHigh, leavesMaterial);
+  mainLeavesHigh.position.y = 5;
+  mainLeavesHigh.scale.y = 0.7; // Flatten slightly
+  
+  // Add drooping leaves parts
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI * 2;
+    const droop = new THREE.Mesh(
+      new THREE.SphereGeometry(0.7, 6, 6),
+      leavesMaterial
+    );
+    droop.position.set(
+      Math.cos(angle) * 1.8,
+      4 - Math.random() * 1.5,
+      Math.sin(angle) * 1.8
+    );
+    droop.scale.y = 1.5 + Math.random();
+    leavesGroup.add(droop);
+  }
+  
+  leavesGroup.add(mainLeavesHigh);
+  highDetailGroup.add(trunkHigh);
+  highDetailGroup.add(leavesGroup);
+  treeLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail - simplified
+  const mediumDetailGroup = new THREE.Group();
+  const trunkGeometryMed = new THREE.CylinderGeometry(0.4, 0.6, 4, 6);
+  const trunkMed = new THREE.Mesh(trunkGeometryMed, trunkMaterial);
+  trunkMed.position.y = 2;
+  
+  const mainLeavesMed = new THREE.Mesh(
+    new THREE.SphereGeometry(2.5, 6, 6),
+    leavesMaterial
+  );
+  mainLeavesMed.position.y = 4.5;
+  mainLeavesMed.scale.y = 0.8;
+  
+  mediumDetailGroup.add(trunkMed);
+  mediumDetailGroup.add(mainLeavesMed);
+  treeLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail - very simplified
+  const lowDetailGroup = new THREE.Group();
+  const trunkGeometryLow = new THREE.CylinderGeometry(0.4, 0.6, 4, 4);
+  const trunkLow = new THREE.Mesh(trunkGeometryLow, trunkMaterial);
+  trunkLow.position.y = 2;
+  
+  const mainLeavesLow = new THREE.Mesh(
+    new THREE.SphereGeometry(2.5, 4, 4),
+    leavesMaterial
+  );
+  mainLeavesLow.position.y = 4.5;
+  mainLeavesLow.scale.y = 0.8;
+  
+  lowDetailGroup.add(trunkLow);
+  lowDetailGroup.add(mainLeavesLow);
+  treeLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return treeLOD;
+};
+
+export const createMapleTreeMesh = (): THREE.Object3D => {
+  const treeLOD = new THREE.LOD();
+  
+  // Maple tree - thick trunk with orange-red leaves
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x5D4037 }); // Very dark brown
+  const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0xFF5722 }); // Orange-red
+  
+  // High detail
+  const highDetailGroup = new THREE.Group();
+  const trunkGeometryHigh = new THREE.CylinderGeometry(0.7, 0.9, 4, 8);
+  const trunkHigh = new THREE.Mesh(trunkGeometryHigh, trunkMaterial);
+  trunkHigh.position.y = 2;
+  
+  // Create maple leaf shape using multiple spheres
+  const leavesGroup = new THREE.Group();
+  
+  const mainLeavesGeometryHigh = new THREE.SphereGeometry(2.5, 8, 8);
+  const mainLeavesHigh = new THREE.Mesh(mainLeavesGeometryHigh, leavesMaterial);
+  mainLeavesHigh.position.y = 5;
+  
+  leavesGroup.add(mainLeavesHigh);
+  highDetailGroup.add(trunkHigh);
+  highDetailGroup.add(leavesGroup);
+  treeLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail
+  const mediumDetailGroup = new THREE.Group();
+  const trunkGeometryMed = new THREE.CylinderGeometry(0.7, 0.9, 4, 6);
+  const trunkMed = new THREE.Mesh(trunkGeometryMed, trunkMaterial);
+  trunkMed.position.y = 2;
+  
+  const mainLeavesMed = new THREE.Mesh(
+    new THREE.SphereGeometry(2.5, 6, 6),
+    leavesMaterial
+  );
+  mainLeavesMed.position.y = 5;
+  
+  mediumDetailGroup.add(trunkMed);
+  mediumDetailGroup.add(mainLeavesMed);
+  treeLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail
+  const lowDetailGroup = new THREE.Group();
+  const trunkGeometryLow = new THREE.CylinderGeometry(0.7, 0.9, 4, 4);
+  const trunkLow = new THREE.Mesh(trunkGeometryLow, trunkMaterial);
+  trunkLow.position.y = 2;
+  
+  const mainLeavesLow = new THREE.Mesh(
+    new THREE.SphereGeometry(2.5, 4, 4),
+    leavesMaterial
+  );
+  mainLeavesLow.position.y = 5;
+  
+  lowDetailGroup.add(trunkLow);
+  lowDetailGroup.add(mainLeavesLow);
+  treeLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return treeLOD;
+};
+
+export const createYewTreeMesh = (): THREE.Object3D => {
+  const treeLOD = new THREE.LOD();
+  
+  // Yew tree - wide, imposing with dark red bark and very dark green leaves
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x3E2723 }); // Very dark red-brown
+  const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x004D40 }); // Very dark green
+  
+  // High detail
+  const highDetailGroup = new THREE.Group();
+  const trunkGeometryHigh = new THREE.CylinderGeometry(1, 1.2, 5, 8);
+  const trunkHigh = new THREE.Mesh(trunkGeometryHigh, trunkMaterial);
+  trunkHigh.position.y = 2.5;
+  
+  // Create wide, intimidating foliage
+  const leavesGroup = new THREE.Group();
+  
+  const mainLeavesGeometryHigh = new THREE.SphereGeometry(3.5, 8, 8);
+  const mainLeavesHigh = new THREE.Mesh(mainLeavesGeometryHigh, leavesMaterial);
+  mainLeavesHigh.position.y = 6;
+  mainLeavesHigh.scale.y = 0.8; // Flatten slightly for wider look
+  
+  leavesGroup.add(mainLeavesHigh);
+  highDetailGroup.add(trunkHigh);
+  highDetailGroup.add(leavesGroup);
+  treeLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail
+  const mediumDetailGroup = new THREE.Group();
+  const trunkGeometryMed = new THREE.CylinderGeometry(1, 1.2, 5, 6);
+  const trunkMed = new THREE.Mesh(trunkGeometryMed, trunkMaterial);
+  trunkMed.position.y = 2.5;
+  
+  const mainLeavesMed = new THREE.Mesh(
+    new THREE.SphereGeometry(3.5, 6, 6),
+    leavesMaterial
+  );
+  mainLeavesMed.position.y = 6;
+  mainLeavesMed.scale.y = 0.8;
+  
+  mediumDetailGroup.add(trunkMed);
+  mediumDetailGroup.add(mainLeavesMed);
+  treeLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail
+  const lowDetailGroup = new THREE.Group();
+  const trunkGeometryLow = new THREE.CylinderGeometry(1, 1.2, 5, 4);
+  const trunkLow = new THREE.Mesh(trunkGeometryLow, trunkMaterial);
+  trunkLow.position.y = 2.5;
+  
+  const mainLeavesLow = new THREE.Mesh(
+    new THREE.SphereGeometry(3.5, 4, 4),
+    leavesMaterial
+  );
+  mainLeavesLow.position.y = 6;
+  mainLeavesLow.scale.y = 0.8;
+  
+  lowDetailGroup.add(trunkLow);
+  lowDetailGroup.add(mainLeavesLow);
+  treeLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return treeLOD;
+};
+
+// Rock mesh types
+export const createCopperRockMesh = (): THREE.Object3D => {
+  const rockLOD = new THREE.LOD();
+  
+  // Copper rock - brownish-orange color
+  const rockMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0xB87333, // Copper color
+    roughness: 0.8, 
+    metalness: 0.2
+  });
+  
+  // Add some metallic flecks/veins
+  const flecksMaterial = new THREE.MeshStandardMaterial({
+    color: 0xD2691E, // Orange-copper
+    metalness: 0.5,
+    roughness: 0.5
+  });
+  
+  // High detail rock
+  const highDetailGroup = new THREE.Group();
+  const rockGeometryHigh = new THREE.DodecahedronGeometry(1.2, 1);
+  const rockHigh = new THREE.Mesh(rockGeometryHigh, rockMaterial);
+  
+  // Add copper veins
+  const veinsGeometry = new THREE.SphereGeometry(0.2, 4, 4);
+  for (let i = 0; i < 5; i++) {
+    const vein = new THREE.Mesh(veinsGeometry, flecksMaterial);
+    vein.position.set(
+      (Math.random() - 0.5) * 1.5,
+      (Math.random() - 0.5) * 1.5,
+      (Math.random() - 0.5) * 1.5
+    );
+    vein.scale.set(
+      Math.random() * 0.5 + 0.5,
+      Math.random() * 0.5 + 0.5,
+      Math.random() * 0.5 + 0.3
+    );
+    rockHigh.add(vein);
+  }
+  
+  rockHigh.position.y = 0.6;
+  highDetailGroup.add(rockHigh);
+  rockLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail
+  const mediumDetailGroup = new THREE.Group();
+  const rockGeometryMedium = new THREE.DodecahedronGeometry(1.2, 0);
+  const rockMedium = new THREE.Mesh(rockGeometryMedium, rockMaterial);
+  rockMedium.position.y = 0.6;
+  mediumDetailGroup.add(rockMedium);
+  rockLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail
+  const lowDetailGroup = new THREE.Group();
+  const rockGeometryLow = new THREE.DodecahedronGeometry(1.2, 0);
+  const rockLow = new THREE.Mesh(rockGeometryLow, rockMaterial);
+  rockLow.position.y = 0.6;
+  lowDetailGroup.add(rockLow);
+  rockLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return rockLOD;
+};
+
+export const createTinRockMesh = (): THREE.Object3D => {
+  const rockLOD = new THREE.LOD();
+  
+  // Tin rock - lighter gray with bluish tinge
+  const rockMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0xA7B8C0, // Light blueish gray
+    roughness: 0.6, 
+    metalness: 0.3
+  });
+  
+  // High detail rock
+  const highDetailGroup = new THREE.Group();
+  const rockGeometryHigh = new THREE.DodecahedronGeometry(1.1, 1);
+  const rockHigh = new THREE.Mesh(rockGeometryHigh, rockMaterial);
+  rockHigh.position.y = 0.55;
+  highDetailGroup.add(rockHigh);
+  rockLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail
+  const mediumDetailGroup = new THREE.Group();
+  const rockGeometryMedium = new THREE.DodecahedronGeometry(1.1, 0);
+  const rockMedium = new THREE.Mesh(rockGeometryMedium, rockMaterial);
+  rockMedium.position.y = 0.55;
+  mediumDetailGroup.add(rockMedium);
+  rockLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail
+  const lowDetailGroup = new THREE.Group();
+  const rockGeometryLow = new THREE.DodecahedronGeometry(1.1, 0);
+  const rockLow = new THREE.Mesh(rockGeometryLow, rockMaterial);
+  rockLow.position.y = 0.55;
+  lowDetailGroup.add(rockLow);
+  rockLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return rockLOD;
+};
+
+export const createIronRockMesh = (): THREE.Object3D => {
+  const rockLOD = new THREE.LOD();
+  
+  // Iron rock - reddish-brown color
+  const rockMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x8B4513, // Reddish-brown
+    roughness: 0.9, 
+    metalness: 0.4
+  });
+  
+  // Add some rust-colored patches
+  const rustMaterial = new THREE.MeshStandardMaterial({
+    color: 0x8B0000, // Dark red
+    metalness: 0.2,
+    roughness: 0.8
+  });
+  
+  // High detail rock
+  const highDetailGroup = new THREE.Group();
+  const rockGeometryHigh = new THREE.DodecahedronGeometry(1.3, 1);
+  const rockHigh = new THREE.Mesh(rockGeometryHigh, rockMaterial);
+  
+  // Add rust patches
+  const rustGeometry = new THREE.SphereGeometry(0.3, 4, 4);
+  for (let i = 0; i < 3; i++) {
+    const rustPatch = new THREE.Mesh(rustGeometry, rustMaterial);
+    rustPatch.position.set(
+      (Math.random() - 0.5) * 1.8,
+      (Math.random() - 0.5) * 1.8,
+      (Math.random() - 0.5) * 1.8
+    );
+    rustPatch.scale.set(
+      Math.random() * 0.5 + 0.5,
+      Math.random() * 0.5 + 0.2,
+      Math.random() * 0.5 + 0.5
+    );
+    rockHigh.add(rustPatch);
+  }
+  
+  rockHigh.position.y = 0.65;
+  highDetailGroup.add(rockHigh);
+  rockLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail
+  const mediumDetailGroup = new THREE.Group();
+  const rockGeometryMedium = new THREE.DodecahedronGeometry(1.3, 0);
+  const rockMedium = new THREE.Mesh(rockGeometryMedium, rockMaterial);
+  rockMedium.position.y = 0.65;
+  mediumDetailGroup.add(rockMedium);
+  rockLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail
+  const lowDetailGroup = new THREE.Group();
+  const rockGeometryLow = new THREE.DodecahedronGeometry(1.3, 0);
+  const rockLow = new THREE.Mesh(rockGeometryLow, rockMaterial);
+  rockLow.position.y = 0.65;
+  lowDetailGroup.add(rockLow);
+  rockLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return rockLOD;
+};
+
+export const createCoalRockMesh = (): THREE.Object3D => {
+  const rockLOD = new THREE.LOD();
+  
+  // Coal rock - very dark with slight shine
+  const rockMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x1C1C1C, // Almost black
+    roughness: 0.7, 
+    metalness: 0.3
+  });
+  
+  // High detail rock
+  const highDetailGroup = new THREE.Group();
+  const rockGeometryHigh = new THREE.DodecahedronGeometry(1.2, 1);
+  const rockHigh = new THREE.Mesh(rockGeometryHigh, rockMaterial);
+  rockHigh.position.y = 0.6;
+  highDetailGroup.add(rockHigh);
+  rockLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail
+  const mediumDetailGroup = new THREE.Group();
+  const rockGeometryMedium = new THREE.DodecahedronGeometry(1.2, 0);
+  const rockMedium = new THREE.Mesh(rockGeometryMedium, rockMaterial);
+  rockMedium.position.y = 0.6;
+  mediumDetailGroup.add(rockMedium);
+  rockLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail
+  const lowDetailGroup = new THREE.Group();
+  const rockGeometryLow = new THREE.DodecahedronGeometry(1.2, 0);
+  const rockLow = new THREE.Mesh(rockGeometryLow, rockMaterial);
+  rockLow.position.y = 0.6;
+  lowDetailGroup.add(rockLow);
+  rockLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return rockLOD;
+};
+
+export const createGoldRockMesh = (): THREE.Object3D => {
+  const rockLOD = new THREE.LOD();
+  
+  // Regular rock material
+  const rockMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x777777, // Gray
+    roughness: 0.8,
+    metalness: 0.2
+  });
+  
+  // Gold flecks/veins material
+  const goldMaterial = new THREE.MeshStandardMaterial({
+    color: 0xFFD700, // Gold
+    metalness: 0.9,
+    roughness: 0.3
+  });
+  
+  // High detail rock
+  const highDetailGroup = new THREE.Group();
+  const rockGeometryHigh = new THREE.DodecahedronGeometry(1.4, 1);
+  const rockHigh = new THREE.Mesh(rockGeometryHigh, rockMaterial);
+  
+  // Add gold veins
+  const veinsGeometry = new THREE.SphereGeometry(0.2, 4, 4);
+  for (let i = 0; i < 8; i++) {
+    const goldVein = new THREE.Mesh(veinsGeometry, goldMaterial);
+    goldVein.position.set(
+      (Math.random() - 0.5) * 2,
+      (Math.random() - 0.5) * 2,
+      (Math.random() - 0.5) * 2
+    );
+    goldVein.scale.set(
+      Math.random() * 0.5 + 0.2,
+      Math.random() * 0.5 + 0.2,
+      Math.random() * 0.5 + 0.2
+    );
+    rockHigh.add(goldVein);
+  }
+  
+  rockHigh.position.y = 0.7;
+  highDetailGroup.add(rockHigh);
+  rockLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail - with simplified gold flecks
+  const mediumDetailGroup = new THREE.Group();
+  const rockGeometryMedium = new THREE.DodecahedronGeometry(1.4, 0);
+  const rockMedium = new THREE.Mesh(rockGeometryMedium, rockMaterial);
+  
+  // Add fewer gold veins for medium distance
+  for (let i = 0; i < 4; i++) {
+    const goldVein = new THREE.Mesh(veinsGeometry, goldMaterial);
+    goldVein.position.set(
+      (Math.random() - 0.5) * 2,
+      (Math.random() - 0.5) * 2,
+      (Math.random() - 0.5) * 2
+    );
+    goldVein.scale.set(
+      Math.random() * 0.5 + 0.3,
+      Math.random() * 0.5 + 0.3,
+      Math.random() * 0.5 + 0.3
+    );
+    rockMedium.add(goldVein);
+  }
+  
+  rockMedium.position.y = 0.7;
+  mediumDetailGroup.add(rockMedium);
+  rockLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail - just basic shape with gold color tint
+  const lowDetailGroup = new THREE.Group();
+  const rockGeometryLow = new THREE.DodecahedronGeometry(1.4, 0);
+  
+  // For low detail, use a blended material
+  const blendedMaterial = new THREE.MeshStandardMaterial({
+    color: 0x998866, // Gray with gold tint
+    metalness: 0.4,
+    roughness: 0.7
+  });
+  
+  const rockLow = new THREE.Mesh(rockGeometryLow, blendedMaterial);
+  rockLow.position.y = 0.7;
+  lowDetailGroup.add(rockLow);
+  rockLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return rockLOD;
+};
+
+export const createMithrilRockMesh = (): THREE.Object3D => {
+  const rockLOD = new THREE.LOD();
+  
+  // Mithril material with brilliant blue-gray hue
+  const mithrilMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x6F8FAF, // Steel blue color
+    metalness: 0.8,
+    roughness: 0.3,
+    emissive: 0x2C3E50,
+    emissiveIntensity: 0.1
+  });
+  
+  // High detail mithril rock (Level 0 - closest)
+  const rockGeometryHigh = new THREE.DodecahedronGeometry(1.5, 2);
+  const rockHigh = new THREE.Mesh(rockGeometryHigh, mithrilMaterial);
+  rockHigh.position.y = 0.75;
+  rockLOD.addLevel(rockHigh, LOD_DISTANCES[0]);
+  
+  // Medium detail mithril rock (Level 1 - medium distance)
+  const rockGeometryMedium = new THREE.DodecahedronGeometry(1.5, 1);
+  const rockMedium = new THREE.Mesh(rockGeometryMedium, mithrilMaterial);
+  rockMedium.position.y = 0.75;
+  rockLOD.addLevel(rockMedium, LOD_DISTANCES[1]);
+  
+  // Low detail mithril rock (Level 2 - far distance)
+  const rockGeometryLow = new THREE.DodecahedronGeometry(1.5, 0);
+  const rockLow = new THREE.Mesh(rockGeometryLow, mithrilMaterial);
+  rockLow.position.y = 0.75;
+  rockLOD.addLevel(rockLow, LOD_DISTANCES[2]);
+  
+  return rockLOD;
+};
+
+// Create an adamantite rock mesh with LOD support
+export const createAdamantiteRockMesh = (): THREE.Object3D => {
+  const rockLOD = new THREE.LOD();
+  
+  // Adamantite material with green hue and metallic properties
+  const adamantiteMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x3CB371, // Medium sea green
+    metalness: 0.9,
+    roughness: 0.2,
+    emissive: 0x255146,
+    emissiveIntensity: 0.2
+  });
+  
+  // High detail adamantite rock (Level 0 - closest)
+  const rockGeometryHigh = new THREE.DodecahedronGeometry(1.6, 2);
+  const rockHigh = new THREE.Mesh(rockGeometryHigh, adamantiteMaterial);
+  rockHigh.position.y = 0.8;
+  rockLOD.addLevel(rockHigh, LOD_DISTANCES[0]);
+  
+  // Medium detail adamantite rock (Level 1 - medium distance)
+  const rockGeometryMedium = new THREE.DodecahedronGeometry(1.6, 1);
+  const rockMedium = new THREE.Mesh(rockGeometryMedium, adamantiteMaterial);
+  rockMedium.position.y = 0.8;
+  rockLOD.addLevel(rockMedium, LOD_DISTANCES[1]);
+  
+  // Low detail adamantite rock (Level 2 - far distance)
+  const rockGeometryLow = new THREE.DodecahedronGeometry(1.6, 0);
+  const rockLow = new THREE.Mesh(rockGeometryLow, adamantiteMaterial);
+  rockLow.position.y = 0.8;
+  rockLOD.addLevel(rockLow, LOD_DISTANCES[2]);
+  
+  return rockLOD;
+};
+
+// Create a runite rock mesh with LOD support
+export const createRuniteRockMesh = (): THREE.Object3D => {
+  const rockLOD = new THREE.LOD();
+  
+  // Runite material with distinctive blue color and high metallic properties
+  const runiteMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x4169E1, // Royal blue
+    metalness: 1.0,
+    roughness: 0.1,
+    emissive: 0x1E3A8A,
+    emissiveIntensity: 0.3
+  });
+  
+  // High detail runite rock (Level 0 - closest)
+  const rockGeometryHigh = new THREE.DodecahedronGeometry(1.7, 3);
+  const rockHigh = new THREE.Mesh(rockGeometryHigh, runiteMaterial);
+  rockHigh.position.y = 0.85;
+  rockLOD.addLevel(rockHigh, LOD_DISTANCES[0]);
+  
+  // Medium detail runite rock (Level 1 - medium distance)
+  const rockGeometryMedium = new THREE.DodecahedronGeometry(1.7, 2);
+  const rockMedium = new THREE.Mesh(rockGeometryMedium, runiteMaterial);
+  rockMedium.position.y = 0.85;
+  rockLOD.addLevel(rockMedium, LOD_DISTANCES[1]);
+  
+  // Low detail runite rock (Level 2 - far distance)
+  const rockGeometryLow = new THREE.DodecahedronGeometry(1.7, 1);
+  const rockLow = new THREE.Mesh(rockGeometryLow, runiteMaterial);
+  rockLow.position.y = 0.85;
+  rockLOD.addLevel(rockLow, LOD_DISTANCES[2]);
+  
+  return rockLOD;
+};
+
+// Create a magic tree mesh with LOD support
+export const createMagicTreeMesh = (): THREE.Object3D => {
+  // Create LOD container
+  const treeLOD = new THREE.LOD();
+  
+  // High detail magic tree (Level 0 - closest)
+  const highDetailGroup = new THREE.Group();
+  
+  // Trunk with a dark, rich color
+  const trunkGeometryHigh = new THREE.CylinderGeometry(0.6, 0.7, 4, 10);
+  const trunkMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x301934, // Dark purple
+    roughness: 0.7,
+    metalness: 0.1
+  });
+  const trunkHigh = new THREE.Mesh(trunkGeometryHigh, trunkMaterial);
+  trunkHigh.position.y = 2.0; // Half height
+  
+  // Magical glowing leaves
+  const leavesGeometryHigh = new THREE.SphereGeometry(3, 10, 10);
+  const leavesMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x9370DB, // Medium purple
+    roughness: 0.3,
+    metalness: 0.2,
+    emissive: 0x8A2BE2, // Blueviolet
+    emissiveIntensity: 0.3
+  });
+  const leavesHigh = new THREE.Mesh(leavesGeometryHigh, leavesMaterial);
+  leavesHigh.position.y = 5.5; // Above trunk
+  
+  highDetailGroup.add(trunkHigh);
+  highDetailGroup.add(leavesHigh);
+  treeLOD.addLevel(highDetailGroup, LOD_DISTANCES[0]);
+  
+  // Medium detail magic tree (Level 1 - medium distance)
+  const mediumDetailGroup = new THREE.Group();
+  const trunkGeometryMed = new THREE.CylinderGeometry(0.6, 0.7, 4, 8);
+  const trunkMed = new THREE.Mesh(trunkGeometryMed, trunkMaterial);
+  trunkMed.position.y = 2.0;
+  
+  const leavesGeometryMed = new THREE.SphereGeometry(3, 8, 8);
+  const leavesMed = new THREE.Mesh(leavesGeometryMed, leavesMaterial);
+  leavesMed.position.y = 5.5;
+  
+  mediumDetailGroup.add(trunkMed);
+  mediumDetailGroup.add(leavesMed);
+  treeLOD.addLevel(mediumDetailGroup, LOD_DISTANCES[1]);
+  
+  // Low detail magic tree (Level 2 - far distance)
+  const lowDetailGroup = new THREE.Group();
+  const trunkGeometryLow = new THREE.CylinderGeometry(0.6, 0.7, 4, 6);
+  const trunkLow = new THREE.Mesh(trunkGeometryLow, trunkMaterial);
+  trunkLow.position.y = 2.0;
+  
+  const leavesGeometryLow = new THREE.SphereGeometry(3, 6, 6);
+  const leavesLow = new THREE.Mesh(leavesGeometryLow, leavesMaterial);
+  leavesLow.position.y = 5.5;
+  
+  lowDetailGroup.add(trunkLow);
+  lowDetailGroup.add(leavesLow);
+  treeLOD.addLevel(lowDetailGroup, LOD_DISTANCES[2]);
+  
+  return treeLOD;
+};
+
+// Create different types of fishing spots
+export const createNetFishingSpotMesh = (): THREE.Mesh => {
+  // Basic fishing spot with blue color for net fishing (shrimps, sardines)
+  const spotGeometry = new THREE.CircleGeometry(2, 16);
+  const spotMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x6495ED, // Cornflower blue
+    transparent: true,
+    opacity: 0.7
+  });
+  const spot = new THREE.Mesh(spotGeometry, spotMaterial);
+  spot.rotation.x = -Math.PI / 2;
+  spot.position.y = 0.05;
+  
+  // Add animation
+  const animate = () => {
+    const time = Date.now() * 0.001;
+    spot.scale.set(
+      1.0 + Math.sin(time * 2) * 0.1,
+      1.0,
+      1.0 + Math.sin(time * 2) * 0.1
+    );
+    (spot.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 3) * 0.2;
+  };
+  
+  (spot as any).update = animate;
+  return spot;
+};
+
+export const createCageFishingSpotMesh = (): THREE.Mesh => {
+  // Cage fishing spot with deeper blue for trout, salmon, pike
+  const spotGeometry = new THREE.CircleGeometry(2.2, 16);
+  const spotMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x0000CD, // Medium blue
+    transparent: true,
+    opacity: 0.7
+  });
+  const spot = new THREE.Mesh(spotGeometry, spotMaterial);
+  spot.rotation.x = -Math.PI / 2;
+  spot.position.y = 0.05;
+  
+  // Add animation
+  const animate = () => {
+    const time = Date.now() * 0.001;
+    spot.scale.set(
+      1.0 + Math.sin(time * 1.5) * 0.15,
+      1.0,
+      1.0 + Math.sin(time * 1.5) * 0.15
+    );
+    (spot.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 2.5) * 0.2;
+  };
+  
+  (spot as any).update = animate;
+  return spot;
+};
+
+export const createHarpoonFishingSpotMesh = (): THREE.Mesh => {
+  // Harpoon fishing spot with dark blue for larger fish
+  const spotGeometry = new THREE.CircleGeometry(2.5, 20);
+  const spotMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x000080, // Navy blue
+    transparent: true,
+    opacity: 0.7,
+    emissive: 0x000033,
+    emissiveIntensity: 0.2
+  });
+  const spot = new THREE.Mesh(spotGeometry, spotMaterial);
+  spot.rotation.x = -Math.PI / 2;
+  spot.position.y = 0.05;
+  
+  // Add animation
+  const animate = () => {
+    const time = Date.now() * 0.001;
+    spot.scale.set(
+      1.0 + Math.sin(time) * 0.2,
+      1.0,
+      1.0 + Math.sin(time) * 0.2
+    );
+    (spot.material as THREE.MeshStandardMaterial).opacity = 0.5 + Math.sin(time * 2) * 0.25;
+  };
+  
+  (spot as any).update = animate;
+  return spot;
+};
+
+// Create resource mesh based on type and metadata
+export const createResourceMesh = (
+  type: ResourceType | string, 
+  state: 'normal' | 'harvested' = 'normal',
+  metadata?: Record<string, any>
+): THREE.Object3D => {
   if (state === 'harvested') {
-    // Return harvested version of the resource
+    // Return depleted version of resource
     switch (type) {
       case ResourceType.TREE:
+      case 'tree':
         return createTreeStumpMesh();
       case ResourceType.ROCK:
+      case 'rock':
         return createDepletedRockMesh();
-      case ResourceType.FISH:
-        // Fish spots don't have a harvested state, just return normal
-        return createFishingSpotMesh();
       default:
-        // Default fallback
-        const defaultGeometry = new THREE.BoxGeometry(1, 1, 1);
-        const defaultMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
-        return new THREE.Mesh(defaultGeometry, defaultMaterial);
+        return new THREE.Group();
     }
-  } else {
-    // Return normal resource
-    switch (type) {
-      case ResourceType.TREE:
-        return createTreeMesh();
-      case ResourceType.ROCK:
-        return createRockMesh();
-      case ResourceType.FISH:
-        return createFishingSpotMesh();
-      default:
-        // Default fallback
-        const defaultGeometry = new THREE.BoxGeometry(1, 1, 1);
-        const defaultMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
-        return new THREE.Mesh(defaultGeometry, defaultMaterial);
-    }
+  }
+  
+  switch (type) {
+    case ResourceType.TREE:
+    case 'tree':
+      // Use metadata to determine specific tree type
+      if (metadata?.treeType) {
+        switch (metadata.treeType) {
+          case 'normal_tree':
+            return createNormalTreeMesh();
+          case 'oak_tree':
+            return createOakTreeMesh();
+          case 'willow_tree':
+            return createWillowTreeMesh();
+          case 'maple_tree':
+            return createMapleTreeMesh();
+          case 'yew_tree':
+            return createYewTreeMesh();
+          case 'magic_tree':
+            return createMagicTreeMesh();
+          default:
+            return createNormalTreeMesh();
+        }
+      }
+      return createNormalTreeMesh();
+      
+    case ResourceType.ROCK:
+    case 'rock':
+      // Use metadata to determine specific rock type
+      if (metadata?.rockType) {
+        switch (metadata.rockType) {
+          case 'copper_rock':
+            return createCopperRockMesh();
+          case 'tin_rock':
+            return createTinRockMesh();
+          case 'iron_rock':
+            return createIronRockMesh();
+          case 'coal_rock':
+            return createCoalRockMesh();
+          case 'gold_rock':
+            return createGoldRockMesh();
+          case 'mithril_rock':
+            return createMithrilRockMesh();
+          case 'adamantite_rock':
+            return createAdamantiteRockMesh();
+          case 'runite_rock':
+            return createRuniteRockMesh();
+          default:
+            return createRockMesh();
+        }
+      }
+      return createRockMesh();
+      
+    case ResourceType.FISHING_SPOT:
+    case 'fish':
+      // Use metadata to determine specific fishing spot type
+      if (metadata?.spotType) {
+        switch (metadata.spotType) {
+          case 'net':
+            return createNetFishingSpotMesh();
+          case 'cage':
+            return createCageFishingSpotMesh();
+          case 'harpoon':
+            return createHarpoonFishingSpotMesh();
+          default:
+            return createNetFishingSpotMesh();
+        }
+      }
+      return createNetFishingSpotMesh();
+      
+    default:
+      console.error(`Unknown resource type: ${type}`);
+      return new THREE.Group();
   }
 }; 
