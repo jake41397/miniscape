@@ -700,11 +700,6 @@ export const setupSocketListeners = async ({
   socket.on('itemDropped', (data) => {
     // Play drop sound
     soundManager.play('itemDrop');
-    
-    // Use worldManager to add the item to the world
-    if (worldManagerRef.current) {
-      worldManagerRef.current.addWorldItem(data);
-    }
   });
   
   // Handle item removals
