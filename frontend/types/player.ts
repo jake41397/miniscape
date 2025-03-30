@@ -6,6 +6,7 @@ export interface Player {
   x: number;
   y: number;
   z: number;
+  rotation?: number; // Add rotation field
   // Optional properties that might be added later
   health?: number;
   inventory?: Item[];
@@ -16,9 +17,8 @@ export interface PlayerPosition {
   x: number;
   y: number;
   z: number;
-  rotationY?: number;  // Optional rotation around Y axis
+  rotation?: number;  // Add rotation field
   timestamp?: number;  // Optional timestamp for synchronization
-  isAutoMove?: boolean; // Flag to indicate this is from automove (click-to-move)
 }
 
 // Item interface

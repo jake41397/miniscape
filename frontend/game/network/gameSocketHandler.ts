@@ -5,15 +5,25 @@ import { Player } from '../../types/player';
 import soundManager from '../audio/soundManager';
 import WorldManager, { WORLD_BOUNDS } from '../world/WorldManager';
 
+// ██████╗ ███████╗██████╗ ██╗   ██╗ ██████╗  ██████╗ ██╗███╗   ██╗ ██████╗ 
+// ██╔══██╗██╔════╝██╔══██╗██║   ██║██╔════╝ ██╔════╝ ██║████╗  ██║██╔════╝ 
+// ██║  ██║█████╗  ██████╔╝██║   ██║██║  ███╗██║  ███╗██║██╔██╗ ██║██║  ███╗
+// ██║  ██║██╔══╝  ██╔══██╗██║   ██║██║   ██║██║   ██║██║██║╚██╗██║██║   ██║
+// ██████╔╝███████╗██████╔╝╚██████╔╝╚██████╔╝╚██████╔╝██║██║ ╚████║╚██████╔╝
+// ╚═════╝ ╚══════╝╚═════╝  ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝ ╚═════╝ 
+console.log("%c MULTIPLAYER DEBUG ENABLED ", "background: #ff0000; color: white; font-size: 24px; font-weight: bold;");
+console.log("%c This file has been loaded and will log multiplayer events ", "background: #0000ff; color: white; font-size: 18px;");
+// Add startup time to help identify fresh logs
+console.log(`🕒 Debug startup time: ${new Date().toISOString()}`);
+
 // Add type definition for player move data
 interface PlayerMoveData {
   id: string;
   x: number;
   y: number;
   z: number;
-  rotationY?: number;
+  rotation?: number; // Add rotation field to match what the server sends
   timestamp?: number; // Make timestamp optional
-  isAutoMove?: boolean;
 }
 
 // Position interpolation settings
@@ -46,9 +56,29 @@ export const setupSocketListeners = async ({
   createNameLabel,
   setPlayerCount
 }: SocketHandlerOptions) => {
-  const socket = await getSocket();
-  if (!socket) return () => {};
+  // 🔴 CRITICAL DEBUG LOGGING 🔴
+  console.log("%c 🔷 SOCKET LISTENERS SETUP STARTED 🔷 ", "background: #00aaff; color: white; font-size: 18px; font-weight: bold;");
+  console.log("Setup context:", {
+    sceneExists: !!scene,
+    playerRefExists: !!playerRef.current,
+    playersMapSize: playersRef.current.size,
+    nameLabelsMapSize: nameLabelsRef.current.size,
+    worldManagerExists: !!worldManagerRef.current,
+    itemManagerExists: !!itemManagerRef?.current
+  });
 
+  const socket = await getSocket();
+  if (!socket) {
+    console.log("%c ❌ SOCKET CONNECTION FAILED! ", "background: red; color: white; font-size: 16px;");
+    return () => {};
+  }
+
+  console.log("%c ✅ SOCKET CONNECTION ESTABLISHED! ", "background: green; color: white; font-size: 16px;");
+  console.log("Socket ID:", socket.id);
+  
+  // Add logging when setting up listeners
+  console.log("%c 🔄 REGISTERING playerMoved EVENT HANDLER... ", "background: #794bc4; color: white;");
+  
   // Setup position correction handler
   setupPositionCorrectionHandler(socket, playerRef);
 
@@ -140,10 +170,16 @@ export const setupSocketListeners = async ({
     // Set position from player data
     otherPlayerMesh.position.set(player.x, player.y, player.z);
     
+    // Apply initial rotation if available
+    if (player.rotation !== undefined) {
+      otherPlayerMesh.rotation.y = player.rotation;
+    }
+    
     // Store player data in userData
     otherPlayerMesh.userData.playerId = player.id;
     otherPlayerMesh.userData.playerName = player.name;
     otherPlayerMesh.userData.targetPosition = new THREE.Vector3(player.x, player.y, player.z);
+    otherPlayerMesh.userData.targetRotation = player.rotation || 0; // Store initial rotation
     otherPlayerMesh.userData.lastUpdateTime = Date.now();
     
     // Set disappearance timeout - if we don't hear from this player for 30 seconds, mark for cleanup
@@ -492,24 +528,35 @@ export const setupSocketListeners = async ({
   
   // Handle player movements
   socket.on('playerMoved', (data: PlayerMoveData) => {
-    // Add verbose logging for debugging
-    console.log('Received playerMoved event:', {
+    // First get the player for logging
+    const playerMesh = playersRef.current.get(data.id);
+    
+    // 🔴 CRITICAL DEBUG LOGGING 🔴
+    console.log("%c 🔵 PLAYER MOVED EVENT RECEIVED 🔵 ", "background: #ff00ff; color: white; font-size: 18px; font-weight: bold;");
+    console.log('🎮 Player Movement Data:', {
       playerId: data.id,
-      position: { x: data.x, y: data.y, z: data.z },
-      rotation: data.rotationY ? data.rotationY.toFixed(2) : 'none',
-      isAutoMove: data.isAutoMove || false,
+      position: { x: data.x.toFixed(2), y: data.y.toFixed(2), z: data.z.toFixed(2) },
+      rotation: data.rotation?.toFixed(2) || 'undefined',
+      timestamp: data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : 'undefined',
       playerExists: playersRef.current.has(data.id),
-      totalPlayers: playersRef.current.size
+      totalPlayers: playersRef.current.size,
+      timeSinceLast: playerMesh ? Date.now() - (playerMesh.userData?.lastUpdateTime || 0) : 'N/A'
     });
     
     // Skip if this is our own player ID - we shouldn't move ourselves based on server events
     // This is a fallback in case we broadcast to all instead of socket.broadcast
     if (data.id === socket.id || data.id === 'TEST-' + socket.id) {
+      console.log("%c ⚠️ Ignoring movement for local player", "color: orange; font-weight: bold;");
       return;
     }
     
+    // Add visible logging for when playerMesh is not found
+    if (!playerMesh) {
+      console.log("%c ❌ PLAYER MESH NOT FOUND FOR PLAYER ID: " + data.id, "background: red; color: white; font-size: 16px;");
+      console.log("Current tracked players:", Array.from(playersRef.current.keys()));
+    }
+
     // Update the position of the moved player
-    const playerMesh = playersRef.current.get(data.id);
     if (playerMesh) {
       // Ensure received positions are within bounds before applying
       const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, data.x));
@@ -529,21 +576,12 @@ export const setupSocketListeners = async ({
       // Store previous target for velocity calculation if we don't have it
       if (!playerMesh.userData.prevTargetPosition) {
         playerMesh.userData.prevTargetPosition = playerMesh.userData.targetPosition 
-          ? playerMesh.userData.targetPosition.clone() 
-          : new THREE.Vector3(validX, data.y, validZ);
+          ? { x: playerMesh.userData.targetPosition.x, y: playerMesh.userData.targetPosition.y, z: playerMesh.userData.targetPosition.z }
+          : { x: validX, y: data.y, z: validZ };
         playerMesh.userData.prevTargetTime = playerMesh.userData.lastUpdateTime || Date.now() - 100;
       }
       
       const newTargetPosition = new THREE.Vector3(validX, data.y, validZ);
-      
-      // Store rotation Y if provided
-      if (data.rotationY !== undefined) {
-        // Store the rotation value for interpolation
-        playerMesh.userData.rotationY = data.rotationY;
-      }
-      
-      // Flag to indicate if this update is from automove
-      playerMesh.userData.isAutoMove = data.isAutoMove || false;
       
       // Calculate distance to current position to detect large discrepancies
       const currentPosition = playerMesh.position;
@@ -553,17 +591,24 @@ export const setupSocketListeners = async ({
       if (distanceToTarget > POSITION_SNAP_THRESHOLD) {
         playerMesh.position.copy(newTargetPosition);
         
-        // Also set rotation if provided to avoid rotation "snapping" after position snap
-        if (data.rotationY !== undefined) {
-          playerMesh.rotation.y = data.rotationY;
-        }
-        
         // Also reset velocity for a fresh start
         playerMesh.userData.velocity = { x: 0, z: 0 };
       }
       
-      // Set target position for interpolation
-      playerMesh.userData.targetPosition = newTargetPosition;
+      // CRITICAL FIX: Ensure targetPosition is a simple object, not a THREE.Vector3
+      // This makes it safer to access in updateRemotePlayerPositions
+      playerMesh.userData.targetPosition = { 
+        x: validX, 
+        y: data.y, 
+        z: validZ 
+      };
+      
+      // CRITICAL FIX: Store rotation data from the server
+      if (data.rotation !== undefined) {
+        playerMesh.userData.targetRotation = data.rotation;
+        console.log(`Received rotation for player ${data.id}: ${data.rotation.toFixed(2)}`);
+      }
+      
       playerMesh.userData.lastUpdateTime = Date.now();
       
       // Store previous target for next velocity calculation
@@ -575,12 +620,12 @@ export const setupSocketListeners = async ({
           // Calculate and store velocity based on target positions (not actual positions)
           // This is more accurate for prediction
           playerMesh.userData.serverVelocity = {
-            x: (newTargetPosition.x - prevTarget.x) / timeDelta,
-            z: (newTargetPosition.z - prevTarget.z) / timeDelta
+            x: (validX - prevTarget.x) / timeDelta,
+            z: (validZ - prevTarget.z) / timeDelta
           };
           
           // Update previous target data
-          playerMesh.userData.prevTargetPosition = newTargetPosition.clone();
+          playerMesh.userData.prevTargetPosition = { x: validX, y: data.y, z: validZ };
           playerMesh.userData.prevTargetTime = Date.now();
         }
       }
@@ -606,7 +651,12 @@ export const setupSocketListeners = async ({
           
           // Set initial target position for the newly created player
           if (createdMesh) {
-            createdMesh.userData.targetPosition = new THREE.Vector3(data.x, data.y, data.z);
+            // Use the same object structure for targetPosition
+            createdMesh.userData.targetPosition = { 
+              x: data.x, 
+              y: data.y, 
+              z: data.z 
+            };
             createdMesh.userData.lastUpdateTime = Date.now();
             
             // Set disappearance timeout
@@ -628,7 +678,12 @@ export const setupSocketListeners = async ({
           
           // Set initial target position for the newly created player
           if (createdMesh) {
-            createdMesh.userData.targetPosition = new THREE.Vector3(data.x, data.y, data.z);
+            // Use the same object structure for targetPosition
+            createdMesh.userData.targetPosition = { 
+              x: data.x, 
+              y: data.y, 
+              z: data.z 
+            };
             createdMesh.userData.lastUpdateTime = Date.now();
             
             // Set disappearance timeout

@@ -59,6 +59,18 @@ export const useGameLoop = ({
         
         // Update delta time for timing
         const delta = clockRef.current.getDelta();
+
+        // Log gameloop activity occasionally to avoid spam
+        const shouldLog = Math.random() < 0.01; // ~1% of frames
+        if (shouldLog) {
+            console.log("%c 🔄 Game loop running", "color: #009688;", {
+                delta: delta.toFixed(4),
+                playerControllerExists: !!playerController?.current,
+                updatePlayerMovementExists: !!updatePlayerMovement,
+                playersCount: playersRef.current?.size || 0,
+                time: new Date().toISOString().split('T')[1]
+            });
+        }
         
         // Simple FPS calculation - done directly without updating refs
         if (onFpsUpdate) {
@@ -66,21 +78,33 @@ export const useGameLoop = ({
             onFpsUpdate(currentFps);
         }
         
-        // Update player position if controller exists
+        // Log gamestate info every ~10 seconds for diagnostics
+        if (Math.random() < 0.001) { // ~0.1% of frames
+            console.log("%c 📊 GAME STATE", "background: #000000; color: #00ff00; font-size: 14px;", {
+                localPlayerPosition: playerRef.current ? {
+                    x: playerRef.current.position.x.toFixed(2),
+                    y: playerRef.current.position.y.toFixed(2),
+                    z: playerRef.current.position.z.toFixed(2)
+                } : null,
+                remotePlayerCount: playersRef.current?.size || 0,
+                remotePlayerIds: Array.from(playersRef.current?.keys() || []),
+                time: new Date().toISOString()
+            });
+        }
+        
+        // Update player position using the enhanced PlayerController if available
         if (playerController?.current) {
-            // First check if we're walking to an item
-            const walkingToTarget = playerController.current.updateWalkToTarget(delta);
+            // Use the new update method that handles both keyboard and point-to-click movement
+            // This returns true if movement occurred
+            const movementOccurred = playerController.current.update(delta);
             
-            // Only do regular movement if not walking to a target
-            if (!walkingToTarget) {
-                playerController.current.updatePlayerMovement(delta);
-            }
-            
-            // If we're moving in any way, ensure we send updates
-            if (walkingToTarget || playerController.current.didMovementOccur()) {
-                if (sendPositionUpdate) {
-                    sendPositionUpdate(false); // Regular position update
-                }
+            // Only send position updates if movement actually occurred
+            if (movementOccurred && sendPositionUpdate) {
+                console.log("%c 📡 Movement occurred - sending position update", "color: #E91E63;");
+                sendPositionUpdate(false);
+            } else if (shouldLog) {
+                // Log occasional status when no movement
+                console.log("%c 🚫 No movement detected from PlayerController", "color: gray;");
             }
         } else {
             // Fallback to old movement logic
@@ -94,6 +118,11 @@ export const useGameLoop = ({
                     if (resetMovementFlag) {
                         resetMovementFlag();
                     }
+                }
+            } else {
+                // No player movement method available at all!
+                if (shouldLog) {
+                    console.warn("❌ No player movement method available! Neither PlayerController nor updatePlayerMovement exist.");
                 }
             }
         }
@@ -116,23 +145,21 @@ export const useGameLoop = ({
         if (labelRenderer) {
             labelRenderer.render(scene, camera);
         }
-    }, [
-        renderer, scene, camera, labelRenderer, 
+    },
+        [renderer, scene, camera, labelRenderer, 
         updatePlayerMovement, updateCameraPosition, updateRemotePlayerPositions,
         sendPositionUpdate, checkMovementInputChanged, movementOccurred,
-        itemManagerRef, onFpsUpdate, playerController, resetMovementFlag
-    ]);
+        itemManagerRef, onFpsUpdate, playerController, resetMovementFlag]
+    );
 
     // Start and stop the loop
     useEffect(() => {
-        console.log("Starting game loop...");
         // Reset clock when starting
         clockRef.current.start();
         // Start the loop
         frameIdRef.current = requestAnimationFrame(animate);
 
         return () => {
-            console.log("Stopping game loop...");
             if (frameIdRef.current !== null) {
                 cancelAnimationFrame(frameIdRef.current);
             }

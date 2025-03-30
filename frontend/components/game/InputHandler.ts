@@ -1,3 +1,17 @@
+/**
+ * DEPRECATED: This file is being replaced by the useInteraction.ts hook.
+ * Please migrate to using the useInteraction hook for better integration with React
+ * and more robust click handling.
+ * 
+ * The useInteraction hook provides:
+ * - Better resource cleanup
+ * - Improved integration with the PlayerController
+ * - More robust interruption handling
+ * - Consistent movement speeds
+ * 
+ * See frontend/hooks/useInteraction.ts for the replacement implementation.
+ */
+
 import { PlayerController } from './PlayerController';
 import { SocketController } from './SocketController';
 import WorldManager from '../../game/world/WorldManager';

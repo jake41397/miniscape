@@ -40,7 +40,6 @@ const loadMessages = (): ChatMessage[] => {
 };
 
 const ChatPanel: React.FC = () => {
-  console.log('ChatPanel rendering');
   
   // Initialize messages from localStorage
   const [messages, setMessages] = useState<ChatMessage[]>(() => {

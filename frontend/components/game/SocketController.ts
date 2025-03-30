@@ -47,9 +47,9 @@ export class SocketController {
   private setPlayerName: (name: string) => void;
   private setIsConnected: (isConnected: boolean) => void;
   private setCurrentZone: (zone: string) => void;
-  private createNameLabelFn: (name: string, mesh: THREE.Mesh) => CSS2DObject;
+  private createNameLabel: (name: string, mesh: THREE.Mesh) => CSS2DObject;
   private socket: Socket | null = null;
-  private lastSentPosition: { x: number, y: number, z: number } = { x: 0, y: 1, z: 0 };
+  private lastSentPosition: { x: number, y: number, z: number } = { x: 0, y: 0, z: 0 };
   private lastSendTime = 0;
   // Add chat bubbles tracking
   private chatBubbles: Map<string, ChatBubble> = new Map();
@@ -57,6 +57,7 @@ export class SocketController {
   private zoneUpdateTimeoutRef: NodeJS.Timeout | null = null;
 
   constructor(options: SocketControllerOptions) {
+    // Initialize properties
     this.scene = options.scene;
     this.playerRef = options.playerRef;
     this.playersRef = options.playersRef;
@@ -65,10 +66,34 @@ export class SocketController {
     this.itemManagerRef = options.itemManagerRef;
     this.cleanupIntervalRef = options.cleanupIntervalRef;
     this.chatRef = options.chatRef;
+    
+    // Store callback functions
     this.setPlayerName = options.setPlayerName;
     this.setIsConnected = options.setIsConnected;
     this.setCurrentZone = options.setCurrentZone;
-    this.createNameLabelFn = options.createNameLabel;
+    this.createNameLabel = options.createNameLabel;
+
+    // Initialize internal properties
+    this.lastSentPosition = { x: 0, y: 0, z: 0 };
+    this.lastSendTime = 0;
+    this.cleanupTimer = null;
+    
+    // Force position test to check socket is working
+    // This is crucial for diagnosing the issue
+    if (this.playerRef.current) {
+      console.log("%c 🧪 FORCING TEST POSITION SEND", "background: #ff0000; color: white; font-size: 18px;");
+      setTimeout(() => {
+        const player = this.playerRef.current;
+        if (player) {
+          // Force sending initial position with rotation
+          this.sendPlayerPosition(
+            player.position,
+            player.rotation.y,
+            true // Force send
+          );
+        }
+      }, 2000); // Delay to ensure socket is connected
+    }
   }
 
   async initialize(): Promise<boolean> {
@@ -341,7 +366,7 @@ export class SocketController {
       worldManagerRef: this.worldManagerRef,
       cleanupIntervalRef: this.cleanupIntervalRef,
       setPlayerName: this.setPlayerName,
-      createNameLabel: this.createNameLabelFn
+      createNameLabel: this.createNameLabel
     });
     
     // Set up additional listeners that aren't handled by gameSocketHandler
@@ -383,52 +408,79 @@ export class SocketController {
     console.log('Sent system message to chat:', message);
   }
 
-  /**
-   * Send player position to server for synchronization with other clients.
-   * @param position Player's current position vector
-   * @param rotationY Player's Y-axis rotation (yaw)
-   * @param force Force an update regardless of timing/movement thresholds (used for automove)
-   */
   public async sendPlayerPosition(position: THREE.Vector3, rotationY: number, force: boolean = false): Promise<void> {
-    const now = Date.now();
-    const socket = await getSocket();
-    if (!socket) return;
-    
-    // Simple fixed interval for all updates to ensure consistency
-    // This avoids issues with variable update rates
-    const UPDATE_INTERVAL = 80; // ms
-    
-    // Skip updates that are too frequent, unless forced
-    if (!force && now - this.lastSendTime < UPDATE_INTERVAL) {
-      return;
+    try {
+      const now = Date.now();
+      const socket = await getSocket();
+      
+      // EMERGENCY DEBUGGING - Always log position sends
+      console.log("%c 📡 ATTEMPTING POSITION SEND", "background: #ff5722; color: white; font-weight: bold;", {
+        position: { 
+          x: position.x.toFixed(2), 
+          y: position.y.toFixed(2), 
+          z: position.z.toFixed(2) 
+        },
+        rotation: rotationY.toFixed(2),
+        force,
+        socketExists: !!socket,
+        time: new Date().toISOString()
+      });
+      
+      // Minimum time between position updates (to limit network traffic)
+      const MIN_UPDATE_INTERVAL = 50; // milliseconds
+      
+      // Don't send position updates too frequently unless forced
+      if (!force && now - this.lastSendTime < MIN_UPDATE_INTERVAL) {
+        console.log("Skipping position update - too soon after last update");
+        return;
+      }
+      
+      // Calculate distance from last sent position
+      const dx = position.x - this.lastSentPosition.x;
+      const dy = position.y - this.lastSentPosition.y;
+      const dz = position.z - this.lastSentPosition.z;
+      const distanceSquared = dx * dx + dy * dy + dz * dz;
+      
+      // Only send position update if moved significantly or forced
+      if (force || distanceSquared > 0.001) {
+        // Update last sent position and time
+        this.lastSentPosition = { x: position.x, y: position.y, z: position.z };
+        this.lastSendTime = now;
+        
+        // Check if socket is available
+        if (!socket) {
+          console.error("%c ❌ SOCKET NOT AVAILABLE", "background: red; color: white; font-size: 16px;");
+          return;
+        }
+        
+        // Create position data object manually to ensure proper format
+        const positionData = {
+          x: position.x,
+          y: position.y,
+          z: position.z,
+          rotation: rotationY,
+          timestamp: now
+        };
+        
+        // Send position to server
+        console.log("%c 📤 EMITTING playerMove TO SERVER", "background: green; color: white; font-size: 14px;", positionData);
+        
+        socket.emit('playerMove', positionData);
+        
+        // Cache position for reconnection
+        saveLastKnownPosition({
+          x: position.x,
+          y: position.y,
+          z: position.z
+        });
+        
+        console.log("%c ✅ Position update sent successfully", "color: green;");
+      } else {
+        console.log("Skipping position update - no significant movement");
+      }
+    } catch (error) {
+      console.error("%c ❌ ERROR SENDING POSITION", "background: red; color: white;", error);
     }
-    
-    // Update last sent time immediately
-    this.lastSendTime = now;
-    
-    // Send player position update to server
-    socket.emit('playerMove', {
-      x: position.x,
-      y: position.y,
-      z: position.z,
-      rotationY: rotationY,
-      timestamp: now,
-      isAutoMove: force
-    });
-    
-    // Update our last sent position
-    this.lastSentPosition = { 
-      x: position.x, 
-      y: position.y, 
-      z: position.z 
-    };
-    
-    // Save position for reconnection
-    saveLastKnownPosition({
-      x: position.x,
-      y: position.y,
-      z: position.z
-    });
   }
 
   public async sendChatMessage(message: string): Promise<void> {

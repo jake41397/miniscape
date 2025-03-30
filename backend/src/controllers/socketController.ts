@@ -71,6 +71,7 @@ interface PlayerPosition {
   y: number;
   z: number;
   timestamp?: number;
+  rotation?: number;
 }
 
 interface PlayersStore {
@@ -339,13 +340,32 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
 
     // Handle player movement
     socket.on('playerMove', async (position: PlayerPosition) => {
-      // Add detailed logging
-      console.log(`Player ${socket.id} moved to position:`, {
+      // Add even more detailed logging with different style to easily see in console
+      console.log(`\n============= SERVER RECEIVED PLAYER MOVE =============`);
+      console.log(`Player ${socket.id} moved:`, {
         position,
+        rotation: position.rotation?.toFixed(2) || 'undefined',
+        timestamp: position.timestamp ? new Date(position.timestamp).toLocaleTimeString() : 'undefined',
         username: players[socket.id]?.name || 'Unknown',
         totalPlayers: Object.keys(players).length,
-        otherPlayerIds: Object.keys(players).filter(id => id !== socket.id)
+        otherPlayerIds: Object.keys(players).filter(id => id !== socket.id),
+        // Additional debug info
+        keyCount: Object.keys(position).length,
+        positionKeys: Object.keys(position),
+        positionType: typeof position
       });
+      
+      // Check if position is an empty object or has undefined values
+      if (Object.keys(position).length === 0) {
+        console.log(`⚠️ WARNING: Received empty position object from ${socket.id}!`);
+        return;
+      }
+      
+      // Check for undefined values in key fields
+      if (position.x === undefined || position.y === undefined || position.z === undefined) {
+        console.log(`⚠️ WARNING: Received position with undefined values from ${socket.id}:`, position);
+        return;
+      }
       
       // Update player position in server state
       if (players[socket.id]) {
@@ -364,19 +384,21 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           x: validX,
           y: position.y,
           z: validZ,
+          rotation: position.rotation || 0,
           timestamp: position.timestamp || Date.now()
         };
         
         // Skip broadcasting if this is the default position (0,1,0)
         // This prevents unnecessary position updates for new or reconnected players
         if (isDefaultPosition(validX, position.y, validZ)) {
+          console.log(`Skipping broadcast - default position (0,1,0)`);
           return;
         }
         
-        console.log(`Broadcasting playerMoved event`, {
+        console.log(`\n!!!!!!!!!! BROADCASTING PLAYER MOVED EVENT !!!!!!!!!!!!`);
+        console.log(`Broadcasting from ${socket.id} to ${Object.keys(players).filter(id => id !== socket.id).length} players`, {
           targetPlayers: Object.keys(players).filter(id => id !== socket.id).length,
-          event: moveEvent,
-          toSocketID: socket.id
+          event: moveEvent
         });
         
         // Debug this broadcast to ensure it's working

@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { JUMP_COOLDOWN } from '../constants';
 
+// Define the movement keys we care about
+const MOVEMENT_KEYS = ['w', 'a', 's', 'd', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '];
+
 export interface PlayerInputState {
     moveForward: boolean;
     moveBackward: boolean;
@@ -26,52 +29,36 @@ export const usePlayerInput = () => {
     const movementChanged = useRef<boolean>(false); // Track if state *actually* changed
 
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
-        // Ignore if typing in input/textarea
-        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-            return;
+        console.log('🎮 Key pressed:', e.key);
+        
+        // Only handle keys we care about
+        if (!MOVEMENT_KEYS.includes(e.key)) return;
+        
+        // Prevent default for arrow keys and space to avoid page scrolling
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+            e.preventDefault();
         }
-
-        let stateChanged = false;
-        setInputState(prevState => {
-            let newState = { ...prevState };
-            let jumpAttempted = false;
-
-            switch (e.key) {
-                case 'w': case 'ArrowUp':
-                    if (!prevState.moveForward) { newState.moveForward = true; stateChanged = true; }
-                    break;
-                case 's': case 'ArrowDown':
-                    if (!prevState.moveBackward) { newState.moveBackward = true; stateChanged = true; }
-                    break;
-                case 'a': case 'ArrowLeft':
-                    if (!prevState.moveLeft) { newState.moveLeft = true; stateChanged = true; }
-                    break;
-                case 'd': case 'ArrowRight':
-                    if (!prevState.moveRight) { newState.moveRight = true; stateChanged = true; }
-                    break;
-                case ' ':
-                    const now = Date.now();
-                    if (!prevState.attemptJump && now - lastJumpTime.current > JUMP_COOLDOWN) {
-                        newState.attemptJump = true;
-                        jumpAttempted = true; // Set flag for immediate use below
-                        stateChanged = true;
-                    }
-                    break;
-                default:
-                    return prevState; // No relevant key, return previous state
+        
+        // Update our state
+        if (e.key === 'w' || e.key === 'ArrowUp') {
+            setInputState(prevState => ({ ...prevState, moveForward: true }));
+        } else if (e.key === 's' || e.key === 'ArrowDown') {
+            setInputState(prevState => ({ ...prevState, moveBackward: true }));
+        } else if (e.key === 'a' || e.key === 'ArrowLeft') {
+            setInputState(prevState => ({ ...prevState, moveLeft: true }));
+        } else if (e.key === 'd' || e.key === 'ArrowRight') {
+            setInputState(prevState => ({ ...prevState, moveRight: true }));
+        } else if (e.key === ' ') {
+            // For space (jump), we set the flag and track when it happened
+            const now = Date.now();
+            if (!inputState.attemptJump && now - lastJumpTime.current > JUMP_COOLDOWN) {
+                setInputState(prevState => ({ ...prevState, attemptJump: true }));
+                lastJumpTime.current = now;
             }
-
-            if (jumpAttempted) {
-                lastJumpTime.current = Date.now(); // Update jump time only when jump is successfully initiated
-            }
-
-            // Only update movementChanged ref if state actually changed
-            if (stateChanged) {
-                movementChanged.current = true;
-            }
-            return newState;
-        });
-
+        }
+        
+        // Set movement changed flag
+        movementChanged.current = true;
     }, []);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {

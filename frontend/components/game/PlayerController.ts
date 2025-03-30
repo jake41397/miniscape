@@ -9,13 +9,14 @@ import { saveLastKnownPosition } from '../../game/network/socket';
 
 // --- Constants ---
 
-// Movement Settings - Using original values from GameCanvas.tsx
-export const MOVEMENT_SPEED = 0.02; // Original value from GameCanvas
-export const FIXED_SPEED_FACTOR = 0.02; // Original value from GameCanvas
+// Movement Settings
+export const MOVEMENT_SPEED = 0.25; // Adjusted for potentially delta-time independent update
 export const JUMP_FORCE = 0.3;
-export const GRAVITY = 0.015; // Represents deceleration per frame/update; consider multiplying by delta if it's acceleration
+export const GRAVITY = 0.015;
 export const JUMP_COOLDOWN = 500; // milliseconds
 export const PLAYER_ROTATION_LERP_FACTOR = 0.15; // How quickly the player turns (0-1)
+// Auto-Movement Specific Speed
+export const AUTO_MOVE_SPEED = 0.25; // Separate speed for point-and-click, adjust as needed
 
 // Camera Settings
 export const CAMERA_DEFAULT_DISTANCE = 10;
@@ -66,10 +67,16 @@ export class PlayerController {
   private camera: THREE.Camera;
   private lastSentPosition: React.MutableRefObject<{ x: number; y: number; z: number }>;
   private movementChanged: React.MutableRefObject<boolean>;
-  private socketController: any; // Assuming a socketController is set up
-  private moveToPositionInterrupted: boolean = false;
+  private socketController: any; // Replace 'any' with your actual SocketController type
+
+  // Auto-movement state
   private isAutoMoving: boolean = false;
   private targetPosition: THREE.Vector3 | null = null;
+  private autoMovePromiseResolve: (() => void) | null = null;
+  private autoMoveFrameId: number | null = null; // Store requestAnimationFrame ID
+
+  // Inside the moveToPosition method, private class-level variable for tracking update time
+  private lastUpdateTime: number = 0;
 
   constructor(
     playerRef: React.MutableRefObject<THREE.Mesh | null>,
@@ -79,7 +86,7 @@ export class PlayerController {
     camera: THREE.Camera,
     lastSentPosition: React.MutableRefObject<{ x: number; y: number; z: number }>,
     movementChanged: React.MutableRefObject<boolean>,
-    socketController: any // Assuming a socketController is set up
+    socketController: any // Replace 'any' with your actual SocketController type
   ) {
     this.playerRef = playerRef;
     this.movementState = movementState;
@@ -97,386 +104,649 @@ export class PlayerController {
   }
 
   /**
-   * Updates player position and rotation based on input state and delta time.
-   * @param delta Time elapsed since the last frame in seconds.
-   * @returns boolean Indicating if the player's position or state changed.
+   * Interrupts the current automatic movement, if any.
+   * Called by new clicks OR manual keyboard movement.
    */
-  updatePlayerMovement(delta: number): boolean {
+  interruptMovement(): void {
+    if (this.isAutoMoving) {
+      console.log("%c 🛑 Interrupting automatic movement.", "background: #ff5722; color: white;");
+      this.isAutoMoving = false;
+      this.targetPosition = null;
+
+      // Cancel the animation frame loop
+      if (this.autoMoveFrameId !== null) {
+          cancelAnimationFrame(this.autoMoveFrameId);
+          this.autoMoveFrameId = null;
+      }
+
+      // Resolve the promise associated with the interrupted movement
+      if (this.autoMovePromiseResolve) {
+          this.autoMovePromiseResolve(); // Indicate completion (or cancellation)
+          this.autoMovePromiseResolve = null;
+      }
+      
+      // CRITICAL FIX: Reset movement state to ensure keyboard movement is responsive
+      this.movementState.current = {
+        ...this.movementState.current,
+        moveForward: false,
+        moveBackward: false,
+        moveLeft: false,
+        moveRight: false,
+        lastUpdateTime: Date.now() // Reset timestamp to ensure proper delta calculations
+      };
+      
+      // CRITICAL FIX: Use matrix based camera direction analysis
+      const player = this.playerRef.current;
+      if (player) {
+        // Use the improved camera direction extraction method
+        const cameraMatrix = new THREE.Matrix4().extractRotation(this.camera.matrixWorld);
+        const cameraForward = new THREE.Vector3(0, 0, -1).applyMatrix4(cameraMatrix);
+        const cameraRight = new THREE.Vector3(1, 0, 0).applyMatrix4(cameraMatrix);
+        
+        // Flatten to XZ plane
+        cameraForward.y = 0;
+        cameraRight.y = 0;
+        
+        // Normalize
+        if (cameraForward.lengthSq() > 0.001) cameraForward.normalize();
+        if (cameraRight.lengthSq() > 0.001) cameraRight.normalize();
+        
+        // Calculate angle for debugging
+        const forwardAngleDeg = (Math.atan2(cameraForward.x, cameraForward.z) * 180 / Math.PI) % 360;
+        
+        // Log exact camera state for debugging movement control issues
+        console.log("%c 🧭 Movement Controls Reset - Camera Analysis:", "background: #3F51B5; color: white; font-size: 14px", {
+          cameraForward: {
+            x: cameraForward.x.toFixed(3),
+            z: cameraForward.z.toFixed(3)
+          },
+          cameraRight: {
+            x: cameraRight.x.toFixed(3),
+            z: cameraRight.z.toFixed(3)
+          },
+          forwardAngleDeg: forwardAngleDeg.toFixed(1) + "°",
+          cameraStateAngle: this.cameraState.current.angle.toFixed(3),
+          time: new Date().toISOString().split('T')[1]
+        });
+      }
+      
+      // Reset rotation lerp factor temporarily to make rotation more responsive
+      // after interrupting auto-movement
+      setTimeout(() => {
+        // This helps ensure smooth rotation transition when keyboard controls start
+        if (this.playerRef.current) {
+          console.log("%c 🔄 Player movement properly reset for keyboard control", "color: #2196F3;");
+        }
+      }, 50); // Small delay to ensure rendering cycle completes
+    }
+  }
+
+  /**
+   * Move player automatically to a specific target position.
+   * Returns a Promise that resolves when the movement completes or is interrupted.
+   */
+  moveToPosition(target: THREE.Vector3): Promise<void> {
+    console.log("%c 🚶 moveToPosition CALLED", "background: #ff00ff; color: white; font-size: 16px;", {
+      targetX: target.x.toFixed(2),
+      targetZ: target.z.toFixed(2),
+      playerExists: !!this.playerRef.current,
+      isAutoMoving: this.isAutoMoving,
+      socketControllerExists: !!this.socketController
+    });
+    
+    // IMPORTANT: Interrupt any previous auto-movement *before* starting a new one.
+    this.interruptMovement();
+
+    return new Promise((resolve) => {
+      const player = this.playerRef.current;
+      if (!player) {
+        console.warn("❌ Player mesh not available for moveToPosition.");
+        resolve(); // Cannot move if player doesn't exist
+        return;
+      }
+
+      this.isAutoMoving = true;
+      this.targetPosition = target.clone(); // Store a copy
+      this.targetPosition.y = player.position.y; // Maintain current height
+      this.autoMovePromiseResolve = resolve; // Store the resolver
+
+      console.log(`✅ Starting auto-move to: (${this.targetPosition.x.toFixed(2)}, ${this.targetPosition.z.toFixed(2)})`);
+
+      // Initialize last frame time for delta calculations
+      let lastFrameTime = performance.now();
+      
+      // --- Movement loop function ---
+      const moveStep = () => {
+        // Check if movement was interrupted *externally* (by interruptMovement)
+        if (!this.isAutoMoving || !this.targetPosition) {
+            // The promise resolve is handled within interruptMovement
+            return; // Stop the loop
+        }
+
+        const currentPlayer = this.playerRef.current; // Re-check player ref in case it changes
+        if (!currentPlayer) {
+            console.warn("Player mesh became null during auto-move.");
+            this.interruptMovement(); // Clean up state
+            return;
+        }
+
+        // Calculate frame delta for smoother movement
+        const now = performance.now();
+        const frameDelta = Math.min((now - lastFrameTime) / 1000, 0.1); // Cap at 100ms to prevent jumps
+        lastFrameTime = now;
+        
+        // Calculate speed based on frame time
+        const frameSpeed = AUTO_MOVE_SPEED * frameDelta * 60; // Normalize to 60fps equivalent
+        
+        const currentPosition = currentPlayer.position;
+        const distanceToTarget = currentPosition.distanceTo(this.targetPosition);
+
+        // --- Check for arrival ---
+        const arrivalThreshold = frameSpeed * 0.5; // Stop slightly before exact point
+        if (distanceToTarget < arrivalThreshold) {
+            console.log("Auto-move arrived at target.");
+            // Snap to final position for precision
+            currentPlayer.position.copy(this.targetPosition);
+
+            // Send final precise position
+            if (this.socketController) {
+              this.socketController.sendPlayerPosition(
+                currentPlayer.position,
+                currentPlayer.rotation.y,
+                true // Indicate final position
+              );
+            }
+            
+            // Check for zone changes on arrival
+            if (this.socketController && typeof this.socketController.checkAndUpdateZone === 'function') {
+              this.socketController.checkAndUpdateZone(
+                currentPlayer.position.x, 
+                currentPlayer.position.z
+              );
+            }
+            
+            saveLastKnownPosition({ // Persist final position
+              x: currentPlayer.position.x,
+              y: currentPlayer.position.y,
+              z: currentPlayer.position.z
+            });
+
+            this.isAutoMoving = false; // Mark as finished
+            this.targetPosition = null;
+            if (this.autoMovePromiseResolve) {
+              this.autoMovePromiseResolve(); // Resolve the original promise
+              this.autoMovePromiseResolve = null;
+            }
+            this.autoMoveFrameId = null;
+            return; // End the loop
+        }
+
+        // --- Calculate movement for this frame ---
+        const direction = new THREE.Vector3()
+          .subVectors(this.targetPosition, currentPosition)
+          .normalize();
+
+        // Rotate player to face the direction of movement
+        const targetRotationY = Math.atan2(direction.x, direction.z);
+        // Smoothly interpolate rotation using Lerp
+        currentPlayer.rotation.y = THREE.MathUtils.lerp(
+            currentPlayer.rotation.y,
+            targetRotationY,
+            PLAYER_ROTATION_LERP_FACTOR // Use the rotation lerp factor
+        );
+
+        // Calculate move distance for this frame
+        // Use Math.min to avoid overshooting the target
+        const moveDistance = Math.min(frameSpeed, distanceToTarget);
+
+        // Apply movement
+        currentPlayer.position.addScaledVector(direction, moveDistance);
+        
+        // Mark that movement has changed
+        this.movementChanged.current = true;
+
+        // --- Send position updates periodically ---
+        const currentTime = Date.now();
+        const timeSinceLastUpdate = currentTime - this.lastUpdateTime;
+        const UPDATE_INTERVAL = 100; // milliseconds
+        
+        if (timeSinceLastUpdate > UPDATE_INTERVAL) {
+          if (this.socketController) {
+            this.socketController.sendPlayerPosition(
+              currentPlayer.position,
+              currentPlayer.rotation.y,
+              false // Not the final position yet
+            );
+            
+            // Check for zone changes during movement
+            if (typeof this.socketController.checkAndUpdateZone === 'function') {
+              this.socketController.checkAndUpdateZone(
+                currentPlayer.position.x, 
+                currentPlayer.position.z
+              );
+            }
+          }
+          
+          // Update last position and time
+          this.lastSentPosition.current = { 
+            x: currentPlayer.position.x, 
+            y: currentPlayer.position.y, 
+            z: currentPlayer.position.z 
+          };
+          this.lastUpdateTime = currentTime;
+        }
+
+        // --- Continue movement in the next frame ---
+        this.autoMoveFrameId = requestAnimationFrame(moveStep);
+      };
+
+      // Start the movement loop
+      this.autoMoveFrameId = requestAnimationFrame(moveStep);
+    });
+  }
+
+  /**
+   * Main update loop for the player controller. Call this in your game loop.
+   * Handles keyboard input, gravity, jumping, camera updates, and network sync.
+   * CRUCIALLY, handles interrupting auto-movement if manual keys are pressed.
+   *
+   * @param deltaTime Time elapsed since the last frame (in seconds, ideally)
+   * @returns boolean True if movement occurred, false otherwise
+   */
+  update(deltaTime: number): boolean {
     const player = this.playerRef.current;
     if (!player) return false;
 
+    // DEBUG: Log at beginning of update (reduce log frequency to avoid spam)
+    const shouldLog = Math.random() < 0.05; // Log ~5% of frames
+    if (shouldLog) {
+      console.log("%c 🔄 PlayerController.update called", "color: #00aa00;");
+      
+      // CRITICAL: Check state of keysPressed to see if keys are being passed correctly
+      console.log("%c 🔑 Keys State: ", "background: #673AB7; color: white;", Object.entries(this.keysPressed.current)
+        .filter(([_, pressed]) => pressed)
+        .map(([key]) => key));
+      console.log("MovementState:", this.movementState.current);
+    }
+
     const state = this.movementState.current;
-    let didMove = false; // Track if any change occurred this frame
+    const keys = this.keysPressed.current;
+    const now = Date.now();
+    let didMovementOccur = false;
 
-    // --- Calculate Input Vector ---
-    // Vector relative to player's desired movement (forward/backward, left/right)
-    const inputVector = new THREE.Vector3(0, 0, 0);
-    if (state.moveForward)  { inputVector.z += 1; }
-    if (state.moveBackward) { inputVector.z -= 1; }
-    if (state.moveLeft)     { inputVector.x += 1; }
-    if (state.moveRight)    { inputVector.x -= 1; }
+    // --- Process Keyboard Input ---
+    let manualMovementInput = false;
+    const moveDirection = new THREE.Vector3(0, 0, 0);
+    
+    // CRITICAL FIX: Use a completely different approach for determining camera direction
+    // Get the camera's local axes (right, up, forward)
+    const cameraMatrix = new THREE.Matrix4().extractRotation(this.camera.matrixWorld);
+    
+    // Extract the world-space right and forward vectors directly from the camera's matrix
+    // These give us the EXACT vectors in world space that represent camera directions
+    const cameraRight = new THREE.Vector3(1, 0, 0).applyMatrix4(cameraMatrix);
+    const cameraForward = new THREE.Vector3(0, 0, -1).applyMatrix4(cameraMatrix);
+    
+    // Now flatten these vectors to the XZ plane for ground movement
+    cameraRight.y = 0;
+    cameraForward.y = 0;
+    
+    // Normalize them to ensure unit length even after flattening
+    if (cameraRight.lengthSq() > 0.001) cameraRight.normalize();
+    if (cameraForward.lengthSq() > 0.001) cameraForward.normalize();
+    
+    // Calculate camera angle in degrees for debugging
+    const currentCameraAngle = (Math.atan2(cameraForward.x, cameraForward.z) * 180 / Math.PI) % 360;
+    
+    // Super extensive logging when the movement might flip (only in suspicious conditions)
+    // Log every 2 seconds (on average) for diagnostic purposes
+    if (Math.random() < 0.01) {
+      console.log("%c 📹 CAMERA ORIENTATION TRACE", "background: #FF0000; color: white; font-size: 14px", {
+        cameraDegrees: currentCameraAngle.toFixed(1),
+        cameraRadians: this.cameraState.current.angle.toFixed(3),
+        forwardVector: {
+          x: cameraForward.x.toFixed(3),
+          z: cameraForward.z.toFixed(3)
+        },
+        rightVector: {
+          x: cameraRight.x.toFixed(3),
+          z: cameraRight.z.toFixed(3)
+        },
+        time: new Date().toISOString().split('T')[1]
+      });
+    }
 
-    // --- Calculate World Movement Direction ---
-    const worldMovementDirection = new THREE.Vector3();
-    const isMovingHorizontally = inputVector.x !== 0 || inputVector.z !== 0;
+    // Check for keyboard input - using the camera-derived vectors directly
+    if (keys['w'] || keys['ArrowUp']) {
+      if (shouldLog) console.log("%c ⬆️ UP KEY DETECTED", "background: #008800; color: white;");
+      moveDirection.add(cameraForward);
+      manualMovementInput = true;
+    }
+    if (keys['s'] || keys['ArrowDown']) {
+      if (shouldLog) console.log("%c ⬇️ DOWN KEY DETECTED", "background: #008800; color: white;");
+      moveDirection.sub(cameraForward);
+      manualMovementInput = true;
+    }
+    
+    // CRITICAL FIX: A/D behavior - explicitly log and never flip
+    // Always use cameraRight for left/right movement
+    if (keys['a'] || keys['ArrowLeft']) {
+      if (shouldLog) console.log("%c ⬅️ LEFT KEY (A) PRESSED", "background: #E91E63; color: white; font-size: 14px;");
+      // LEFT = SUBTRACT the camera's right vector (never changes)
+      moveDirection.sub(cameraRight);
+      console.log("%c 👈 LEFT VECTOR APPLIED", "color: #E91E63;", {
+        rightVector: { x: cameraRight.x.toFixed(2), z: cameraRight.z.toFixed(2) },
+        resultDir: { 
+          x: (-cameraRight.x).toFixed(2), 
+          z: (-cameraRight.z).toFixed(2) 
+        },
+        currentAngle: currentCameraAngle.toFixed(1) + "°"
+      });
+      manualMovementInput = true;
+    }
+    if (keys['d'] || keys['ArrowRight']) {
+      if (shouldLog) console.log("%c ➡️ RIGHT KEY (D) PRESSED", "background: #2196F3; color: white; font-size: 14px;");
+      // RIGHT = ADD the camera's right vector (never changes)
+      moveDirection.add(cameraRight);
+      console.log("%c 👉 RIGHT VECTOR APPLIED", "color: #2196F3;", {
+        rightVector: { x: cameraRight.x.toFixed(2), z: cameraRight.z.toFixed(2) },
+        resultDir: { 
+          x: cameraRight.x.toFixed(2), 
+          z: cameraRight.z.toFixed(2) 
+        },
+        currentAngle: currentCameraAngle.toFixed(1) + "°"
+      });
+      manualMovementInput = true;
+    }
 
-    if (isMovingHorizontally) {
-      inputVector.normalize(); // Normalize input vector
+    // DEBUG: Log keyboard input state on significant events
+    if (manualMovementInput && shouldLog) {
+      console.log("%c 🎮 Keyboard movement detected", "color: #2196f3;", {
+        keys: Object.entries(keys).filter(([k, v]) => v).map(([k]) => k).join(', '),
+        moveDirection: { x: moveDirection.x.toFixed(2), z: moveDirection.z.toFixed(2) },
+        cameraAngle: currentCameraAngle.toFixed(1) + "°" 
+      });
+    }
 
-      // Get camera's forward direction projected onto the ground plane (XZ)
-      const cameraForward = new THREE.Vector3();
-      this.camera.getWorldDirection(cameraForward);
-      cameraForward.y = 0;
-      cameraForward.normalize();
-
-      // Calculate camera's right direction on the ground plane
-      const cameraRight = new THREE.Vector3().crossVectors(
-        this.camera.up, // Use camera's up vector (typically Vector3(0, 1, 0))
-        cameraForward
-      ).normalize();
-
-      // Combine camera directions with input vector to get world movement direction
-      // Forward/backward component
-      if (inputVector.z !== 0) {
-        worldMovementDirection.add(cameraForward.clone().multiplyScalar(inputVector.z));
-      }
-      // Left/right component
-      if (inputVector.x !== 0) {
-        worldMovementDirection.add(cameraRight.clone().multiplyScalar(inputVector.x));
-      }
-
-      // Normalize the final world direction vector
-      worldMovementDirection.normalize();
-
-      // --- Apply Position Change ---
-      const currentSpeed = FIXED_SPEED_FACTOR; // Speed in units per second
-      player.position.x += worldMovementDirection.x * currentSpeed * delta;
-      player.position.z += worldMovementDirection.z * currentSpeed * delta;
+    // --- INTERRUPT AUTO-MOVEMENT ---
+    // If any manual movement key is pressed while auto-moving, stop auto-moving immediately
+    if (manualMovementInput && this.isAutoMoving) {
+      console.log("%c 🛑 Interrupting auto-movement due to keyboard input", "color: #ff5722; font-size: 14px;");
+      this.interruptMovement();
       
-      // --- Apply Player Rotation ---
-      // Calculate the target angle based on the world movement direction
-      const targetAngle = Math.atan2(worldMovementDirection.x, worldMovementDirection.z);
+      // CRITICAL FIX: Force update the deltaTime to prevent speed issues during transition
+      state.lastUpdateTime = now - 16; // Assume ~60fps frame time
+    }
 
-      // Smoothly interpolate the player's Y rotation towards the target angle
-      const rotationDiff = targetAngle - player.rotation.y;
+    // --- Apply Manual Movement (only if not auto-moving) ---
+    if (!this.isAutoMoving && moveDirection.lengthSq() > 0) {
+      moveDirection.normalize();
+
+      // Calculate target rotation based on movement direction
+      const targetRotationY = Math.atan2(moveDirection.x, moveDirection.z);
+      player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetRotationY, PLAYER_ROTATION_LERP_FACTOR);
+
+      // CRITICAL FIX: Calculate time-based speed factor
+      // This ensures consistent movement regardless of frame rate or recent mode switches
+      const timeDelta = (now - state.lastUpdateTime) / 1000; // Convert to seconds
+      const speedFactor = Math.min(timeDelta * 60, 2.0); // Cap at 2x normal speed to prevent teleporting
       
-      // Normalize the difference to the range [-PI, PI] for shortest rotation path
-      let normalizedDiff = (rotationDiff + Math.PI) % (Math.PI * 2) - Math.PI;
-      if (normalizedDiff < -Math.PI) {
-          normalizedDiff += Math.PI * 2; // Adjust if modulo results in value less than -PI
+      // Use fixed movement speed multiplied by time factor for consistent movement
+      const frameSpeed = MOVEMENT_SPEED * speedFactor;
+      
+      // Log speed for debug
+      if (shouldLog || Math.random() < 0.1) { // Log more often during movement
+        console.log("%c 🏃 Movement speed:", "color: #4CAF50;", {
+          baseSpeed: MOVEMENT_SPEED,
+          timeDelta: timeDelta.toFixed(4),
+          speedFactor: speedFactor.toFixed(2),
+          frameSpeed: frameSpeed.toFixed(4)
+        });
       }
 
-      // Apply a portion of the difference using Lerp factor
-      player.rotation.y += normalizedDiff * PLAYER_ROTATION_LERP_FACTOR;
+      // Apply movement based on calculated frame speed
+      player.position.addScaledVector(moveDirection, frameSpeed);
+      this.movementChanged.current = true; // Flag that position changed manually
+      didMovementOccur = true;
       
-      didMove = true;
+      // DEBUG: Log manual movement
+      if (shouldLog) {
+        console.log("%c 🚶 Manual movement applied", "color: #4caf50;", {
+          position: { 
+            x: player.position.x.toFixed(2), 
+            y: player.position.y.toFixed(2), 
+            z: player.position.z.toFixed(2) 
+          },
+          rotation: player.rotation.y.toFixed(2)
+        });
+      }
       
       // Check for zone changes if we have a socketController with checkAndUpdateZone
       if (this.socketController && typeof this.socketController.checkAndUpdateZone === 'function') {
         // Check if the player has crossed into a new zone
         this.socketController.checkAndUpdateZone(player.position.x, player.position.z);
       }
-    } 
-    // else: No horizontal input, player maintains current rotation.
-
-    // --- Handle Jumping and Gravity ---
-    if (state.isJumping) {
-      // Apply jump velocity
-      player.position.y += state.jumpVelocity;
+    }
+    // --- Auto Movement Handling ---
+    else if (this.isAutoMoving && this.targetPosition) {
+      // Note: Most auto-movement logic is in moveToPosition's frameStep
+      // But we still need to mark that movement is occurring
+      didMovementOccur = true;
       
-      // Apply gravity (as simple deceleration per frame - adjust if needed)
-      state.jumpVelocity -= GRAVITY; 
-      
-      // Check for landing
-      if (player.position.y <= PLAYER_GROUND_Y) {
-        player.position.y = PLAYER_GROUND_Y; // Snap to ground
-        state.isJumping = false;
-        state.jumpVelocity = 0;
+      // DEBUG: Log auto-movement state
+      if (shouldLog) {
+        console.log("%c 🚶‍♂️ Auto-movement is active", "color: #9c27b0;", {
+          target: { 
+            x: this.targetPosition.x.toFixed(2), 
+            y: this.targetPosition.y.toFixed(2), 
+            z: this.targetPosition.z.toFixed(2) 
+          },
+          current: { 
+            x: player.position.x.toFixed(2), 
+            y: player.position.y.toFixed(2), 
+            z: player.position.z.toFixed(2) 
+          }
+        });
       }
-      didMove = true; // Vertical movement counts as change
+      
+      // Check for zone changes here as well for auto-movement
+      if (this.socketController && typeof this.socketController.checkAndUpdateZone === 'function') {
+        // Check if the player has crossed into a new zone
+        this.socketController.checkAndUpdateZone(player.position.x, player.position.z);
+      }
+    }
+    
+    // Update lastUpdateTime for next frame
+    state.lastUpdateTime = now;
+
+    // --- Handle Jumping and Gravity (Only if not auto-moving) ---
+    if (!this.isAutoMoving) {
+        if (keys[' '] && !state.isJumping && (now - state.lastJumpTime > JUMP_COOLDOWN)) {
+            state.isJumping = true;
+            state.jumpVelocity = JUMP_FORCE;
+            state.lastJumpTime = now;
+            this.movementChanged.current = true; // Position will change due to jump
+            didMovementOccur = true;
+            
+            // DEBUG: Log jump started
+            console.log("%c 🦘 Jump started", "color: #ff9800;");
+        }
+
+        // Apply gravity / jump velocity
+        if (state.isJumping) {
+            player.position.y += state.jumpVelocity;
+            state.jumpVelocity -= GRAVITY; // Apply gravity deceleration
+
+            // Check for landing
+            if (player.position.y <= PLAYER_GROUND_Y) {
+                player.position.y = PLAYER_GROUND_Y; // Snap to ground
+                state.isJumping = false;
+                state.jumpVelocity = 0;
+                this.movementChanged.current = true; // Position settled
+                didMovementOccur = true;
+                
+                // DEBUG: Log jump landed
+                console.log("%c 🦘 Jump landed", "color: #ff9800;");
+            }
+        } else {
+             // Ensure player stays on ground if not jumping
+             if (player.position.y !== PLAYER_GROUND_Y) {
+                 player.position.y = PLAYER_GROUND_Y;
+                 this.movementChanged.current = true;
+                 didMovementOccur = true;
+             }
+        }
+    } else {
+        // If auto-moving, ensure player stays at the fixed Y level
+        if (player.position.y !== PLAYER_GROUND_Y) {
+            player.position.y = PLAYER_GROUND_Y;
+            // No need to set movementChanged here, auto-move handles its own updates
+            didMovementOccur = true;
+        }
     }
 
-    // --- Update State and Cache ---
-    if (didMove) {
-      this.movementChanged.current = true; // Mark change for network/other systems
-      
-      // Cache position periodically or on significant change if needed
-      saveLastKnownPosition({
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z
+    // --- Update Camera Position ---
+    this.updateCameraPosition(player.position);
+
+    // --- Send Network Updates ---
+    // Send updates if movement changed significantly OR periodically
+    const distanceMoved = player.position.distanceTo(this.lastSentPosition.current as any); // Cast needed if type is {x,y,z}
+    const sendThreshold = 0.1; // Send update if moved more than this distance
+
+    // Send if position changed significantly OR if it was specifically flagged (e.g., jump start/land)
+    // Avoid sending updates during auto-move here, as moveToPosition handles its own sends.
+    if (!this.isAutoMoving && (this.movementChanged.current || distanceMoved > sendThreshold)) {
+        if (this.socketController) {
+            console.log("%c 📡 SENDING POSITION UPDATE", "background: #e91e63; color: white; font-size: 14px;", {
+                position: { 
+                  x: player.position.x.toFixed(2), 
+                  y: player.position.y.toFixed(2), 
+                  z: player.position.z.toFixed(2) 
+                },
+                rotation: player.rotation.y.toFixed(2),
+                distanceMoved: distanceMoved.toFixed(2),
+                movementChanged: this.movementChanged.current,
+                controller: !!this.socketController
+            });
+            
+            this.socketController.sendPlayerPosition(
+                player.position,
+                player.rotation.y,
+                !state.isJumping // Send 'final=true' if on ground after manual move/jump land
+            );
+        } else {
+            console.log("%c ❌ Cannot send position - socketController is null", "background: red; color: white;");
+        }
+        this.lastSentPosition.current = { x: player.position.x, y: player.position.y, z: player.position.z };
+        this.movementChanged.current = false; // Reset flag after sending
+
+        // Optionally save position less frequently on manual move
+        // saveLastKnownPosition(this.lastSentPosition.current);
+    }
+    
+    // DEBUG: Log at end of update with movement status
+    console.log("%c 🔄 PlayerController.update complete", "color: #00aa00;", { 
+      didMovementOccur, 
+      isAutoMoving: this.isAutoMoving 
+    });
+    
+    // Return whether any movement occurred this frame
+    return didMovementOccur;
+  }
+
+  /**
+   * Check if movement occurred in the last update.
+   * @returns True if movement occurred, false otherwise
+   */
+  didMovementOccur(): boolean {
+    return this.movementChanged.current;
+  }
+
+  // Handle camera positioning and orientation
+  private updateCameraPosition(playerPosition: THREE.Vector3): void {
+    const camState = this.cameraState.current;
+
+    // Calculate camera position based on player, distance, angle, tilt
+    const cameraOffset = new THREE.Vector3(
+        Math.sin(camState.angle) * camState.distance * Math.cos(camState.tilt * Math.PI),
+        Math.sin(camState.tilt * Math.PI) * camState.distance,
+        Math.cos(camState.angle) * camState.distance * Math.cos(camState.tilt * Math.PI)
+    );
+
+    const cameraPosition = new THREE.Vector3().copy(playerPosition).add(cameraOffset);
+
+    // IMPORTANT: Store previous camera position and orientation for debugging movement issues
+    const prevCameraPos = this.camera.position.clone();
+    
+    // Before updating camera, store previous right vector for consistency check
+    const prevCameraMatrix = new THREE.Matrix4().extractRotation(this.camera.matrixWorld);
+    const prevRightVector = new THREE.Vector3(1, 0, 0).applyMatrix4(prevCameraMatrix);
+    prevRightVector.y = 0;
+    if (prevRightVector.lengthSq() > 0.001) prevRightVector.normalize();
+    
+    // Update camera position
+    this.camera.position.copy(cameraPosition);
+    
+    // Look at the player's head position
+    this.camera.lookAt(playerPosition.x, playerPosition.y + 1.0, playerPosition.z);
+    
+    // After update, get new right vector and check for significant changes
+    const newCameraMatrix = new THREE.Matrix4().extractRotation(this.camera.matrixWorld);
+    const newRightVector = new THREE.Vector3(1, 0, 0).applyMatrix4(newCameraMatrix);
+    newRightVector.y = 0;
+    if (newRightVector.lengthSq() > 0.001) newRightVector.normalize();
+    
+    // Check if right vector direction has flipped significantly (dot product near -1)
+    const rightVectorDot = prevRightVector.dot(newRightVector);
+    
+    // If we detect a significant flip in the right vector (meaning A/D would swap)
+    if (rightVectorDot < 0) {
+      console.warn("%c ⚠️ RIGHT VECTOR FLIP DETECTED! This could cause A/D keys to swap behavior", 
+        "background: red; color: white; font-size: 16px", {
+          dotProduct: rightVectorDot.toFixed(3),
+          prevRight: { x: prevRightVector.x.toFixed(2), z: prevRightVector.z.toFixed(2) },
+          newRight: { x: newRightVector.x.toFixed(2), z: newRightVector.z.toFixed(2) },
+          cameraAngle: camState.angle.toFixed(2),
+          time: new Date().toISOString().split('T')[1]
       });
     }
     
-    // Update last update time for the next frame's delta calculation
-    state.lastUpdateTime = Date.now();
+    // Debug log camera changes to track when directions might flip
+    // Only log if we detect potential issues or occasionally for monitoring
+    const shouldLogVerbose = rightVectorDot < 0.7 || Math.random() < 0.01;
     
-    // Return whether the player's state changed this frame
-    // Note: movementChanged ref might be reset elsewhere (e.g., after network send)
-    return this.movementChanged.current; 
-  }
-
-  /** Handles key down events for movement and actions. */
-  handleKeyDown(e: KeyboardEvent): void {
-    // Ignore input if typing in an input field
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        return;
-    }
-
-    const key = e.key;
-    this.keysPressed.current[key] = true;
-    const state = this.movementState.current;
-
-    if (key === 'w' || key === 'ArrowUp')   { state.moveForward = true; }
-    if (key === 's' || key === 'ArrowDown') { state.moveBackward = true; }
-    if (key === 'a' || key === 'ArrowLeft') { state.moveLeft = true; }
-    if (key === 'd' || key === 'ArrowRight'){ state.moveRight = true; }
-
-    // Handle jump action
-    if (key === ' ' && !state.isJumping) {
-      const now = Date.now();
-      if (now - state.lastJumpTime > JUMP_COOLDOWN) {
-        state.isJumping = true;
-        state.jumpVelocity = JUMP_FORCE;
-        state.lastJumpTime = now;
-        this.movementChanged.current = true; // Jumping is a change
-      }
-    }
-  }
-
-  /** Handles key up events to stop movement/actions. */
-  handleKeyUp(e: KeyboardEvent): void {
-     // Ignore input if typing in an input field
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        return;
-    }
+    if (shouldLogVerbose) {
+      // Calculate camera angle in degrees for easier debugging
+      const angleDeg = (camState.angle * 180 / Math.PI) % 360;
       
-    const key = e.key;
-    this.keysPressed.current[key] = false;
-    const state = this.movementState.current;
-
-    if (key === 'w' || key === 'ArrowUp')   { state.moveForward = false; }
-    if (key === 's' || key === 'ArrowDown') { state.moveBackward = false; }
-    if (key === 'a' || key === 'ArrowLeft') { state.moveLeft = false; }
-    if (key === 'd' || key === 'ArrowRight'){ state.moveRight = false; }
-  }
-
-  /** Updates camera position and orientation to follow the player. */
-  updateCamera(): void {
-    const player = this.playerRef.current;
-    if (!player || !this.camera) return;
-
-    const { distance, angle, tilt } = this.cameraState.current;
-
-    // Calculate camera target position based on player and camera state
-    const cameraPosition = new THREE.Vector3();
-
-    // Calculate horizontal position based on angle and distance
-    // angle=0 -> camera is behind player (+Z relative to player)
-    cameraPosition.x = player.position.x + Math.sin(angle) * distance;
-    cameraPosition.z = player.position.z + Math.cos(angle) * distance;
-
-    // Calculate vertical position based on tilt and player height
-    // Using formula derived from old code for similar feel: tilt (0.1-0.9) -> height (2.6 - 7.4) above player feet
-    cameraPosition.y = player.position.y + (tilt * 6 + 2);
-
-    // Apply calculated position to the camera
-    this.camera.position.copy(cameraPosition);
-
-    // Make the camera look at a point slightly above the player's feet
-    const lookAtPos = new THREE.Vector3(player.position.x, player.position.y + 1.0, player.position.z);
-    this.camera.lookAt(lookAtPos);
-  }
-
-  /** Handles mouse move events for camera rotation (usually with middle mouse button). */
-  handleMouseMove(e: MouseEvent): void {
-    const camState = this.cameraState.current;
-    if (!camState.isMiddleMouseDown) return;
-
-    // Calculate change in mouse position
-    const deltaX = e.clientX - camState.lastMousePosition.x;
-    const deltaY = e.clientY - camState.lastMousePosition.y;
-
-    // Update stored last mouse position
-    camState.lastMousePosition.x = e.clientX;
-    camState.lastMousePosition.y = e.clientY;
-
-    // Determine rotation direction based on inversion setting
-    // invertFactor = 1 for standard (mouse right -> look right / angle increases)
-    // invertFactor = -1 for inverted (mouse right -> look left / angle decreases)
-    const invertFactor = camState.isHorizontalInverted ? -1 : 1;
-
-    // Update camera angle (horizontal rotation)
-    camState.angle -= deltaX * CAMERA_ROTATE_SPEED_X * invertFactor;
-
-    // Update camera tilt (vertical rotation), clamping within limits
-    camState.tilt = Math.max(
-        CAMERA_TILT_MIN, 
-        Math.min(CAMERA_TILT_MAX, camState.tilt - deltaY * CAMERA_ROTATE_SPEED_Y)
-    );
-  }
-
-  /** Handles mouse down events, primarily for starting camera rotation. */
-  handleMouseDown(e: MouseEvent): void {
-    // Check for middle mouse button (button ID 1)
-    if (e.button === 1) {
-      const camState = this.cameraState.current;
-      camState.isMiddleMouseDown = true;
-      camState.lastMousePosition.x = e.clientX;
-      camState.lastMousePosition.y = e.clientY;
-      // Prevent default browser behavior for middle-click (like auto-scroll)
-      e.preventDefault(); 
-    }
-  }
-
-  /** Handles mouse up events, primarily for stopping camera rotation. */
-  handleMouseUp(e: MouseEvent): void {
-    // Check for middle mouse button release
-    if (e.button === 1) {
-      this.cameraState.current.isMiddleMouseDown = false;
-    }
-  }
-
-  /** Handles mouse wheel events for zooming the camera in/out. */
-  handleMouseWheel(e: WheelEvent): void {
-    const camState = this.cameraState.current;
-    // Determine zoom direction (positive deltaY usually means scrolling down/away)
-    const delta = Math.sign(e.deltaY); // Get -1, 0, or 1
-    
-    // Adjust distance based on zoom speed and direction, clamping within limits
-    camState.distance = Math.max(
-        CAMERA_MIN_DISTANCE, 
-        Math.min(CAMERA_MAX_DISTANCE, camState.distance + delta * CAMERA_ZOOM_SPEED)
-    );
-  }
-
-  /**
-   * Moves the player to a specific position in the world using a simple linear movement.
-   * @param targetPosition The position to move to
-   * @returns A Promise that resolves when the player reaches the target position
-   */
-  moveToPosition(targetPosition: THREE.Vector3): Promise<void> {
-    // First, interrupt any existing movement
-    this.interruptMovement();
-    
-    // Mark this movement as active
-    this.isAutoMoving = true;
-    this.targetPosition = targetPosition.clone();
-    this.moveToPositionInterrupted = false;
-    
-    return new Promise((resolve) => {
-      const player = this.playerRef.current;
-      if (!player) {
-        this.isAutoMoving = false;
-        resolve();
-        return;
-      }
-      
-      // Constant speed in units per frame (will be applied each animation frame)
-      const MOVE_SPEED = 0.05;
-      // Duration between network position updates (in ms)
-      const NETWORK_UPDATE_INTERVAL = 100;
-      let lastNetworkUpdate = 0;
-      
-      // Movement loop function
-      const moveStep = () => {
-        // Check if we should stop
-        if (!this.isAutoMoving || this.moveToPositionInterrupted) {
-          this.isAutoMoving = false;
-          resolve();
-          return;
-        }
-        
-        // Get current player mesh (it might have changed)
-        const player = this.playerRef.current;
-        if (!player) {
-          this.isAutoMoving = false;
-          resolve();
-          return;
-        }
-        
-        // Calculate direction to target
-        const direction = new THREE.Vector3()
-          .subVectors(targetPosition, player.position)
-          .normalize();
-        
-        // Calculate distance to target
-        const distanceToTarget = player.position.distanceTo(targetPosition);
-        
-        // Check if we've reached the target
-        if (distanceToTarget < 0.1) {
-          // We've arrived, finish movement
-          this.isAutoMoving = false;
-          
-          // Make sure we're exactly at the target position
-          player.position.copy(targetPosition);
-          
-          // Send final position update
-          if (this.socketController) {
-            this.socketController.sendPlayerPosition(
-              player.position, 
-              player.rotation.y,
-              true
-            );
-          }
-          
-          // Save position for persistence
-          saveLastKnownPosition({
-            x: player.position.x,
-            y: player.position.y,
-            z: player.position.z
-          });
-          
-          resolve();
-          return;
-        }
-        
-        // Set player rotation to face the direction of movement
-        player.rotation.y = Math.atan2(direction.x, direction.z);
-        
-        // Calculate how far to move this frame
-        // If we're closer than our step size, just move to the target
-        const moveDistance = Math.min(MOVE_SPEED, distanceToTarget);
-        
-        // Apply movement
-        player.position.x += direction.x * moveDistance;
-        player.position.z += direction.z * moveDistance;
-        
-        // Mark that movement has occurred
-        this.movementChanged.current = true;
-        
-        // Send network updates at regular intervals
-        const now = Date.now();
-        if (now - lastNetworkUpdate > NETWORK_UPDATE_INTERVAL) {
-          if (this.socketController) {
-            this.socketController.sendPlayerPosition(
-              player.position, 
-              player.rotation.y,
-              true
-            );
-            lastNetworkUpdate = now;
+      console.log("%c 📷 Camera updated:", "color: #9C27B0;", {
+        angle: angleDeg.toFixed(1) + "°",
+        tilt: camState.tilt.toFixed(2),
+        distance: camState.distance.toFixed(1),
+        rightVectorStability: rightVectorDot.toFixed(3),
+        position: {
+          before: { 
+            x: prevCameraPos.x.toFixed(1), 
+            y: prevCameraPos.y.toFixed(1), 
+            z: prevCameraPos.z.toFixed(1)
+          },
+          after: { 
+            x: this.camera.position.x.toFixed(1), 
+            y: this.camera.position.y.toFixed(1), 
+            z: this.camera.position.z.toFixed(1)
           }
         }
-        
-        // Continue the movement loop
-        requestAnimationFrame(moveStep);
-      };
-      
-      // Start the movement loop
-      moveStep();
-    });
-  }
-  
-  /**
-   * Interrupt the current auto-movement (if any).
-   * Called when a new destination is clicked.
-   */
-  interruptMovement(): void {
-    if (this.isAutoMoving) {
-      this.moveToPositionInterrupted = true;
-      this.isAutoMoving = false;
+      });
+    }
+    
+    // Only call updateProjectionMatrix if it's a perspective or orthographic camera
+    if (this.camera instanceof THREE.PerspectiveCamera || this.camera instanceof THREE.OrthographicCamera) {
+        this.camera.updateProjectionMatrix();
     }
   }
+
+  // Add methods for handling mouse input for camera controls if they aren't elsewhere
+  // handleMouseDown, handleMouseMove, handleMouseUp, handleWheel...
 }
 
 export default PlayerController;

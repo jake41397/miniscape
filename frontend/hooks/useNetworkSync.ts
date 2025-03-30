@@ -93,37 +93,51 @@ export const useNetworkSync = ({
         const attemptSocketListenerSetup = async (socket: any) => {
             try {
                 // Check if all required refs are available
-                if (sceneRef.current && playerRef.current && playersRef.current && 
-                    nameLabelsRef.current && worldManagerRef.current) {
-                    
-                    console.log("All refs available, setting up game socket listeners...");
-                    
-                    socketCleanupRef.current = await setupSocketListeners({
-                        scene: sceneRef.current,
-                        playerRef: playerRef as React.MutableRefObject<THREE.Mesh | null>,
-                        playersRef: playersRef as React.MutableRefObject<Map<string, THREE.Mesh>>,
-                        nameLabelsRef: nameLabelsRef as React.MutableRefObject<Map<string, CSS2DObject>>,
-                        worldManagerRef,
-                        itemManagerRef,
-                        cleanupIntervalRef,
-                        setPlayerName: handleSetPlayerName,
-                        createNameLabel: createLabelWrapper,
-                        setPlayerCount,
-                    });
-                    
-                    console.log("Game socket listeners set up successfully.");
-                    return true;
-                } else {
-                    // Log which refs are missing for debugging
-                    console.warn("Cannot setup socket listeners yet, missing refs:", {
-                        scene: !!sceneRef.current,
-                        player: !!playerRef.current,
-                        players: !!playersRef.current,
-                        labels: !!nameLabelsRef.current,
-                        worldManager: !!worldManagerRef.current
-                    });
+                if (!sceneRef.current) {
+                    console.warn("Cannot setup socket listeners: scene ref is null");
                     return false;
                 }
+                if (!playerRef.current) {
+                    console.warn("Cannot setup socket listeners: player ref is null");
+                    return false;
+                }
+                if (!playersRef.current) {
+                    console.warn("Cannot setup socket listeners: players map ref is null");
+                    return false;
+                }
+                if (!nameLabelsRef.current) {
+                    console.warn("Cannot setup socket listeners: name labels ref is null");
+                    return false;
+                }
+                if (!worldManagerRef.current) {
+                    console.warn("Cannot setup socket listeners: world manager ref is null");
+                    return false;
+                }
+                
+                // All critical refs are available, proceed with setup
+                console.log("All refs available, setting up game socket listeners...");
+                
+                const setupOptions = {
+                    scene: sceneRef.current,
+                    playerRef: playerRef as React.MutableRefObject<THREE.Mesh | null>,
+                    playersRef: playersRef as React.MutableRefObject<Map<string, THREE.Mesh>>,
+                    nameLabelsRef: nameLabelsRef as React.MutableRefObject<Map<string, CSS2DObject>>,
+                    worldManagerRef,
+                    itemManagerRef,
+                    cleanupIntervalRef,
+                    setPlayerName: handleSetPlayerName,
+                    createNameLabel: createLabelWrapper,
+                };
+                
+                // Only add setPlayerCount if it's defined
+                if (setPlayerCount) {
+                    (setupOptions as any).setPlayerCount = setPlayerCount;
+                }
+                
+                socketCleanupRef.current = await setupSocketListeners(setupOptions);
+                
+                console.log("Game socket listeners set up successfully.");
+                return true;
             } catch (error) {
                 console.error("Error setting up socket listeners:", error);
                 return false;
@@ -131,98 +145,141 @@ export const useNetworkSync = ({
         };
 
         const connectAndSetup = async () => {
-            console.log("Attempting socket connection...");
-            const socket = await initializeSocket();
+            try {
+                console.log("Attempting socket connection...");
+                const socket = await initializeSocket();
 
-            if (!socket) {
-                console.warn("Socket initialization failed (likely no auth), redirecting...");
-                if(isMounted) window.location.href = '/auth/signin';
-                return;
-            }
-            console.log("Socket initialized.");
-
-            // --- Socket Event Listeners ---
-            const onConnect = () => {
-                if (!isMounted) return;
-                console.log('Socket connected.');
-                setIsConnected(true);
-
-                // Clear remote players on reconnect to prevent stale data
-                if (playersRef.current) {
-                    playersRef.current.clear();
+                if (!socket) {
+                    console.warn("Socket initialization failed (likely no auth), redirecting...");
+                    if(isMounted) window.location.href = '/auth/signin';
+                    return;
                 }
-                
-                // Also clear any leftover labels associated with old players
-                if(sceneRef.current && nameLabelsRef.current){
-                    // Be careful here - don't remove the *local* player's label if it exists
-                    const localPlayerId = playerRef.current?.userData?.playerId;
-                    nameLabelsRef.current.forEach((label, id) => {
-                        if(id !== localPlayerId) { // Keep local player label if needed
-                            removeNameLabel(id, sceneRef.current!, {
-                                current: nameLabelsRef.current!
-                            });
-                        }
-                    });
-                }
+                console.log("Socket initialized.");
 
-                // Restore position from cache if sensible
-                const cachedPosition = getLastKnownPosition();
-                if (cachedPosition && playerRef.current) {
-                    const isAtOrigin =
-                        Math.abs(playerRef.current.position.x) < 0.1 &&
-                        Math.abs(playerRef.current.position.z) < 0.1;
-                    // Only restore if player is near origin (likely after disconnect/reconnect)
-                    // AND the cached position is significantly different
-                    const distFromOriginSq = cachedPosition.x**2 + cachedPosition.z**2;
-                    if (isAtOrigin && distFromOriginSq > 0.1) {
-                        console.log("Restoring position from cache:", cachedPosition);
-                        playerRef.current.position.set(
-                            cachedPosition.x,
-                            cachedPosition.y, // Use cached Y as well
-                            cachedPosition.z
-                        );
-                        lastSentPosition.current = { ...cachedPosition }; // Sync last sent position
+                // --- Socket Event Listeners ---
+                const onConnect = () => {
+                    if (!isMounted) return;
+                    console.log('Socket connected.');
+                    setIsConnected(true);
+
+                    // Clear remote players on reconnect to prevent stale data
+                    if (playersRef.current) {
+                        playersRef.current.clear();
                     }
-                }
-                
-                // Request initial game state after connection
-                // Instead of using socket events that might not be supported,
-                // just log a message. The server will know we're connected via the 'connect' event
-                console.log("Connection established, server should send initial data automatically");
+                    
+                    // Also clear any leftover labels associated with old players
+                    if(sceneRef.current && nameLabelsRef.current){
+                        // Be careful here - don't remove the *local* player's label if it exists
+                        const localPlayerId = playerRef.current?.userData?.playerId;
+                        nameLabelsRef.current.forEach((label, id) => {
+                            if(id !== localPlayerId) { // Keep local player label if needed
+                                removeNameLabel(id, sceneRef.current!, {
+                                    current: nameLabelsRef.current!
+                                });
+                            }
+                        });
+                    }
 
-                // If you need to request specific data, we could do it in a separate function
-                // after the socket connection is confirmed
-                setTimeout(() => {
-                    if (socket.connected && socket.id) {
-                        console.log("Requesting player data via getPlayerData");
-                        try {
-                            socket.emit('getPlayerData', socket.id, (data: any) => {
-                                console.log("Received player data:", data);
-                            });
-                        } catch (err) {
-                            console.error("Error requesting player data:", err);
+                    // Restore position from cache if sensible
+                    const cachedPosition = getLastKnownPosition();
+                    if (cachedPosition && playerRef.current) {
+                        const isAtOrigin =
+                            Math.abs(playerRef.current.position.x) < 0.1 &&
+                            Math.abs(playerRef.current.position.z) < 0.1;
+                        // Only restore if player is near origin (likely after disconnect/reconnect)
+                        // AND the cached position is significantly different
+                        const distFromOriginSq = cachedPosition.x**2 + cachedPosition.z**2;
+                        if (isAtOrigin && distFromOriginSq > 0.1) {
+                            console.log("Restoring position from cache:", cachedPosition);
+                            playerRef.current.position.set(
+                                cachedPosition.x,
+                                cachedPosition.y, // Use cached Y as well
+                                cachedPosition.z
+                            );
+                            lastSentPosition.current = { ...cachedPosition }; // Sync last sent position
                         }
                     }
-                }, 1000);
-                
-                // Attempt to set up socket listeners
-                attemptSocketListenerSetup(socket).then(success => {
-                    if (!success && isMounted) {
-                        // If setup failed, set up a retry timer
-                        setupAttempts = 0;
-                        if (setupRetryTimer) clearTimeout(setupRetryTimer);
+                    
+                    // Request initial game state after connection
+                    // Just let the server's automatic handling work
+                    console.log("Connection established, server should send initial data automatically");
+
+                    // Only attempt to set up listeners after a short delay to give refs time to initialize
+                    setTimeout(() => {
+                        // Check if all refs are ready before attempting setup
+                        const areRefsAvailable = 
+                            !!sceneRef.current && 
+                            !!playerRef.current && 
+                            !!playersRef.current && 
+                            !!nameLabelsRef.current && 
+                            !!worldManagerRef.current;
                         
-                        // Start retry loop
+                        if (areRefsAvailable) {
+                            console.log("All refs ready on connect, attempting socket listener setup immediately");
+                            // Attempt immediate setup
+                            attemptSocketListenerSetup(socket).catch(err => {
+                                console.error("Error during immediate setup attempt:", err);
+                            });
+                        } else {
+                            console.log("Some refs not ready yet on connect, will retry setup with delay");
+                            // Start retry mechanism after a longer delay
+                            setTimeout(() => {
+                                attemptSocketListenerSetup(socket).then(success => {
+                                    if (!success && isMounted) {
+                                        setupAttempts = 0;
+                                        if (setupRetryTimer) clearTimeout(setupRetryTimer);
+                                        setupRetryTimer = setTimeout(retrySetup, 300);
+                                    }
+                                }).catch(err => {
+                                    console.error("Error during delayed setup attempt:", err);
+                                });
+                            }, 500);
+                        }
+                        
+                        // Define the retrySetup function
                         const retrySetup = () => {
                             if (!isMounted) return;
                             
                             setupAttempts++;
-                            console.log(`Retry attempt ${setupAttempts} to set up socket listeners...`);
+                            console.log(`Retry attempt ${setupAttempts}/${MAX_SETUP_ATTEMPTS} to set up socket listeners...`);
                             
+                            // Check if refs are NOW available before attempting setup
+                            const areRefsAvailable = 
+                                !!sceneRef.current && 
+                                !!playerRef.current && 
+                                !!playersRef.current && 
+                                !!nameLabelsRef.current && 
+                                !!worldManagerRef.current;
+                                
+                            // Log the current state of refs
+                            console.log("Current refs availability:", {
+                                scene: !!sceneRef.current,
+                                player: !!playerRef.current,
+                                players: !!playersRef.current,
+                                labels: !!nameLabelsRef.current,
+                                worldManager: !!worldManagerRef.current,
+                                areAllRefsAvailable: areRefsAvailable
+                            });
+                            
+                            if (!areRefsAvailable) {
+                                console.log("Still waiting for refs to be available...");
+                                // Refs not yet ready, schedule another retry
+                                if (setupAttempts < MAX_SETUP_ATTEMPTS && isMounted) {
+                                    const backoff = Math.min(200 * Math.pow(1.5, setupAttempts), 3000);
+                                    console.log(`Will retry in ${backoff}ms`);
+                                    setupRetryTimer = setTimeout(retrySetup, backoff);
+                                } else {
+                                    console.error(`Gave up setting up socket listeners after ${setupAttempts} attempts - refs never became available`);
+                                }
+                                return;
+                            }
+                            
+                            // Now attempt the setup since refs are available
                             attemptSocketListenerSetup(socket).then(success => {
                                 if (!success && setupAttempts < MAX_SETUP_ATTEMPTS && isMounted) {
                                     // Calculate backoff time with increasing delays (200ms, 400ms, 800ms, etc.)
                                     const backoff = Math.min(200 * Math.pow(1.5, setupAttempts), 3000);
+                                    console.log(`Setup failed again. Will retry in ${backoff}ms`);
                                     setupRetryTimer = setTimeout(retrySetup, backoff);
                                 } else if (success) {
                                     console.log(`Successfully set up socket listeners on retry attempt ${setupAttempts}`);
@@ -231,50 +288,75 @@ export const useNetworkSync = ({
                                         setupRetryTimer = null;
                                     }
                                 } else if (setupAttempts >= MAX_SETUP_ATTEMPTS) {
-                                    console.error(`Failed to set up socket listeners after ${MAX_SETUP_ATTEMPTS} attempts`);
+                                    console.error(`Failed to set up socket listeners after ${MAX_SETUP_ATTEMPTS} attempts - giving up`);
+                                }
+                            }).catch(error => {
+                                console.error("Error during socket listener setup retry:", error);
+                                if (setupAttempts < MAX_SETUP_ATTEMPTS && isMounted) {
+                                    const backoff = Math.min(500 * Math.pow(1.5, setupAttempts), 5000); // Longer backoff after errors
+                                    setupRetryTimer = setTimeout(retrySetup, backoff);
                                 }
                             });
                         };
-                        
-                        // Start first retry after a short delay
-                        setupRetryTimer = setTimeout(retrySetup, 300);
+                    }, 200);
+
+                    // If you need to request specific data, we could do it in a separate function
+                    // after the socket connection is confirmed
+                    setTimeout(() => {
+                        if (socket.connected && socket.id) {
+                            console.log("Requesting player data via getPlayerData");
+                            try {
+                                socket.emit('getPlayerData', socket.id, (data: any) => {
+                                    console.log("Received player data:", data);
+                                });
+                            } catch (err) {
+                                console.error("Error requesting player data:", err);
+                            }
+                        }
+                    }, 1000);
+                };
+
+                const onDisconnect = (reason: Socket.DisconnectReason) => {
+                    if (!isMounted) return;
+                    console.log('Socket disconnected. Reason:', reason);
+                    setIsConnected(false);
+                    // Optionally cache position on disconnect
+                    if (playerRef.current) {
+                        saveLastKnownPosition(playerRef.current.position);
+                        console.log("Cached position on disconnect.");
                     }
-                });
-            };
+                };
 
-            const onDisconnect = (reason: Socket.DisconnectReason) => {
-                if (!isMounted) return;
-                console.log('Socket disconnected. Reason:', reason);
-                setIsConnected(false);
-                // Optionally cache position on disconnect
-                if (playerRef.current) {
-                    saveLastKnownPosition(playerRef.current.position);
-                    console.log("Cached position on disconnect.");
+                // Attach core connect/disconnect listeners
+                socket.on('connect', onConnect);
+                socket.on('disconnect', onDisconnect);
+
+                // Initial state check
+                setIsConnected(socket.connected);
+                if (socket.connected) {
+                    onConnect(); // Trigger initial setup if already connected
                 }
-            };
 
-            // Attach core connect/disconnect listeners
-            socket.on('connect', onConnect);
-            socket.on('disconnect', onDisconnect);
-
-            // Initial state check
-            setIsConnected(socket.connected);
-            if (socket.connected) {
-                onConnect(); // Trigger initial setup if already connected
+                // Monitor connection status periodically as a fallback
+                connectionMonitor = setInterval(() => {
+                    if (!isMounted) return;
+                    const status = getSocketStatus();
+                    if (status.connected !== isConnected) {
+                        console.warn(`Connection status mismatch detected. Forcing update to: ${status.connected}`);
+                        setIsConnected(status.connected);
+                        // If newly connected, attempt to run onConnect flow
+                        if (status.connected && !isConnected) {
+                            console.log("Connection detected via monitor, triggering connect flow");
+                            onConnect();
+                        } else if (!status.connected && isConnected) {
+                            console.log("Disconnection detected via monitor, triggering disconnect flow");
+                            onDisconnect('monitor_update' as any);
+                        }
+                    }
+                }, 5000);
+            } catch (error) {
+                console.error("Error in connectAndSetup:", error);
             }
-
-            // Monitor connection status periodically as a fallback
-            connectionMonitor = setInterval(() => {
-                if (!isMounted) return;
-                const status = getSocketStatus();
-                if (status.connected !== isConnected) {
-                    console.warn(`Connection status mismatch detected. Forcing update to: ${status.connected}`);
-                    setIsConnected(status.connected);
-                     // Trigger connect/disconnect handlers if state changed this way
-                     // This might be risky if the socket events are delayed.
-                     // if(status.connected) onConnect(); else onDisconnect('monitor_update');
-                }
-            }, 5000);
         };
 
         connectAndSetup();

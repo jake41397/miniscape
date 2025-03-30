@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { getSocket } from '../game/network/socket';
 import soundManager from '../game/audio/soundManager';
@@ -6,118 +6,109 @@ import { ResourceNode, WorldItem } from '../game/world/resources';
 import { GATHERING_COOLDOWN } from '../constants';
 import { PlayerController } from '../components/game/PlayerController';
 
-interface InteractionOptions {
+// Since we don't have access to the actual SoundType, we'll use strings directly
+// This avoids the type error with the soundManager.play calls
+
+export interface InteractionOptions {
     sceneRef: React.RefObject<THREE.Scene | null>;
     cameraRef: React.RefObject<THREE.PerspectiveCamera | null>;
     resourceNodesRef: React.RefObject<ResourceNode[]>;
     worldItemsRef: React.RefObject<WorldItem[]>;
     canvasRef: React.RefObject<HTMLDivElement>;
     playerRef: React.RefObject<THREE.Mesh | null>;
-    playerController?: PlayerController;
+    playerControllerRef?: React.RefObject<PlayerController | null>;
 }
 
 /**
- * Creates a click indicator at the specified position
- * @param scene The scene to add the indicator to
- * @param position The position to place the indicator
- * @returns The created indicator mesh
+ * Creates and manages a visual click indicator in the scene.
+ * Includes creation, animation, and automatic cleanup.
  */
 const createClickIndicator = (scene: THREE.Scene, position: THREE.Vector3): THREE.Mesh => {
-    // Create a circular indicator
-    const geometry = new THREE.CircleGeometry(0.8, 24); // Make it slightly larger and smoother
-    // Rotate it to be horizontal (facing up)
-    geometry.rotateX(-Math.PI / 2);
-    
-    // Create a material with opacity for the indicator
+    // Main indicator circle
+    const geometry = new THREE.CircleGeometry(0.6, 24); // Slightly smaller radius
+    geometry.rotateX(-Math.PI / 2); // Orient horizontally
+
     const material = new THREE.MeshBasicMaterial({
-        color: 0xffcc00, // Brighter yellow color for better visibility
+        color: 0xffcc00, // Bright yellow
         transparent: true,
-        opacity: 0.9, // Start more visible
+        opacity: 0.8,
         side: THREE.DoubleSide,
-        depthWrite: false // Prevent z-fighting issues
+        depthWrite: false, // Prevent Z-fighting
     });
-    
-    // Create the mesh and position it
+
     const indicator = new THREE.Mesh(geometry, material);
     indicator.position.copy(position);
-    // Lift it slightly higher above the ground to prevent z-fighting and ensure visibility
-    indicator.position.y += 0.05;
-    
-    // Add a ring around the main indicator for better visibility
-    const ringGeometry = new THREE.RingGeometry(0.8, 1.0, 24);
+    indicator.position.y += 0.05; // Lift slightly above ground
+
+    // Outer ring effect
+    const ringGeometry = new THREE.RingGeometry(0.6, 0.8, 24); // Match inner radius
     ringGeometry.rotateX(-Math.PI / 2);
-    
+
     const ringMaterial = new THREE.MeshBasicMaterial({
-        color: 0xff9900, // Orange tint for the ring
+        color: 0xff9900, // Orange tint
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.6,
         side: THREE.DoubleSide,
-        depthWrite: false
+        depthWrite: false,
     });
-    
+
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-    ring.position.copy(position);
-    ring.position.y += 0.04; // Slightly below the main indicator
-    
-    // Add both to the scene
+    // Position ring relative to the indicator center (slightly below main circle)
+    ring.position.set(0, -0.01, 0);
+    indicator.add(ring); // Add ring as child for easier management
+
     scene.add(indicator);
-    scene.add(ring);
-    
-    // Add ring as a child of the indicator for easier management
-    indicator.add(ring);
-    ring.position.set(0, -0.01, 0); // Relative to the parent
-    
-    // Add animation to make it more noticeable
-    // We'll use a simple scaling effect
-    const scaleFactor = 1.2;
-    const duration = 800; // ms
+
+    // Animation and cleanup logic
     const startTime = Date.now();
-    
-    function animate() {
+    const lifetime = 3000; // ms - Reduce lifetime for less clutter
+    const pulseDuration = 500; // ms for one pulse cycle
+
+    function animateIndicator() {
         const elapsed = Date.now() - startTime;
-        const phase = (elapsed % duration) / duration; // 0 to 1
-        
-        // Sinusoidal scaling 
-        const scale = 1 + 0.2 * Math.sin(phase * Math.PI * 2);
-        indicator.scale.set(scale, 1, scale);
-        
-        // Rotate the ring
-        ring.rotation.y += 0.01;
-        
-        // Also gradually fade out the indicator
-        const lifetime = 10000; // 10 seconds
-        const fadeStart = 7000; // Start fading after 7 seconds
-        const opacity = elapsed < fadeStart ? 
-            0.9 : // Full opacity before fade start
-            0.9 * (1 - (elapsed - fadeStart) / (lifetime - fadeStart)); // Linear fade
-        
-        material.opacity = Math.max(0, opacity);
-        ringMaterial.opacity = Math.max(0, opacity * 0.8);
-        
-        if (elapsed < lifetime && indicator.parent) {
-            requestAnimationFrame(animate);
+
+        if (elapsed < lifetime && indicator.parent) { // Check if still attached to scene
+            // Pulsing scale effect
+            const pulsePhase = (elapsed % pulseDuration) / pulseDuration; // 0 to 1
+            const scale = 1 + 0.15 * Math.sin(pulsePhase * Math.PI * 2); // Gentle pulse
+            indicator.scale.set(scale, 1, scale);
+
+            // Fading out effect (start fading halfway through lifetime)
+            const fadeStart = lifetime / 2;
+            let opacity = 0.8;
+            if (elapsed > fadeStart) {
+                opacity = 0.8 * (1 - (elapsed - fadeStart) / (lifetime - fadeStart));
+            }
+
+            material.opacity = Math.max(0, opacity);
+            ringMaterial.opacity = Math.max(0, opacity * 0.75);
+
+            // Keep requesting frames
+            requestAnimationFrame(animateIndicator);
         } else if (indicator.parent) {
-            // Remove from scene after lifetime
+            // Lifetime ended or detached, start cleanup
             scene.remove(indicator);
-            // Cleanup geometry and materials
+            // Dispose of geometries and materials
             geometry.dispose();
             material.dispose();
             ringGeometry.dispose();
             ringMaterial.dispose();
+            // console.log('Auto-cleaned click indicator.');
         }
     }
-    
-    // Start animation
-    animate();
-    
+
+    // Start the animation loop
+    animateIndicator();
+
+    // Add a name for easier debugging if needed
+    indicator.name = "ClickIndicator";
+    ring.name = "ClickIndicatorRing";
+
     return indicator;
 };
 
 /**
- * Hook to handle mouse click interactions for gathering resources and picking up items.
- * Performs raycasting and sends network events.
- * @param options Configuration object with necessary refs.
- * @returns A function to handle mouse click events.
+ * Hook to handle mouse click interactions for movement, gathering, and item pickups.
  */
 export const useInteraction = ({
     sceneRef,
@@ -126,287 +117,396 @@ export const useInteraction = ({
     worldItemsRef,
     canvasRef,
     playerRef,
-    playerController
+    playerControllerRef
 }: InteractionOptions) => {
     const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
     const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
     const isGathering = useRef(false);
     const gatheringTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const isWalkingToItem = useRef(false);
-    const isWalkingToLocation = useRef(false);
-    // Create a ground plane for intersection testing
-    const groundPlaneRef = useRef<THREE.Plane>(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
-    // Reference to the current click indicator
-    const clickIndicatorRef = useRef<THREE.Mesh | null>(null);
 
-    // Clean up any existing click indicator
+    // References to track current interaction state and the indicator mesh
+    const currentInteractionPromise = useRef<Promise<void> | null>(null);
+    const clickIndicatorRef = useRef<THREE.Mesh | null>(null);
+    
+    // Ref to track movement completion
+    const movementCompletedRef = useRef(false);
+
+    // --- Cleanup Function for Indicator ---
     const removeClickIndicator = useCallback(() => {
         if (clickIndicatorRef.current && sceneRef.current) {
-            // Get a reference to the scene
-            const scene = sceneRef.current;
-            
-            // Get the indicator and find any child objects
             const indicator = clickIndicatorRef.current;
-            
-            // Remove all children first (like the ring)
-            while (indicator.children.length > 0) {
-                const child = indicator.children[0];
-                
-                // Dispose of geometry and materials if they exist
-                if ((child as THREE.Mesh).geometry) {
-                    (child as THREE.Mesh).geometry.dispose();
-                }
-                
-                if ((child as THREE.Mesh).material) {
-                    const material = (child as THREE.Mesh).material;
-                    if (Array.isArray(material)) {
-                        material.forEach(m => m.dispose());
+            const scene = sceneRef.current;
+
+            // Stop any ongoing animation related to this specific indicator if possible
+            // (The 'animateIndicator' function above handles detachment check)
+
+            scene.remove(indicator); // Remove from scene
+
+            // Dispose children (ring) first
+            indicator.children.forEach((child) => {
+                if (child instanceof THREE.Mesh) {
+                    child.geometry?.dispose();
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => m.dispose());
                     } else {
-                        material.dispose();
+                        child.material?.dispose();
                     }
                 }
-                
-                // Remove from parent
-                indicator.remove(child);
+            });
+            indicator.clear(); // Remove children from the indicator object itself
+
+            // Dispose main indicator resources
+            indicator.geometry?.dispose();
+             if (Array.isArray(indicator.material)) {
+                indicator.material.forEach(m => m.dispose());
+            } else {
+                indicator.material?.dispose();
             }
-            
-            // Now remove the main indicator from the scene
-            scene.remove(indicator);
-            
-            // Dispose of main indicator's geometry and material
-            if (indicator.geometry) {
-                indicator.geometry.dispose();
-            }
-            
-            if (indicator.material) {
-                const material = indicator.material;
-                if (Array.isArray(material)) {
-                    material.forEach(m => m.dispose());
-                } else {
-                    material.dispose();
-                }
-            }
-            
-            // Clear the reference
+
             clickIndicatorRef.current = null;
-            
-            console.log('Click indicator successfully removed and cleaned up');
+            // console.log('Manually removed click indicator and resources.');
         }
     }, [sceneRef]);
 
+    // --- Main Click Handler ---
     const handleMouseClick = useCallback((e: MouseEvent) => {
-        // Ensure refs are available and it's a left click
-        if (e.button !== 0 || !sceneRef.current || !cameraRef.current || !canvasRef.current) {
+        console.log("%c 🖱️ handleMouseClick CALLED", "background: purple; color: white; font-size: 16px;", {
+            eventType: e.type,
+            button: e.button,
+            clientX: e.clientX,
+            clientY: e.clientY,
+            target: e.target
+        });
+        
+        // Log references to help debug
+        console.log("%c 🛠️ INTERACTION DEPENDENCIES", "background: blue; color: white;", {
+            sceneExists: !!sceneRef.current,
+            cameraExists: !!cameraRef.current,
+            canvasExists: !!canvasRef.current,
+            playerExists: !!playerRef.current,
+            controllerExists: !!playerControllerRef?.current
+        });
+        
+        // Check basic requirements first
+        if (e.button !== 0 || !sceneRef.current || !cameraRef.current || !canvasRef.current || !playerRef.current) {
+            console.warn("%c ⚠️ Early return - missing basic dependencies", "color: orange;", {
+                button: e.button,
+                scene: !!sceneRef.current,
+                camera: !!cameraRef.current,
+                canvas: !!canvasRef.current,
+                player: !!playerRef.current
+            });
             return;
         }
+        
+        // Check PlayerController separately - for better debug info
+        if (!playerControllerRef?.current) {
+            console.warn("%c ⚠️ PlayerController not available yet - will try to continue with limited functionality", "color: orange; font-weight: bold;");
+            // Continue execution - we'll handle the controller absence later
+        }
+        
+        // Even if the controller is null, we can still set up the interaction state
+        // so we're ready when it becomes available
+        const scene = sceneRef.current;
+        const camera = cameraRef.current;
+        const canvas = canvasRef.current;
+        const player = playerRef.current;
+        
+        // Get socket - need to handle as async 
+        const socketPromise = getSocket();
 
-        // Calculate normalized device coordinates (NDC) from click event
-        const rect = canvasRef.current.getBoundingClientRect();
+        // If we have playerController, interrupt any previous movement
+        const controller = playerControllerRef?.current;
+        if (controller) {
+            controller.interruptMovement();
+        }
+        
+        // Always remove previous click indicator
+        removeClickIndicator();
+
+        // Calculate mouse NDC
+        const rect = canvas.getBoundingClientRect();
         mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
         // Update raycaster
-        raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+        raycasterRef.current.setFromCamera(mouseRef.current, camera);
 
-        // 1. Check for intersections with World Items (dropped items)
-        const itemMeshes = worldItemsRef.current?.map(item => item.mesh).filter(Boolean) as THREE.Object3D[] || [];
+        // --- Interaction Priority: Items > Resources > Ground ---
+
+        // 1. Check World Items
+        const itemMeshes = worldItemsRef.current?.map(item => {
+            if (item && item.mesh) return item.mesh;
+            return null;
+        }).filter(Boolean) as THREE.Object3D[] || [];
+        
         const itemIntersects = itemMeshes.length > 0 ? raycasterRef.current.intersectObjects(itemMeshes) : [];
 
         if (itemIntersects.length > 0) {
-            const intersectedItem = itemIntersects[0].object;
-            const dropId = intersectedItem.userData?.dropId;
-            const itemType = intersectedItem.userData?.itemType;
+            const intersectedItemMesh = itemIntersects[0].object;
+            const worldItem = worldItemsRef.current?.find(item => item.mesh === intersectedItemMesh);
 
-            if (dropId) {
-                // Get current player position
-                const player = playerRef.current;
-                if (!player || !playerController) {
-                    return; // Player not available
+            if (worldItem && worldItem.dropId) {
+                console.log(`Clicked on item: ${worldItem.itemType || 'Unknown'} (ID: ${worldItem.dropId})`);
+                soundManager.play('uiSelect' as any);
+
+                // Make sure we have a valid mesh with a position
+                if (!worldItem.mesh || !worldItem.mesh.position) {
+                    console.error("Item has no valid mesh position");
+                    return;
                 }
 
-                console.log(`Clicked on item: ${itemType || 'Unknown'} (ID: ${dropId})`);
+                const itemPosition = worldItem.mesh.position.clone();
+                itemPosition.y = player.position.y; // Target position at player's height
 
-                // Get item position to walk to
-                const itemPosition = intersectedItem.position.clone();
-                
-                // If already walking, interrupt the current movement immediately
-                if (isWalkingToLocation.current || isWalkingToItem.current) {
-                    // Interrupt the current movement
-                    playerController.interruptMovement();
-                    
-                    // Reset flags immediately to allow the new movement to start
-                    isWalkingToLocation.current = false;
-                    isWalkingToItem.current = false;
-                    
-                    // Remove any existing click indicator
-                    removeClickIndicator();
-                }
-                
-                // Create click indicator at the item
-                if (sceneRef.current) {
-                    clickIndicatorRef.current = createClickIndicator(sceneRef.current, itemPosition);
-                }
+                // Create new indicator at item location
+                clickIndicatorRef.current = createClickIndicator(scene, itemPosition);
 
-                // Start walking to the item
-                isWalkingToItem.current = true;
-                
-                // Walk to the item
-                playerController.moveToPosition(itemPosition)
-                    .then(() => {
-                        // Only proceed if we're still walking to this item
-                        // (prevents issues if multiple clicks happened)
-                        if (isWalkingToItem.current) {
-                            // After reaching the item, attempt to pick it up
-                            console.log(`Reached item: ${itemType || 'Unknown'} (ID: ${dropId}), attempting to pick up`);
-                            getSocket().then(socket => {
-                                if (socket) {
-                                    socket.emit('pickup', dropId);
-                                    soundManager.play('itemPickup');
-                                }
-                            }).catch(err => console.error("Error getting socket for pickup:", err));
+                // Reset movement completion flag
+                movementCompletedRef.current = false;
+
+                // Continue only if controller is available
+                if (controller) {
+                    // Start moving towards the item
+                    currentInteractionPromise.current = controller.moveToPosition(itemPosition);
+                    if (currentInteractionPromise.current) {
+                        currentInteractionPromise.current.then(() => {
+                            // Movement finished
+                            movementCompletedRef.current = true;
                             
-                            // Remove the click indicator
+                            // Check if the item still exists
+                            const latestWorldItem = worldItemsRef.current?.find(item => item.dropId === worldItem.dropId);
+                            if (latestWorldItem && movementCompletedRef.current) {
+                                console.log(`Arrived at item ${worldItem.dropId}. Sending pickup request.`);
+                                
+                                // Send pickup request
+                                socketPromise.then(socket => {
+                                    if (socket) {
+                                        socket.emit('pickup', worldItem.dropId);
+                                    }
+                                });
+                            }
+                            removeClickIndicator(); // Clean up indicator on arrival/cancellation
+                        }).catch(err => {
+                            console.error("Error during walk-to-item:", err);
                             removeClickIndicator();
-                            isWalkingToItem.current = false;
-                        }
-                    })
-                    .catch(err => {
-                        console.error("Error walking to item:", err);
-                        // Only clean up if this is still the active movement
-                        if (isWalkingToItem.current) {
-                            removeClickIndicator();
-                            isWalkingToItem.current = false;
-                        }
-                    });
-
-                return; // Stop processing if an item was clicked
-            } else {
-                console.warn("Clicked item mesh without dropId in userData:", intersectedItem);
+                        });
+                    }
+                } else {
+                    console.warn("%c ⏳ Cannot move to item - PlayerController not available", "color: orange; font-weight: bold;");
+                }
+                return; // Stop further processing
             }
         }
 
-        // 2. Check for intersections with Resource Nodes (if no item was clicked)
-        if (isGathering.current) {
-            console.log("Interaction blocked: Still on gathering cooldown.");
-            return;
-        }
-
-        const resourceMeshes = resourceNodesRef.current?.map(node => node.mesh).filter(Boolean) as THREE.Object3D[] || [];
+        // 2. Check Resource Nodes
+        const resourceMeshes = resourceNodesRef.current?.map(node => {
+            if (node && node.mesh) return node.mesh;
+            return null;
+        }).filter(Boolean) as THREE.Object3D[] || [];
+        
         const resourceIntersects = resourceMeshes.length > 0 ? raycasterRef.current.intersectObjects(resourceMeshes) : [];
 
         if (resourceIntersects.length > 0) {
-            const intersectedResource = resourceIntersects[0].object;
-            const resourceId = intersectedResource.userData?.resourceId;
-            const resourceType = intersectedResource.userData?.resourceType;
+            const intersectedResourceMesh = resourceIntersects[0].object;
+            const resourceNode = resourceNodesRef.current?.find(node => node.mesh === intersectedResourceMesh);
 
-            if (resourceId && resourceType) {
-                console.log(`Attempting to gather resource: ${resourceType} (ID: ${resourceId})`);
-                isGathering.current = true; // Set cooldown flag
+            if (resourceNode && resourceNode.id) {
+                const resourceType = resourceNode.type || 'Unknown';
+                console.log(`Clicked on resource: ${resourceType} (ID: ${resourceNode.id})`);
+                soundManager.play('uiSelect' as any); // Use a consistent select sound
 
-                getSocket().then(socket => {
-                    if (socket) {
-                        socket.emit('gather', resourceId);
+                // Make sure we have a valid mesh with a position
+                if (!resourceNode.mesh || !resourceNode.mesh.position) {
+                    console.error("Resource has no valid mesh position");
+                    return;
+                }
 
-                        // Play sound based on type
-                        switch (resourceType) {
-                            case 'TREE': soundManager.play('woodcutting'); break;
-                            case 'ROCK': soundManager.play('mining'); break;
-                            case 'FISH': soundManager.play('fishing'); break;
-                            default: console.warn(`No gather sound for resource type: ${resourceType}`);
+                const resourcePosition = resourceNode.mesh.position;
+                const distance = player.position.distanceTo(resourcePosition);
+                const interactionRange = 2.5; // How close player needs to be
+
+                if (distance <= interactionRange) {
+                    // Already in range - interact immediately
+                    if (!isGathering.current) {
+                        isGathering.current = true;
+                        console.log(`Gathering resource ${resourceNode.id} (already in range).`);
+                        
+                        socketPromise.then(socket => {
+                            if (socket) {
+                                socket.emit('gather', resourceNode.id);
+                            }
+                        });
+                        
+                        soundManager.play('resourceGather' as any); // Play gathering sound
+                        gatheringTimeoutRef.current = setTimeout(() => {
+                            isGathering.current = false;
+                        }, GATHERING_COOLDOWN);
+                    }
+                } else {
+                    // Out of range - move closer, but only if controller is available
+                    if (controller) {
+                        const direction = new THREE.Vector3().subVectors(resourcePosition, player.position).normalize();
+                        // Target position slightly away from the node center
+                        const targetPosition = new THREE.Vector3()
+                            .copy(resourcePosition)
+                            .addScaledVector(direction, -interactionRange * 0.8); // Move to edge of range
+                        targetPosition.y = player.position.y; // Maintain player height
+
+                        // Create new indicator near the resource
+                        clickIndicatorRef.current = createClickIndicator(scene, targetPosition);
+
+                        // Reset movement completion flag
+                        movementCompletedRef.current = false;
+
+                        // Start moving towards the resource edge
+                        currentInteractionPromise.current = controller.moveToPosition(targetPosition);
+                        if (currentInteractionPromise.current) {
+                            currentInteractionPromise.current.then(() => {
+                                // Movement finished
+                                movementCompletedRef.current = true;
+                                
+                                // Check if movement completed naturally & still out of gather cooldown
+                                if (!isGathering.current && movementCompletedRef.current) {
+                                    const currentDistance = player.position.distanceTo(resourcePosition);
+                                    if (currentDistance <= interactionRange) {
+                                        isGathering.current = true;
+                                        console.log(`Arrived at resource ${resourceNode.id}. Sending gather request.`);
+                                        
+                                        socketPromise.then(socket => {
+                                            if (socket) {
+                                                socket.emit('gather', resourceNode.id);
+                                            }
+                                        });
+                                        
+                                        soundManager.play('resourceGather' as any);
+                                        gatheringTimeoutRef.current = setTimeout(() => {
+                                            isGathering.current = false;
+                                        }, GATHERING_COOLDOWN);
+                                    } else {
+                                        console.warn("Arrived near resource but still out of range.");
+                                    }
+                                }
+                                removeClickIndicator(); // Clean up indicator
+                            }).catch(err => {
+                                console.error("Error during walk-to-resource:", err);
+                                removeClickIndicator();
+                            });
                         }
+                    } else {
+                        console.warn("%c ⏳ Cannot move to resource - PlayerController not available", "color: orange; font-weight: bold;");
                     }
-                }).catch(err => console.error("Error getting socket for gather:", err));
-
-                // Clear existing timeout if any
-                if (gatheringTimeoutRef.current) clearTimeout(gatheringTimeoutRef.current);
-
-                // Set cooldown timer
-                gatheringTimeoutRef.current = setTimeout(() => {
-                    isGathering.current = false;
-                    gatheringTimeoutRef.current = null;
-                    console.log("Gathering cooldown finished.");
-                }, GATHERING_COOLDOWN);
-            } else {
-                console.warn("Clicked resource mesh missing resourceId or resourceType in userData:", intersectedResource);
+                }
+                return; // Stop further processing
             }
-            
-            // Don't proceed with ground click if we clicked a resource
-            return;
         }
-        
-        // 3. If we didn't click on an item or resource, check for ground click
-        if (!playerController || !playerRef.current) {
-            return; // Exit if no player controller or player mesh
-        }
-        
-        // Check if the ray intersects with the ground plane
-        const ray = raycasterRef.current.ray;
+
+        // 3. Handle Ground Click (if no items or resources were hit)
+        // CRITICAL FIX: Create ground plane at Y=0 instead of player's Y level
+        // For stability in intersection testing
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
         const targetPoint = new THREE.Vector3();
-        
-        // Create a ground plane at y=0 with normal pointing up
-        // This assumes the ground is at y=0 in your world. Adjust if needed.
-        if (ray.intersectPlane(groundPlaneRef.current, targetPoint)) {
-            console.log(`Moving to location: (${targetPoint.x.toFixed(2)}, ${targetPoint.z.toFixed(2)})`);
-            
-            // Keep the player at the correct Y height
-            const yPosition = playerRef.current.position.y;
-            targetPoint.y = yPosition;
-            
-            // If already walking, interrupt the current movement immediately
-            if (isWalkingToLocation.current || isWalkingToItem.current) {
-                // Interrupt the current movement
-                playerController.interruptMovement();
-                
-                // Reset flags immediately to allow the new movement to start
-                isWalkingToLocation.current = false;
-                isWalkingToItem.current = false;
-                
-                // Remove any existing click indicator
-                removeClickIndicator();
-            }
-            
-            // Create new click indicator at the target location
-            if (sceneRef.current) {
-                clickIndicatorRef.current = createClickIndicator(sceneRef.current, targetPoint);
-            }
-            
-            // Set walking flag
-            isWalkingToLocation.current = true;
-            
-            // Play a sound for location click
-            soundManager.play('itemDrop');
-            
-            // Move to the target location
-            playerController.moveToPosition(targetPoint)
-                .then(() => {
-                    // Only remove the indicator if we're still walking to this location
-                    // (prevents removing a newer indicator if multiple clicks happened)
-                    if (isWalkingToLocation.current) {
-                        removeClickIndicator();
-                        isWalkingToLocation.current = false;
-                    }
-                })
-                .catch(err => {
-                    console.error("Error walking to location:", err);
-                    // Only clean up if this is still the active movement
-                    if (isWalkingToLocation.current) {
-                        removeClickIndicator();
-                        isWalkingToLocation.current = false;
-                    }
-                });
-        }
-    }, [sceneRef, cameraRef, canvasRef, resourceNodesRef, worldItemsRef, playerRef, playerController, removeClickIndicator]);
 
-    // Cleanup effect for the timeout and click indicator
+        console.log("%c 🌎 CHECKING GROUND CLICK", "background: #009688; color: white;", {
+            rayOrigin: raycasterRef.current.ray.origin,
+            rayDirection: raycasterRef.current.ray.direction,
+            groundPlaneNormal: groundPlane.normal,
+            groundPlaneConstant: groundPlane.constant,
+            mouseX: mouseRef.current.x,
+            mouseY: mouseRef.current.y
+        });
+
+        // FALLBACK: Try a direct approach if normal raycasting fails
+        const intersectionResult = raycasterRef.current.ray.intersectPlane(groundPlane, targetPoint);
+        let groundIntersectionSuccessful = !!intersectionResult;
+        
+        if (!groundIntersectionSuccessful) {
+            console.warn("🔄 Primary ground intersection failed, trying alternative approach");
+            
+            // Calculate intersection with a fixed plane at Y=0
+            const origin = raycasterRef.current.ray.origin.clone();
+            const direction = raycasterRef.current.ray.direction.clone();
+            
+            // If the ray is not pointing downward enough, it won't hit the plane
+            if (direction.y > -0.1) {
+                // Force direction to point slightly downward
+                direction.y = -0.1;
+                direction.normalize();
+            }
+            
+            // t = -(origin.y) / direction.y
+            const t = -(origin.y) / direction.y;
+            targetPoint.copy(origin).addScaledVector(direction, t);
+            
+            groundIntersectionSuccessful = true;
+            console.log("🎯 Alternative ground intersection succeeded:", targetPoint);
+        }
+
+        if (groundIntersectionSuccessful) {
+            console.log("%c 🎯 GROUND INTERSECTION SUCCESSFUL! Target:", "background: #4CAF50; color: white; font-size: 16px;", {
+                x: targetPoint.x.toFixed(2),
+                y: targetPoint.y.toFixed(2),
+                z: targetPoint.z.toFixed(2)
+            });
+            soundManager.play('itemDrop' as any); // A subtle "step" or "move command" sound
+
+            // Reset movement completion flag
+            movementCompletedRef.current = false;
+
+            // Create new indicator at the ground click location
+            console.log("%c 🔍 Creating click indicator", "color: #ff9800;");
+            clickIndicatorRef.current = createClickIndicator(scene, targetPoint);
+            console.log("%c ✓ Click indicator created:", "color: #ff9800;", !!clickIndicatorRef.current);
+
+            // Start moving to the location only if controller is available
+            if (controller) {
+                console.log("%c 🚶 Calling controller.moveToPosition()", "background: #009688; color: white;");
+                try {
+                    currentInteractionPromise.current = controller.moveToPosition(targetPoint);
+                    if (currentInteractionPromise.current) {
+                        console.log("%c ✓ moveToPosition promise created successfully", "color: #4CAF50;");
+                        currentInteractionPromise.current.then(() => {
+                            // Movement finished naturally
+                            console.log("%c ✓ Movement completed", "color: #4CAF50;");
+                            movementCompletedRef.current = true;
+                            removeClickIndicator(); // Clean up indicator on arrival
+                        }).catch(err => {
+                            console.error("%c ❌ Movement error:", "color: red;", err);
+                            removeClickIndicator(); // Clean up indicator on error/cancellation
+                        });
+                    } else {
+                        console.warn("%c ⚠️ moveToPosition did not return a promise", "color: orange;");
+                    }
+                } catch (err) {
+                    console.error("%c ❌ Error calling moveToPosition:", "background: red; color: white;", err);
+                }
+
+                // Debug log to verify ground click handling
+                console.log("%c 🎯 GROUND CLICK - MOVING PLAYER", "background: #4CAF50; color: white;", {
+                    playerController: !!controller,
+                    playerPosition: playerRef.current.position,
+                    targetPoint,
+                    indicator: !!clickIndicatorRef.current
+                });
+            } else {
+                console.warn("%c ⏳ Cannot move to ground location - PlayerController not available", "color: orange; font-weight: bold;");
+            }
+        }
+
+    }, [sceneRef, cameraRef, canvasRef, resourceNodesRef, worldItemsRef, playerRef, playerControllerRef, removeClickIndicator]); // Added removeClickIndicator dependency
+
+    // --- Effect for Cleanup ---
     useEffect(() => {
         return () => {
-            if (gatheringTimeoutRef.current) {
-                clearTimeout(gatheringTimeoutRef.current);
-            }
-            // Clean up click indicator on unmount
+            console.log("Cleaning up interaction resources");
             removeClickIndicator();
+            // Interrupt any active player movement on unmount
+            if (playerControllerRef?.current) {
+                playerControllerRef.current.interruptMovement();
+            }
         };
-    }, [removeClickIndicator]);
+    }, [removeClickIndicator, playerControllerRef]); // Ensure cleanup runs if removeClickIndicator changes
 
+    // Return the handler function to be attached to the canvas/div
     return { handleMouseClick };
 }; 
