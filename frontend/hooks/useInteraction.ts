@@ -5,6 +5,7 @@ import soundManager from '../game/audio/soundManager';
 import { ResourceNode, WorldItem } from '../game/world/resources';
 import { GATHERING_COOLDOWN } from '../constants';
 import { PlayerController } from '../components/game/PlayerController';
+import ItemManager from '../game/world/ItemManager';
 
 // Since we don't have access to the actual SoundType, we'll use strings directly
 // This avoids the type error with the soundManager.play calls
@@ -17,6 +18,7 @@ export interface InteractionOptions {
     canvasRef: React.RefObject<HTMLDivElement>;
     playerRef: React.RefObject<THREE.Mesh | null>;
     playerControllerRef?: React.RefObject<PlayerController | null>;
+    itemManagerRef?: React.RefObject<ItemManager | null>;
 }
 
 /**
@@ -117,7 +119,8 @@ export const useInteraction = ({
     worldItemsRef,
     canvasRef,
     playerRef,
-    playerControllerRef
+    playerControllerRef,
+    itemManagerRef
 }: InteractionOptions) => {
     const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
     const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
@@ -130,6 +133,10 @@ export const useInteraction = ({
     
     // Ref to track movement completion
     const movementCompletedRef = useRef(false);
+    
+    // Add state for context menu
+    const [contextMenuPos, setContextMenuPos] = useState<{ x: number, y: number } | null>(null);
+    const [nearbyItems, setNearbyItems] = useState<WorldItem[]>([]);
 
     // --- Cleanup Function for Indicator ---
     const removeClickIndicator = useCallback(() => {
@@ -167,6 +174,12 @@ export const useInteraction = ({
             // console.log('Manually removed click indicator and resources.');
         }
     }, [sceneRef]);
+
+    // Function to close the context menu
+    const closeContextMenu = useCallback(() => {
+        setContextMenuPos(null);
+        setNearbyItems([]);
+    }, []);
 
     // --- Main Click Handler ---
     const handleMouseClick = useCallback((e: MouseEvent) => {
@@ -507,6 +520,282 @@ export const useInteraction = ({
         };
     }, [removeClickIndicator, playerControllerRef]); // Ensure cleanup runs if removeClickIndicator changes
 
-    // Return the handler function to be attached to the canvas/div
-    return { handleMouseClick };
+    // Handle right click for context menu
+    const handleRightClick = useCallback((e: MouseEvent) => {
+        console.log("%c 🖱️ handleRightClick CALLED", "background: green; color: white; font-size: 16px;", {
+            eventType: e.type,
+            button: e.button,
+            clientX: e.clientX,
+            clientY: e.clientY,
+            target: e.target
+        });
+        
+        // Prevent default browser context menu
+        e.preventDefault();
+        
+        // Check basic requirements first
+        if (!sceneRef.current || !cameraRef.current || !canvasRef.current || !playerRef.current) {
+            console.warn("Missing necessary refs for right-click interaction");
+            return;
+        }
+        
+        const scene = sceneRef.current;
+        const camera = cameraRef.current;
+        const canvas = canvasRef.current;
+        const player = playerRef.current;
+        
+        // Calculate mouse NDC for raycasting
+        const rect = canvas.getBoundingClientRect();
+        mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        
+        // Update raycaster
+        raycasterRef.current.setFromCamera(mouseRef.current, camera);
+        
+        // Get all world items
+        const worldItems = worldItemsRef.current || [];
+
+        // Check if we're directly clicking on an item first
+        const itemMeshes = worldItems
+            .filter(item => item && item.mesh)
+            .map(item => item.mesh) as THREE.Object3D[];
+            
+        const itemIntersects = itemMeshes.length > 0 ? raycasterRef.current.intersectObjects(itemMeshes) : [];
+        
+        // If directly clicking on an item, find that specific item
+        if (itemIntersects.length > 0) {
+            const intersectedItemMesh = itemIntersects[0].object;
+            const worldItem = worldItems.find(item => item.mesh === intersectedItemMesh);
+            
+            if (worldItem) {
+                // Show context menu with just this item
+                setNearbyItems([worldItem]);
+                setContextMenuPos({ x: e.clientX, y: e.clientY });
+                return;
+            }
+        }
+        
+        // If not clicking directly on an item, check for ground intersection
+        // to find nearby items relative to that point
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        const targetPoint = new THREE.Vector3();
+        raycasterRef.current.ray.intersectPlane(groundPlane, targetPoint);
+        
+        // Find items within a certain radius of the ground click
+        const MAX_ITEM_RADIUS = 3; // Items within 3 units of the click
+        const nearbyWorldItems = worldItems.filter(item => {
+            if (!item.mesh) return false;
+            
+            const itemPos = new THREE.Vector3(item.x, item.y, item.z);
+            const horizontalDistSq = 
+                Math.pow(itemPos.x - targetPoint.x, 2) + 
+                Math.pow(itemPos.z - targetPoint.z, 2);
+                
+            return horizontalDistSq <= MAX_ITEM_RADIUS * MAX_ITEM_RADIUS;
+        });
+        
+        // If there are nearby items, show the context menu
+        if (nearbyWorldItems.length > 0) {
+            setNearbyItems(nearbyWorldItems);
+            setContextMenuPos({ x: e.clientX, y: e.clientY });
+            console.log(`Found ${nearbyWorldItems.length} nearby items`, nearbyWorldItems);
+        } else {
+            // No items nearby, close any open context menu
+            closeContextMenu();
+        }
+    }, [sceneRef, cameraRef, canvasRef, playerRef, worldItemsRef, closeContextMenu]);
+    
+    // After a failed pickup attempt, refresh the world items list
+    const refreshWorldItems = useCallback(() => {
+        console.log("Refreshing world items list after failed pickup attempt");
+        
+        // Use the itemManager if available (more direct)
+        if (itemManagerRef?.current) {
+            console.log("Using itemManager to request fresh world items");
+            itemManagerRef.current.requestWorldItems();
+            return;
+        }
+        
+        // Fallback - using raw socket emit
+        getSocket().then(socket => {
+            if (socket) {
+                // Using raw emit since type checking would require adding this to the interface
+                // The server definitely supports this event, we just need to cast to any
+                (socket as any).emit('getWorldItems');
+                console.log("Requested fresh world items from server (fallback method)");
+            }
+        });
+    }, [itemManagerRef]);
+
+    // Handle item pickup from context menu
+    const handlePickupItemFromMenu = useCallback((itemDropId: string) => {
+        console.log(`%c 🔍 CONTEXT MENU PICKUP: ${itemDropId}`, "background: #4CAF50; color: white; font-size: 14px;");
+        closeContextMenu();
+        
+        // Find the item in worldItems
+        const worldItem = worldItemsRef.current?.find(item => item.dropId === itemDropId);
+        console.log("World items:", worldItemsRef.current?.length, "Looking for item with ID:", itemDropId);
+        
+        if (!worldItem) {
+            console.error("Item not found in worldItems:", itemDropId);
+            refreshWorldItems();
+            return;
+        }
+        
+        if (!worldItem.mesh) {
+            console.error("Item has no mesh:", worldItem);
+            return;
+        }
+        
+        if (!playerRef.current) {
+            console.error("Player ref is null");
+            return;
+        }
+        
+        if (!sceneRef.current) {
+            console.error("Scene ref is null");
+            return;
+        }
+        
+        console.log("Found world item:", {
+            type: worldItem.itemType,
+            dropId: worldItem.dropId,
+            position: `(${worldItem.x}, ${worldItem.y}, ${worldItem.z})`
+        });
+        
+        const scene = sceneRef.current;
+        const player = playerRef.current;
+        const controller = playerControllerRef?.current;
+        
+        // Calculate distance to the item
+        const itemPosition = worldItem.mesh.position.clone();
+        const distance = player.position.distanceTo(itemPosition);
+        console.log(`Distance to item: ${distance.toFixed(2)} units (pickup range: 2 units)`);
+        
+        // Set the item position to player height for movement
+        itemPosition.y = player.position.y;
+        
+        // TESTING WORKAROUND: Simulate left-click on item
+        console.log(`%c 🧪 SIMULATING LEFT-CLICK ON ITEM`, "background: red; color: white; font-size: 14px;");
+        
+        if (distance <= 2) {
+            // Within range - pickup immediately
+            console.log("Item within range - attempting immediate pickup via simulated left-click");
+            
+            // Direct socket call
+            getSocket().then(socket => {
+                if (socket) {
+                    console.log(`Emitting 'pickup' event with string dropId: "${itemDropId}"`);
+                    // Try sending as a plain string, not an object
+                    socket.emit('pickup', String(itemDropId));
+                    
+                    // Set up temporary error listener for this pickup attempt
+                    const errorHandler = (error: string) => {
+                        console.error(`Server error during pickup: ${error}`);
+                        if (error.includes('not found')) {
+                            refreshWorldItems();
+                        }
+                    };
+                    
+                    // Add and then remove error handler after a delay
+                    socket.once('error', errorHandler);
+                    setTimeout(() => {
+                        socket.off('error', errorHandler);
+                    }, 3000);
+                    
+                    // Log what we're sending
+                    console.log("Sent pickup event with payload:", itemDropId, "Type:", typeof itemDropId);
+                    
+                    soundManager.play('itemPickup' as any);
+                } else {
+                    console.error("Failed to get socket for item pickup");
+                }
+            }).catch(err => {
+                console.error("Socket error:", err);
+            });
+        } else {
+            // SAME CODE FOR MOVING TO ITEM
+            // Too far - need to move closer
+            console.log(`Item too far away (${distance.toFixed(2)} units) - need to move closer`);
+            
+            if (!controller) {
+                console.error("PlayerController not available for movement");
+                return;
+            }
+            
+            console.log("Starting movement to item position:", itemPosition);
+            
+            // Remove previous indicator and create a new one
+            removeClickIndicator();
+            clickIndicatorRef.current = createClickIndicator(scene, itemPosition);
+            
+            // Reset movement flag
+            movementCompletedRef.current = false;
+            
+            // Store the itemId for use after movement completes
+            const pickupItemId = itemDropId;
+            
+            // Move to the item using a different movement approach
+            console.log("Using modified movement approach for right-click pickup");
+            controller.moveToPosition(itemPosition)
+                .then(() => {
+                    console.log("Reached item position, attempting pickup");
+                    
+                    // After reaching the item, try to pick it up
+                    const updatedWorldItem = worldItemsRef.current?.find(item => item.dropId === pickupItemId);
+                    if (updatedWorldItem) {
+                        getSocket().then(socket => {
+                            if (socket) {
+                                console.log(`Emitting 'pickup' event with string dropId: "${pickupItemId}"`);
+                                // Try sending as a plain string, not an object
+                                socket.emit('pickup', String(pickupItemId));
+                                
+                                // Set up temporary error listener for this pickup attempt
+                                const errorHandler = (error: string) => {
+                                    console.error(`Server error during pickup after movement: ${error}`);
+                                    if (error.includes('not found')) {
+                                        refreshWorldItems();
+                                    }
+                                };
+                                
+                                // Add and then remove error handler after a delay
+                                socket.once('error', errorHandler);
+                                setTimeout(() => {
+                                    socket.off('error', errorHandler);
+                                }, 3000);
+                                
+                                console.log("Sent pickup event with payload:", pickupItemId, "Type:", typeof pickupItemId);
+                                soundManager.play('itemPickup' as any);
+                            } else {
+                                console.error("Failed to get socket for item pickup after movement");
+                            }
+                        });
+                    } else {
+                        console.log("Item no longer exists after reaching it");
+                    }
+                    removeClickIndicator();
+                })
+                .catch(err => {
+                    console.error("Error walking to item:", err);
+                    removeClickIndicator();
+                });
+        }
+    }, [playerRef, worldItemsRef, sceneRef, playerControllerRef, removeClickIndicator, closeContextMenu, refreshWorldItems]);
+    
+    // Add cleanup for context menu when component unmounts
+    useEffect(() => {
+        return () => {
+            closeContextMenu();
+        };
+    }, [closeContextMenu]);
+
+    // Return the handlers and context menu state
+    return { 
+        handleMouseClick,
+        handleRightClick,
+        contextMenuPos,
+        nearbyItems,
+        closeContextMenu,
+        handlePickupItemFromMenu
+    };
 }; 

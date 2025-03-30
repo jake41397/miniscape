@@ -2,7 +2,7 @@ import { WorldItem } from '../world/resources';
 import { Item } from '../../types/player';
 
 // Define server-to-client events
-export interface ServerToClientEvents {
+interface ServerToClientEvents {
   // Player events
   playerJoined: (player: any) => void;
   playerLeft: (playerId: string) => void;
@@ -30,7 +30,7 @@ export interface ServerToClientEvents {
 }
 
 // Define client-to-server events
-export interface ClientToServerEvents {
+interface ClientToServerEvents {
   // Player events
   playerMove: (positionData: { x: number, y: number, z: number }) => void;
   requestPlayers: () => void;
@@ -46,10 +46,11 @@ export interface ClientToServerEvents {
     y?: number,
     z?: number
   }) => void;
-  pickup: (data: { dropId: string }) => void;
+  pickup: (dropId: string) => void;
+  pickupItem: (dropId: string) => void;
   
   // Resource events
-  gather: (data: { resourceId: string, resourceType: string }) => void;
+  gather: (resourceId: string) => void;
   
   // Chat events
   sendChat: (message: { content: string, targetId?: string }) => void;

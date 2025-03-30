@@ -99,7 +99,7 @@ class ItemManager {
 
     // Check for existing world items
     console.log('Requesting initial world items');
-    (socket as any).emit('getWorldItems');
+    this.requestWorldItems();
 
     // Listen for item pickup events
     (socket as any).on('itemPickedUp', (data: any) => {
@@ -123,19 +123,35 @@ class ItemManager {
         this.clearAllItems();
         
         // Add all items from server
-        items.forEach(item => {
-          if (item && item.dropId && item.itemType) {
-            this.addWorldItem(item);
-          } else {
-            console.error('Invalid item in worldItems array:', item);
-          }
-        });
+        if (items.length > 0) {
+          items.forEach(item => {
+            if (item && item.dropId && item.itemType) {
+              this.addWorldItem(item);
+            } else {
+              console.error('Invalid item in worldItems array:', item);
+            }
+          });
+        } else {
+          console.log("Server returned zero world items. The area is empty.");
+        }
       } else {
         console.error('worldItems event received non-array data:', items);
       }
     });
     
     console.log('Item socket listeners set up successfully');
+  };
+
+  // Request world items from server - can be called anytime to refresh
+  public requestWorldItems = async () => {
+    console.log('Requesting world items from server');
+    const socket = await getSocket();
+    if (socket) {
+      (socket as any).emit('getWorldItems');
+      console.log('getWorldItems event sent to server');
+    } else {
+      console.error('Failed to get socket for requesting world items');
+    }
   };
 
   // Cleanup socket listeners

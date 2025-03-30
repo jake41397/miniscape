@@ -357,18 +357,6 @@ export class PlayerController {
     const player = this.playerRef.current;
     if (!player) return false;
 
-    // DEBUG: Log at beginning of update (reduce log frequency to avoid spam)
-    const shouldLog = Math.random() < 0.05; // Log ~5% of frames
-    if (shouldLog) {
-      console.log("%c 🔄 PlayerController.update called", "color: #00aa00;");
-      
-      // CRITICAL: Check state of keysPressed to see if keys are being passed correctly
-      console.log("%c 🔑 Keys State: ", "background: #673AB7; color: white;", Object.entries(this.keysPressed.current)
-        .filter(([_, pressed]) => pressed)
-        .map(([key]) => key));
-      console.log("MovementState:", this.movementState.current);
-    }
-
     const state = this.movementState.current;
     const keys = this.keysPressed.current;
     const now = Date.now();
@@ -397,33 +385,13 @@ export class PlayerController {
     
     // Calculate camera angle in degrees for debugging
     const currentCameraAngle = (Math.atan2(cameraForward.x, cameraForward.z) * 180 / Math.PI) % 360;
-    
-    // Super extensive logging when the movement might flip (only in suspicious conditions)
-    // Log every 2 seconds (on average) for diagnostic purposes
-    if (Math.random() < 0.01) {
-      console.log("%c 📹 CAMERA ORIENTATION TRACE", "background: #FF0000; color: white; font-size: 14px", {
-        cameraDegrees: currentCameraAngle.toFixed(1),
-        cameraRadians: this.cameraState.current.angle.toFixed(3),
-        forwardVector: {
-          x: cameraForward.x.toFixed(3),
-          z: cameraForward.z.toFixed(3)
-        },
-        rightVector: {
-          x: cameraRight.x.toFixed(3),
-          z: cameraRight.z.toFixed(3)
-        },
-        time: new Date().toISOString().split('T')[1]
-      });
-    }
 
     // Check for keyboard input - using the camera-derived vectors directly
     if (keys['w'] || keys['ArrowUp']) {
-      if (shouldLog) console.log("%c ⬆️ UP KEY DETECTED", "background: #008800; color: white;");
       moveDirection.add(cameraForward);
       manualMovementInput = true;
     }
     if (keys['s'] || keys['ArrowDown']) {
-      if (shouldLog) console.log("%c ⬇️ DOWN KEY DETECTED", "background: #008800; color: white;");
       moveDirection.sub(cameraForward);
       manualMovementInput = true;
     }
@@ -431,7 +399,6 @@ export class PlayerController {
     // CRITICAL FIX: A/D behavior - explicitly log and never flip
     // Always use cameraRight for left/right movement
     if (keys['a'] || keys['ArrowLeft']) {
-      if (shouldLog) console.log("%c ⬅️ LEFT KEY (A) PRESSED", "background: #E91E63; color: white; font-size: 14px;");
       // LEFT = SUBTRACT the camera's right vector (never changes)
       moveDirection.sub(cameraRight);
       console.log("%c 👈 LEFT VECTOR APPLIED", "color: #E91E63;", {
@@ -445,7 +412,6 @@ export class PlayerController {
       manualMovementInput = true;
     }
     if (keys['d'] || keys['ArrowRight']) {
-      if (shouldLog) console.log("%c ➡️ RIGHT KEY (D) PRESSED", "background: #2196F3; color: white; font-size: 14px;");
       // RIGHT = ADD the camera's right vector (never changes)
       moveDirection.add(cameraRight);
       console.log("%c 👉 RIGHT VECTOR APPLIED", "color: #2196F3;", {
@@ -459,19 +425,9 @@ export class PlayerController {
       manualMovementInput = true;
     }
 
-    // DEBUG: Log keyboard input state on significant events
-    if (manualMovementInput && shouldLog) {
-      console.log("%c 🎮 Keyboard movement detected", "color: #2196f3;", {
-        keys: Object.entries(keys).filter(([k, v]) => v).map(([k]) => k).join(', '),
-        moveDirection: { x: moveDirection.x.toFixed(2), z: moveDirection.z.toFixed(2) },
-        cameraAngle: currentCameraAngle.toFixed(1) + "°" 
-      });
-    }
-
     // --- INTERRUPT AUTO-MOVEMENT ---
     // If any manual movement key is pressed while auto-moving, stop auto-moving immediately
     if (manualMovementInput && this.isAutoMoving) {
-      console.log("%c 🛑 Interrupting auto-movement due to keyboard input", "color: #ff5722; font-size: 14px;");
       this.interruptMovement();
       
       // CRITICAL FIX: Force update the deltaTime to prevent speed issues during transition
@@ -493,33 +449,11 @@ export class PlayerController {
       
       // Use fixed movement speed multiplied by time factor for consistent movement
       const frameSpeed = MOVEMENT_SPEED * speedFactor;
-      
-      // Log speed for debug
-      if (shouldLog || Math.random() < 0.1) { // Log more often during movement
-        console.log("%c 🏃 Movement speed:", "color: #4CAF50;", {
-          baseSpeed: MOVEMENT_SPEED,
-          timeDelta: timeDelta.toFixed(4),
-          speedFactor: speedFactor.toFixed(2),
-          frameSpeed: frameSpeed.toFixed(4)
-        });
-      }
 
       // Apply movement based on calculated frame speed
       player.position.addScaledVector(moveDirection, frameSpeed);
       this.movementChanged.current = true; // Flag that position changed manually
       didMovementOccur = true;
-      
-      // DEBUG: Log manual movement
-      if (shouldLog) {
-        console.log("%c 🚶 Manual movement applied", "color: #4caf50;", {
-          position: { 
-            x: player.position.x.toFixed(2), 
-            y: player.position.y.toFixed(2), 
-            z: player.position.z.toFixed(2) 
-          },
-          rotation: player.rotation.y.toFixed(2)
-        });
-      }
       
       // Check for zone changes if we have a socketController with checkAndUpdateZone
       if (this.socketController && typeof this.socketController.checkAndUpdateZone === 'function') {
@@ -532,22 +466,6 @@ export class PlayerController {
       // Note: Most auto-movement logic is in moveToPosition's frameStep
       // But we still need to mark that movement is occurring
       didMovementOccur = true;
-      
-      // DEBUG: Log auto-movement state
-      if (shouldLog) {
-        console.log("%c 🚶‍♂️ Auto-movement is active", "color: #9c27b0;", {
-          target: { 
-            x: this.targetPosition.x.toFixed(2), 
-            y: this.targetPosition.y.toFixed(2), 
-            z: this.targetPosition.z.toFixed(2) 
-          },
-          current: { 
-            x: player.position.x.toFixed(2), 
-            y: player.position.y.toFixed(2), 
-            z: player.position.z.toFixed(2) 
-          }
-        });
-      }
       
       // Check for zone changes here as well for auto-movement
       if (this.socketController && typeof this.socketController.checkAndUpdateZone === 'function') {
@@ -567,9 +485,6 @@ export class PlayerController {
             state.lastJumpTime = now;
             this.movementChanged.current = true; // Position will change due to jump
             didMovementOccur = true;
-            
-            // DEBUG: Log jump started
-            console.log("%c 🦘 Jump started", "color: #ff9800;");
         }
 
         // Apply gravity / jump velocity
@@ -584,9 +499,6 @@ export class PlayerController {
                 state.jumpVelocity = 0;
                 this.movementChanged.current = true; // Position settled
                 didMovementOccur = true;
-                
-                // DEBUG: Log jump landed
-                console.log("%c 🦘 Jump landed", "color: #ff9800;");
             }
         } else {
              // Ensure player stays on ground if not jumping
@@ -617,17 +529,6 @@ export class PlayerController {
     // Avoid sending updates during auto-move here, as moveToPosition handles its own sends.
     if (!this.isAutoMoving && (this.movementChanged.current || distanceMoved > sendThreshold)) {
         if (this.socketController) {
-            console.log("%c 📡 SENDING POSITION UPDATE", "background: #e91e63; color: white; font-size: 14px;", {
-                position: { 
-                  x: player.position.x.toFixed(2), 
-                  y: player.position.y.toFixed(2), 
-                  z: player.position.z.toFixed(2) 
-                },
-                rotation: player.rotation.y.toFixed(2),
-                distanceMoved: distanceMoved.toFixed(2),
-                movementChanged: this.movementChanged.current,
-                controller: !!this.socketController
-            });
             
             this.socketController.sendPlayerPosition(
                 player.position,
@@ -643,12 +544,6 @@ export class PlayerController {
         // Optionally save position less frequently on manual move
         // saveLastKnownPosition(this.lastSentPosition.current);
     }
-    
-    // DEBUG: Log at end of update with movement status
-    console.log("%c 🔄 PlayerController.update complete", "color: #00aa00;", { 
-      didMovementOccur, 
-      isAutoMoving: this.isAutoMoving 
-    });
     
     // Return whether any movement occurred this frame
     return didMovementOccur;
@@ -708,34 +603,6 @@ export class PlayerController {
           newRight: { x: newRightVector.x.toFixed(2), z: newRightVector.z.toFixed(2) },
           cameraAngle: camState.angle.toFixed(2),
           time: new Date().toISOString().split('T')[1]
-      });
-    }
-    
-    // Debug log camera changes to track when directions might flip
-    // Only log if we detect potential issues or occasionally for monitoring
-    const shouldLogVerbose = rightVectorDot < 0.7 || Math.random() < 0.01;
-    
-    if (shouldLogVerbose) {
-      // Calculate camera angle in degrees for easier debugging
-      const angleDeg = (camState.angle * 180 / Math.PI) % 360;
-      
-      console.log("%c 📷 Camera updated:", "color: #9C27B0;", {
-        angle: angleDeg.toFixed(1) + "°",
-        tilt: camState.tilt.toFixed(2),
-        distance: camState.distance.toFixed(1),
-        rightVectorStability: rightVectorDot.toFixed(3),
-        position: {
-          before: { 
-            x: prevCameraPos.x.toFixed(1), 
-            y: prevCameraPos.y.toFixed(1), 
-            z: prevCameraPos.z.toFixed(1)
-          },
-          after: { 
-            x: this.camera.position.x.toFixed(1), 
-            y: this.camera.position.y.toFixed(1), 
-            z: this.camera.position.z.toFixed(1)
-          }
-        }
       });
     }
     

@@ -27,6 +27,7 @@ import ItemManager from '../game/world/ItemManager';
 import FPSCounter from './ui/FPSCounter';
 import { PlayerController } from './game/PlayerController';
 import { SocketController } from './game/SocketController';
+import WorldContextMenu from './ui/WorldContextMenu';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -434,15 +435,25 @@ const GameCanvas: React.FC = () => {
   }, [camera, socketControllerRef.current, playerController.current]);
 
   // 6. Interaction Handling
-  const { handleMouseClick } = useInteraction({
+  const interactionOptions = {
     sceneRef,
     cameraRef,
     resourceNodesRef,
     worldItemsRef,
     canvasRef,
     playerRef,
-    playerControllerRef: playerController
-  });
+    playerControllerRef: playerController,
+    itemManagerRef
+  };
+
+  const { 
+    handleMouseClick, 
+    handleRightClick, 
+    contextMenuPos, 
+    nearbyItems, 
+    closeContextMenu, 
+    handlePickupItemFromMenu 
+  } = useInteraction(interactionOptions);
 
   // --- World and Item Management ---
   useEffect(() => {
@@ -672,16 +683,38 @@ const GameCanvas: React.FC = () => {
         handleMouseClick(e);
       };
       
-      // Attach direct click handler
+      // Add right-click handler
+      const directRightClickHandler = (e: MouseEvent) => {
+        if (e.button === 2) { // Check if it's a right-click
+          console.log("%c 🖱️ RIGHT-CLICK DETECTED", "background: #4CAF50; color: white; font-size: 16px;", {
+            x: e.clientX, 
+            y: e.clientY
+          });
+          
+          // Call the right-click handler
+          handleRightClick(e);
+        }
+      };
+      
+      // Prevent default context menu
+      const preventDefaultContextMenu = (e: MouseEvent) => {
+        e.preventDefault();
+      };
+      
+      // Attach handlers
       currentRenderer.domElement.addEventListener('click', directClickHandler);
+      currentRenderer.domElement.addEventListener('mousedown', directRightClickHandler);
+      currentRenderer.domElement.addEventListener('contextmenu', preventDefaultContextMenu);
       
       return () => {
-        // Remove the same handler
+        // Remove all handlers
         currentRenderer.domElement.removeEventListener('click', directClickHandler);
-        console.log("Removed click handler");
+        currentRenderer.domElement.removeEventListener('mousedown', directRightClickHandler);
+        currentRenderer.domElement.removeEventListener('contextmenu', preventDefaultContextMenu);
+        console.log("Removed click and context menu handlers");
       };
     }
-  }, [renderer, handleMouseClick]);
+  }, [renderer, handleMouseClick, handleRightClick]);
 
   // --- Final Cleanup ---
   useEffect(() => {
@@ -985,6 +1018,17 @@ const GameCanvas: React.FC = () => {
 
       {/* Data attribute for external position access */}
       <div data-player-position style={{ display: 'none' }}></div>
+
+      {/* World Context Menu */}
+      {contextMenuPos && playerRef.current && (
+        <WorldContextMenu
+          position={contextMenuPos}
+          playerPosition={playerRef.current.position}
+          nearbyItems={nearbyItems}
+          onClose={closeContextMenu}
+          onPickupItem={handlePickupItemFromMenu}
+        />
+      )}
 
       {/* UI Overlays */}
       <ZoneIndicator currentZone={currentZone} />

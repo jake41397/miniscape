@@ -528,9 +528,15 @@ export class SocketController {
   }
 
   public async sendPickupItem(itemId: string): Promise<void> {
+    console.log(`%c 📦 SocketController.sendPickupItem called for item: ${itemId}`, "background: #FF9800; color: white; font-size: 14px;");
+    
     const socket = await getSocket();
     if (socket) {
+      console.log(`Emitting 'pickup' event with itemId: ${itemId} (type: ${typeof itemId})`);
       socket.emit('pickup', itemId);
+      console.log(`Sent 'pickup' event for ${itemId}`);
+    } else {
+      console.error("Failed to get socket for SocketController.sendPickupItem");
     }
   }
 

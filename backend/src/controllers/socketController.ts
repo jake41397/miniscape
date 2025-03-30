@@ -655,6 +655,147 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       }
     });
     
+    // Shared function for pickup item logic
+    const handleItemPickup = async (dropId: string) => {
+      console.log(`[DEBUG] handleItemPickup called with dropId: ${dropId} (type: ${typeof dropId})`);
+      
+      const player = players[socket.id];
+      if (!player) {
+        console.error(`[ERROR] Player not found for socket ID: ${socket.id}`);
+        return;
+      }
+      
+      console.log(`Player position: (${player.x}, ${player.y}, ${player.z})`);
+      console.log(`Number of world items: ${worldItems.length}`);
+      
+      const itemIndex = worldItems.findIndex(item => item.dropId === dropId);
+      console.log(`Item index in world items: ${itemIndex}`);
+      
+      if (itemIndex !== -1) {
+        const worldItem = worldItems[itemIndex];
+        console.log(`Found world item: ${worldItem.itemType} at (${worldItem.x}, ${worldItem.y}, ${worldItem.z})`);
+        
+        // Calculate distance to item
+        const distance = Math.sqrt(
+          Math.pow(player.x - worldItem.x, 2) +
+          Math.pow(player.y - worldItem.y, 2) +
+          Math.pow(player.z - worldItem.z, 2)
+        );
+        console.log(`Distance to item: ${distance} (max allowed: 2)`);
+        
+        // Check if player is close enough to pick up the item
+        if (distance <= 2) {
+          console.log(`Player is close enough to pick up the item`);
+          
+          // Create new inventory item
+          const newItem = {
+            id: Math.random().toString(36).substr(2, 9),
+            type: worldItem.itemType,
+            quantity: 1
+          };
+          
+          // Add to player's inventory
+          if (!player.inventory) {
+            player.inventory = [];
+          }
+          
+          player.inventory.push(newItem);
+          console.log(`Added item to player's inventory: ${newItem.id} (${newItem.type})`);
+          
+          // Remove from world items array
+          worldItems.splice(itemIndex, 1);
+          console.log(`Removed item from world items array`);
+          
+          // Tell all clients about the removed world item
+          io.emit('worldItemRemoved', dropId);
+          console.log(`Emitted worldItemRemoved event for all clients with dropId: ${dropId}`);
+          
+          // Update client's inventory
+          socket.emit('inventoryUpdate', player.inventory);
+          console.log(`Emitted inventoryUpdate event for player with ${player.inventory.length} items`);
+          
+          // Save to database
+          try {
+            // Save updated inventory
+            if (socket.user && socket.user.id) {
+              await savePlayerInventory(socket.user.id, player.inventory);
+              console.log(`Saved player inventory to database for user: ${socket.user.id}`);
+            }
+            
+            // Remove the item from the world in database
+            await removeWorldItem(dropId);
+            console.log(`Removed item from database: ${dropId}`);
+          } catch (error) {
+            console.error('Failed to save pickup to database:', error instanceof Error ? error : new Error(String(error)));
+          }
+        } else {
+          console.log(`Player is too far to pick up the item (${distance} > 2)`);
+          socket.emit('error', `Too far to pick up item: ${distance.toFixed(2)} units away (max: 2)`);
+        }
+      } else {
+        const errorMsg = `Item with dropId ${dropId} not found in worldItems`;
+        console.error(errorMsg);
+        socket.emit('error', errorMsg);
+        
+        // Send the current list of world items to help resync
+        socket.emit('worldItems', worldItems);
+      }
+    };
+    
+    // Handle item pickup
+    socket.on('pickupItem', async (receivedData: any) => {
+      console.log(`Processing 'pickupItem' event with data:`, receivedData);
+      console.log(`Data type: ${typeof receivedData}, Raw value: ${JSON.stringify(receivedData)}`);
+      
+      // Try to extract the dropId in different ways
+      let dropId: string;
+      if (typeof receivedData === 'string') {
+        dropId = receivedData;
+      } else if (typeof receivedData === 'object' && receivedData !== null) {
+        // Try to extract dropId or itemId from object
+        dropId = receivedData.dropId || receivedData.itemId || receivedData.id || '';
+      } else {
+        // Convert to string as fallback
+        dropId = String(receivedData);
+      }
+      
+      console.log(`Extracted dropId: ${dropId}, Socket ID: ${socket.id}`);
+      
+      if (!dropId) {
+        console.error('Invalid dropId received:', receivedData);
+        return;
+      }
+      
+      await handleItemPickup(dropId);
+    });
+    
+    // Handle item pickup with older 'pickup' event for backwards compatibility
+    socket.on('pickup', async (receivedData: any) => {
+      console.log(`Processing legacy 'pickup' event with data:`, receivedData);
+      console.log(`Data type: ${typeof receivedData}, Raw value: ${JSON.stringify(receivedData)}`);
+      
+      // Try to extract the dropId in different ways
+      let dropId: string;
+      if (typeof receivedData === 'string') {
+        dropId = receivedData;
+      } else if (typeof receivedData === 'object' && receivedData !== null) {
+        // Try to extract dropId or itemId from object
+        dropId = receivedData.dropId || receivedData.itemId || '';
+      } else {
+        // Convert to string as fallback
+        dropId = String(receivedData);
+      }
+      
+      console.log(`Extracted dropId: ${dropId}, Socket ID: ${socket.id}`);
+      
+      if (!dropId) {
+        console.error('Invalid dropId received:', receivedData);
+        return;
+      }
+      
+      await handleItemPickup(dropId);
+    });
+    
     // Handle item dropping
     socket.on('dropItem', async (data: any) => {
       try {
@@ -753,64 +894,6 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       }
     });
     
-    // Handle item pickup
-    socket.on('pickupItem', async (dropId: string) => {
-      const player = players[socket.id];
-      const itemIndex = worldItems.findIndex(item => item.dropId === dropId);
-      
-      if (itemIndex !== -1) {
-        const worldItem = worldItems[itemIndex];
-        
-        // Calculate distance to item
-        const distance = Math.sqrt(
-          Math.pow(player.x - worldItem.x, 2) +
-          Math.pow(player.y - worldItem.y, 2) +
-          Math.pow(player.z - worldItem.z, 2)
-        );
-        
-        // Check if player is close enough to pick up the item
-        if (distance <= 2) {
-          // Create new inventory item
-          const newItem = {
-            id: Math.random().toString(36).substr(2, 9),
-            type: worldItem.itemType,
-            quantity: 1
-          };
-          
-          // Add to player's inventory
-          if (!player.inventory) {
-            player.inventory = [];
-          }
-          
-          player.inventory.push(newItem);
-          
-          // Remove from world items array
-          worldItems.splice(itemIndex, 1);
-          
-          // Tell all clients about the removed world item
-          io.emit('worldItemRemoved', dropId);
-          
-          // Update client's inventory
-          socket.emit('inventoryUpdate', player.inventory);
-          
-          // Save to database
-          try {
-            // Save updated inventory
-            if (socket.user && socket.user.id) {
-              await savePlayerInventory(socket.user.id, player.inventory);
-            }
-            
-            // Remove the item from the world in database
-            await removeWorldItem(dropId);
-          } catch (error) {
-            console.error('Failed to save pickup to database:', error instanceof Error ? error : new Error(String(error)));
-          }
-        } else {
-          socket.emit('error', 'Too far to pick up item');
-        }
-      }
-    });
-    
     // Handle player disconnection
     socket.on('disconnect', async () => {
       const player = players[socket.id];
@@ -851,6 +934,65 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         // Broadcast the updated player count
         broadcastPlayerCount(io);
       }
+    });
+
+    // Get world items event
+    socket.on('getWorldItems', async () => {
+      console.log(`Client ${socket.id} requested world items. Current count: ${worldItems.length}`);
+      
+      // Check if world items are empty, and if so, generate some test items
+      if (worldItems.length === 0) {
+        console.log("World items array is empty. Creating test items for player:", socket.id);
+        
+        // Generate some test items near the player
+        const player = players[socket.id];
+        if (player) {
+          const { x, y, z } = player;
+          
+          // Create test items of different types
+          const testItems = [
+            {
+              dropId: `drop-${Date.now()}-coal-1`,
+              itemType: 'coal',
+              x: x + 2,
+              y: y,
+              z: z + 2
+            },
+            {
+              dropId: `drop-${Date.now()}-log-1`,
+              itemType: 'log',
+              x: x - 2,
+              y: y,
+              z: z + 1
+            },
+            {
+              dropId: `drop-${Date.now()}-fish-1`,
+              itemType: 'fish',
+              x: x + 1,
+              y: y,
+              z: z - 2
+            }
+          ];
+          
+          // Add items to the world
+          worldItems.push(...testItems);
+          
+          console.log(`Created ${testItems.length} test items near player:`, testItems);
+          
+          // Save to database - for persistence
+          try {
+            for (const item of testItems) {
+              await dropItemInWorld(item.dropId, item.itemType, item.x, item.y, item.z);
+            }
+            console.log("Saved test items to database");
+          } catch (error) {
+            console.error("Failed to save test items to database:", error);
+          }
+        }
+      }
+      
+      // Send world items to the client
+      socket.emit('worldItems', worldItems);
     });
   } catch (error) {
     console.error(`Error in handleSingleConnection for ${socket.id}:`, error);
