@@ -306,7 +306,22 @@ export class InventoryHandler {
     this.setupInventoryUpdateHandler(socket);
     this.setupItemUseHandler(socket);
     this.setupItemDropHandler(socket);
+    this.setupRequestInventoryHandler(socket);
     this.setupDebugHandlers(socket);
+  }
+  
+  /**
+   * Setup handler for inventory request
+   */
+  public setupRequestInventoryHandler(socket: ExtendedSocket): void {
+    socket.on('requestInventory', () => {
+      if (!this.players[socket.id]) return;
+      
+      console.log(`[${socket.id}] Received inventory request from client`);
+      
+      // Send the current inventory to the player
+      this.sendInventory(socket, this.players[socket.id].inventory || []);
+    });
   }
   
   /**

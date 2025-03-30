@@ -130,6 +130,9 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
             }
           }
         });
+        
+        // Request inventory from server immediately after connecting
+        socketInstance.emit('requestInventory');
       }
     };
     

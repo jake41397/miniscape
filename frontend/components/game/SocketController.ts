@@ -122,6 +122,7 @@ export class SocketController {
     console.log("Explicitly requesting initial player data");
     this.requestPlayersData();
     this.requestWorldData();
+    this.requestInventory();
     
     return true;
   }
@@ -624,6 +625,17 @@ export class SocketController {
       setTimeout(() => {
         this.forceSyncPlayers();
       }, 1000);
+    }
+  }
+  
+  /**
+   * Request inventory data from the server
+   */
+  public async requestInventory(): Promise<void> {
+    const socket = await getSocket();
+    if (socket) {
+      console.log('Requesting inventory data from server');
+      socket.emit('requestInventory');
     }
   }
 
