@@ -51,19 +51,30 @@ class ItemManager {
           return;
         }
 
-        // Use a global set to track which drop IDs we've processed
+        // CRITICAL: Check BEFORE any processing if this mesh already exists in the scene
+        const existingMesh = Array.from(this.scene.children).find(
+          child => child.userData && child.userData.dropId === item.dropId
+        );
+        
+        if (existingMesh) {
+          console.log(`%c 🚫 Mesh for drop ID ${item.dropId} already exists in scene - SKIPPING (itemDropped)`, "background: #FF0000; color: white;");
+          return;
+        }
+
+        // Lock this specific itemDropId to prevent race conditions
         if ((window as any).processedItemDropIds[item.dropId]) {
-          console.log(`%c 🚫 Drop ID ${item.dropId} already processed - SKIPPING to prevent duplicate mesh`, "background: #FF9800; color: white;");
+          console.log(`%c 🔒 Drop ID ${item.dropId} already being processed - SKIPPING (itemDropped)`, "background: #FF9800; color: white;");
           return;
         }
         
         // Mark this item as processed IMMEDIATELY to prevent race conditions
-        (window as any).processedItemDropIds[item.dropId] = true;
-        
-        console.log(`%c 🌎 Creating world item from itemDropped event: ${item.itemType} at (${item.x}, ${item.y}, ${item.z})`, "background: #4CAF50; color: white;");
+        console.log(`%c 🔐 Locking drop ID ${item.dropId} for processing (itemDropped)`, "color: #FF5722;");
+        (window as any).processedItemDropIds[item.dropId] = Date.now();
         
         // Play a sound for item dropping
         soundManager.play('itemDrop' as any);
+        
+        console.log(`%c 🌎 Creating world item from itemDropped event: ${item.itemType} at (${item.x}, ${item.y}, ${item.z})`, "background: #4CAF50; color: white;");
         
         // Add to world items - this creates the animated mesh
         this.addWorldItem({
@@ -87,23 +98,31 @@ class ItemManager {
           return;
         }
         
-        // Check if we've already processed this drop ID
-        if ((window as any).processedItemDropIds[item.dropId]) {
-          console.log(`%c 🚫 Drop ID ${item.dropId} already processed - SKIPPING to prevent duplicate mesh`, "background: #2196F3; color: white;");
+        // CRITICAL: Check FIRST if mesh already exists in scene
+        const existingMesh = Array.from(this.scene.children).find(
+          child => child.userData && child.userData.dropId === item.dropId
+        );
+        
+        if (existingMesh) {
+          console.log(`%c 🚫 Mesh for drop ID ${item.dropId} already exists in scene - SKIPPING (worldItemAdded)`, "background: #FF0000; color: white;");
           
           // Even if we skip creating a new mesh, ensure the existing one has animation
-          const existingItem = this.worldItems.find(i => i.dropId === item.dropId);
-          if (existingItem && existingItem.mesh) {
-            existingItem.mesh.userData.animateY = true;
-            existingItem.mesh.userData.baseY = existingItem.mesh.position.y || 0.25;
-            existingItem.mesh.userData.phase = Math.random() * Math.PI * 2;
-            existingItem.mesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
-          }
+          existingMesh.userData.animateY = true;
+          existingMesh.userData.baseY = existingMesh.position.y || 0.25;
+          existingMesh.userData.phase = Math.random() * Math.PI * 2;
+          existingMesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
+          return;
+        }
+        
+        // Check if we've already processed or are currently processing this drop ID
+        if ((window as any).processedItemDropIds[item.dropId]) {
+          console.log(`%c 🔒 Drop ID ${item.dropId} already being processed - SKIPPING (worldItemAdded)`, "background: #2196F3; color: white;");
           return;
         }
         
         // Mark this item as processed IMMEDIATELY
-        (window as any).processedItemDropIds[item.dropId] = true;
+        console.log(`%c 🔐 Locking drop ID ${item.dropId} for processing (worldItemAdded)`, "color: #2196F3;");
+        (window as any).processedItemDropIds[item.dropId] = Date.now();
         
         // Check if it's our own drop or another player's - just for logging
         const isOurDrop = item.droppedBy === (socket as any).id;
@@ -307,21 +326,36 @@ class ItemManager {
       return;
     }
     
-    // First check if we have the item mesh in the scene already
-    const existingItemInScene = Array.from(this.scene.children).find(
+    // CRITICAL STEP: Scan the entire scene first to see if a mesh with this dropId already exists
+    // This is our strongest defense against duplicates
+    const existingMeshes = Array.from(this.scene.children).filter(
       child => child.userData && child.userData.dropId === item.dropId
     );
 
-    if (existingItemInScene) {
-      console.log(`%c 🚫 Found existing mesh in scene for drop ID: ${item.dropId} - preventing duplicate`, "background: #FF5722; color: white;");
+    if (existingMeshes.length > 0) {
+      console.log(`%c 🚫 Found ${existingMeshes.length} existing mesh(es) in scene for drop ID: ${item.dropId} - preventing duplicate`, "background: #FF0000; color: white;");
       
-      // Make sure this mesh is animated
-      if (!existingItemInScene.userData.animateY) {
+      // If we somehow have multiple meshes for this drop ID (should never happen), clean up extras
+      if (existingMeshes.length > 1) {
+        console.log(`%c ⚠️ CRITICAL: Found multiple meshes (${existingMeshes.length}) for same drop ID: ${item.dropId} - cleaning up extras`, "background: #FF0000; color: white;");
+        
+        // Keep only the first mesh, remove others
+        for (let i = 1; i < existingMeshes.length; i++) {
+          const extraMesh = existingMeshes[i];
+          extraMesh.visible = false;
+          this.scene.remove(extraMesh);
+          console.log(`Removed extra mesh ${i} from scene`);
+        }
+      }
+      
+      // Make sure the primary mesh is animated
+      const primaryMesh = existingMeshes[0];
+      if (!primaryMesh.userData.animateY) {
         console.log(`Ensuring mesh is animated`);
-        existingItemInScene.userData.animateY = true;
-        existingItemInScene.userData.baseY = existingItemInScene.position.y || 0.25; 
-        existingItemInScene.userData.phase = Math.random() * Math.PI * 2;
-        existingItemInScene.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
+        primaryMesh.userData.animateY = true;
+        primaryMesh.userData.baseY = primaryMesh.position.y || 0.25; 
+        primaryMesh.userData.phase = Math.random() * Math.PI * 2;
+        primaryMesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
       }
       
       // Still update our tracking array if the item isn't there
@@ -330,7 +364,7 @@ class ItemManager {
         // Add to our tracking array with the existing mesh
         this.worldItems.push({
           ...item,
-          mesh: existingItemInScene as THREE.Mesh
+          mesh: primaryMesh as THREE.Mesh
         });
         
         console.log(`Added item to worldItems array with existing mesh`);
@@ -374,6 +408,17 @@ class ItemManager {
     // Create mesh for the item
     try {
       console.log(`%c 🔨 Creating NEW mesh for ${item.itemType}`, "background: #2196F3; color: white; font-size: 14px;");
+      
+      // EXTRA CHECK: Verify again that no mesh with this dropId exists in the scene
+      // This handles edge cases where a mesh was created between our initial check and now
+      const lastMinuteCheck = Array.from(this.scene.children).find(
+        child => child.userData && child.userData.dropId === item.dropId
+      );
+      
+      if (lastMinuteCheck) {
+        console.log(`%c ⚠️ RACE CONDITION CAUGHT: Mesh for ${item.dropId} created during processing - aborting duplicate creation`, "background: #FF0000; color: white;");
+        return; // Abort mesh creation
+      }
       
       // Normalize item type to lowercase and handle possible type variations
       let normalizedType = String(item.itemType || "unknown").toLowerCase();
