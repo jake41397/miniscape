@@ -30,6 +30,9 @@ import { SocketController } from './game/SocketController';
 import WorldContextMenu from './ui/WorldContextMenu';
 import { ResourceController } from './game/ResourceController';
 import SkillsPanel from './ui/SkillsPanel';
+import NPCInteractionController from './game/NPCInteractionController';
+import PlayerSocialController from './game/PlayerSocialController';
+import TutorialOverlay from './ui/TutorialOverlay';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -214,6 +217,10 @@ const GameCanvas: React.FC = () => {
   
   // Add resource controller ref
   const resourceControllerRef = useRef<ResourceController | null>(null);
+  
+  // Add tutorial state
+  const [showTutorial, setShowTutorial] = useState(false);
+  const tutorialCompletedRef = useRef(false);
   
   // --- Hook Initializations ---
 
@@ -1084,6 +1091,70 @@ const GameCanvas: React.FC = () => {
     };
   }, []); // Empty dependency array = run only on mount/unmount
   
+  // Handle player following
+  const handleFollowPlayer = (targetPlayerId: string) => {
+    const targetMesh = playersRef.current.get(targetPlayerId);
+    if (targetMesh && playerController.current) {
+      // Move the player to start following the target
+      playerController.current.moveToPosition(targetMesh.position.clone());
+      
+      // TODO: Implement proper following behavior that continues to follow as the target moves
+      console.log(`Now following player ${targetPlayerId}`);
+    }
+  };
+  
+  // Handle player messaging
+  const handleMessagePlayer = (targetPlayerId: string) => {
+    // Open chat and focus it with @playerId prefix
+    if (chatRef.current) {
+      const targetMesh = playersRef.current.get(targetPlayerId);
+      const playerName = targetMesh?.userData.nameTag?.userData.playerName || `Player-${targetPlayerId}`;
+      chatRef.current.openChatWithTarget(`@${playerName} `);
+    }
+  };
+  
+  // Check for first-time players when component mounts
+  useEffect(() => {
+    // Check local storage to see if user has completed tutorial
+    const tutorialCompleted = localStorage.getItem('miniscape_tutorial_completed');
+    
+    if (!tutorialCompleted) {
+      // Show tutorial for first-time players after a short delay
+      const tutorialTimeout = setTimeout(() => {
+        setShowTutorial(true);
+      }, 2000); // Delay the tutorial to let the game load first
+      
+      return () => {
+        clearTimeout(tutorialTimeout);
+      };
+    } else {
+      tutorialCompletedRef.current = true;
+    }
+  }, []);
+  
+  // Handle tutorial completion
+  const handleTutorialComplete = () => {
+    setShowTutorial(false);
+    tutorialCompletedRef.current = true;
+    
+    // Save to local storage so we don't show the tutorial again
+    localStorage.setItem('miniscape_tutorial_completed', 'true');
+    
+    // Possibly teleport the player to the tutorial guide in Lumbridge
+    if (playerRef.current && playerController.current) {
+      playerController.current.moveToPosition(new THREE.Vector3(10, 0, 10));
+    }
+  };
+  
+  // Handle tutorial skip
+  const handleTutorialSkip = () => {
+    setShowTutorial(false);
+    tutorialCompletedRef.current = true;
+    
+    // Still save to local storage even if skipped
+    localStorage.setItem('miniscape_tutorial_completed', 'true');
+  };
+  
   // --- Render ---
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -1092,6 +1163,32 @@ const GameCanvas: React.FC = () => {
 
       {/* Data attribute for external position access */}
       <div data-player-position style={{ display: 'none' }}></div>
+
+      {/* Tutorial Overlay */}
+      <TutorialOverlay
+        isActive={showTutorial}
+        onComplete={handleTutorialComplete}
+        onSkip={handleTutorialSkip}
+      />
+
+      {/* Add NPC Interaction Controller */}
+      {worldManagerRef.current && playerRef.current && (
+        <NPCInteractionController
+          worldManager={worldManagerRef.current}
+          playerRef={playerRef}
+        />
+      )}
+      
+      {/* Add Player Social Controller */}
+      {playerRef.current && (
+        <PlayerSocialController
+          playerRef={playerRef}
+          playersRef={playersRef}
+          onPlayerFollow={handleFollowPlayer}
+          onPlayerMessage={handleMessagePlayer}
+          socketController={socketControllerRef.current}
+        />
+      )}
 
       {/* World Context Menu */}
       {contextMenuPos && playerRef.current && (

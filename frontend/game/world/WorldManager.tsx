@@ -9,6 +9,7 @@ import {
   updateResourceLOD
 } from './resources';
 import ResourceController from '../../components/game/ResourceController';
+import LandmarkManager from './LandmarkManager';
 
 // World boundaries
 const WORLD_BOUNDS = {
@@ -32,6 +33,7 @@ class WorldManager {
   private onWorldItemsCreated: (items: WorldItem[]) => void;
   private camera: THREE.Camera | null = null;
   private resourceController: ResourceController | null = null;
+  private landmarkManager: LandmarkManager | null = null;
   
   // Geometries and materials for proper disposal
   private groundGeometry?: THREE.PlaneGeometry;
@@ -137,6 +139,9 @@ class WorldManager {
     // Initialize empty world items array and pass to parent
     this.worldItems = [];
     this.onWorldItemsCreated(this.worldItems);
+    
+    // Initialize landmark manager
+    this.landmarkManager = new LandmarkManager({ scene: this.scene });
   }
 
   private createBoundaryMarkers() {
@@ -580,6 +585,12 @@ class WorldManager {
         }
       }
     });
+    
+    // Clean up landmark manager
+    if (this.landmarkManager) {
+      this.landmarkManager.cleanup();
+      this.landmarkManager = null;
+    }
   }
   
   // Add methods to update or manage world items
@@ -626,6 +637,11 @@ class WorldManager {
     
     // Update dropped items animation
     updateDroppedItems(this.worldItems, delta);
+    
+    // Update landmarks and NPCs
+    if (this.landmarkManager) {
+      this.landmarkManager.update(delta);
+    }
   }
   
   // Add new method to add resources to the scene
@@ -887,6 +903,11 @@ class WorldManager {
         }
       }
     }
+  }
+
+  // Get the landmark manager instance
+  public getLandmarkManager(): LandmarkManager | null {
+    return this.landmarkManager;
   }
 }
 
