@@ -804,6 +804,19 @@ const GameCanvas: React.FC = () => {
       if (e.key === 'ArrowLeft') keysPressed.current['a'] = true;
       if (e.key === 'ArrowRight') keysPressed.current['d'] = true;
       
+      // SPECIAL KEY - Press 'T' to create a test item at player position
+      if (e.key === 't' || e.key === 'T') {
+        console.log("%c 🧪 TEST ITEM CREATION", "background: #E91E63; color: white; font-size: 16px;");
+        if (itemManagerRef.current) {
+          const types = ['coal', 'log', 'fish', 'stone', 'berries'];
+          const randomType = types[Math.floor(Math.random() * types.length)];
+          itemManagerRef.current.testCreateItem(randomType);
+          console.log(`Created test item of type: ${randomType}`);
+        } else {
+          console.error("Cannot create test item - itemManagerRef is null");
+        }
+      }
+      
       // SPECIAL DEBUG KEY - Press 'P' to force position update
       if (e.key === 'p' || e.key === 'P') {
         console.log("%c 🔥 MANUAL POSITION UPDATE TRIGGERED", "background: #ff0000; color: white; font-size: 16px;");

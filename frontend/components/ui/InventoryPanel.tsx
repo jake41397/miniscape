@@ -176,13 +176,16 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
   }, []);
   
   const handleDropItem = async (item: Item) => {
-    console.log(`Attempting to drop item: ${item.type} (${item.id})`);
+    console.log(`%c 🎒 Dropping item: ${item.type}`, "background: #FF5722; color: white; font-size: 14px;");
     
-    try {
-      // First check if we have an itemManager that can handle the drop
-      if (itemManager) {
-        console.log(`Using ItemManager to drop item: ${item.type}`);
-        // We're removing the item from local inventory immediately for better UX
+    if (itemManager) {
+      console.log(`%c ✅ Using itemManager to drop item: ${item.type}`, "background: #4CAF50; color: white;");
+      const success = await itemManager.dropItem(item);
+      
+      if (success) {
+        console.log(`%c ✅ Successfully dropped item using itemManager: ${item.type}`, "background: #4CAF50; color: white;");
+        
+        // Remove from local inventory immediately for better UX
         setInventory(prevInventory => {
           const newInventory = [...prevInventory];
           const index = newInventory.findIndex(i => i.id === item.id);
@@ -196,62 +199,59 @@ const InventoryPanel = forwardRef<InventoryPanelHandle, InventoryPanelProps>(({ 
           return newInventory;
         });
         
-        // Then send to server - this is the critical part
-        const result = await itemManager.dropItem(item);
-        console.log(`ItemManager drop result: ${result ? 'Success' : 'Failed'}`);
-        return;
-      }
-      
-      // Rest of the function remains unchanged
-      if (onDropItem) {
-        console.log(`Using onDropItem callback to drop item: ${item.type}`);
-        onDropItem(item);
+        return true;
       } else {
-        // If no callback and no itemManager, send directly to server
-        console.log(`No itemManager or callback found, sending drop directly to server`);
-        const socket = await getSocket();
-        if (socket) {
-          console.log(`Socket available (${socket.id}), emitting dropItem event`);
-          
-          // Get player position from data attribute if available
-          const positionElement = document.querySelector('[data-player-position]');
-          let positionData = {};
-          
-          if (positionElement && positionElement.getAttribute('data-position')) {
-            try {
-              positionData = JSON.parse(positionElement.getAttribute('data-position') || '{}');
-              console.log('Retrieved player position for drop:', positionData);
-            } catch (e) {
-              console.error('Failed to parse player position:', e);
+        console.error(`%c ❌ Failed to drop item using itemManager: ${item.type}`, "background: red; color: white;");
+      }
+    }
+    
+    // Rest of the function remains unchanged
+    if (onDropItem) {
+      console.log(`Using onDropItem callback to drop item: ${item.type}`);
+      onDropItem(item);
+    } else {
+      // If no callback and no itemManager, send directly to server
+      console.log(`No itemManager or callback found, sending drop directly to server`);
+      const socket = await getSocket();
+      if (socket) {
+        console.log(`Socket available (${socket.id}), emitting dropItem event`);
+        
+        // Get player position from data attribute if available
+        const positionElement = document.querySelector('[data-player-position]');
+        let positionData = {};
+        
+        if (positionElement && positionElement.getAttribute('data-position')) {
+          try {
+            positionData = JSON.parse(positionElement.getAttribute('data-position') || '{}');
+            console.log('Retrieved player position for drop:', positionData);
+          } catch (e) {
+            console.error('Failed to parse player position:', e);
+          }
+        }
+        
+        // Send in the format that the server expects based on which handler processes it
+        (socket as any).emit('dropItem', { 
+          itemId: item.id, 
+          itemType: item.type,
+          ...positionData
+        });
+        
+        // Remove from local inventory immediately for better UX
+        setInventory(prevInventory => {
+          const newInventory = [...prevInventory];
+          const index = newInventory.findIndex(i => i.id === item.id);
+          if (index !== -1) {
+            if (newInventory[index].count && newInventory[index].count > 1) {
+              newInventory[index].count -= 1;
+            } else {
+              newInventory.splice(index, 1);
             }
           }
-          
-          // Send in the format that the server expects based on which handler processes it
-          (socket as any).emit('dropItem', { 
-            itemId: item.id, 
-            itemType: item.type,
-            ...positionData
-          });
-          
-          // Remove from local inventory immediately for better UX
-          setInventory(prevInventory => {
-            const newInventory = [...prevInventory];
-            const index = newInventory.findIndex(i => i.id === item.id);
-            if (index !== -1) {
-              if (newInventory[index].count && newInventory[index].count > 1) {
-                newInventory[index].count -= 1;
-              } else {
-                newInventory.splice(index, 1);
-              }
-            }
-            return newInventory;
-          });
-        } else {
-          console.error('Failed to get socket for item drop');
-        }
+          return newInventory;
+        });
+      } else {
+        console.error('Failed to get socket for item drop');
       }
-    } catch (error) {
-      console.error('Error dropping item:', error);
     }
   };
 

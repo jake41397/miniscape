@@ -800,12 +800,13 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     socket.on('dropItem', async (data: any) => {
       try {
         // Log the received data
-        console.log(`[${socket.id}] Received dropItem event in socketController:`, data);
+        console.log(`%c 📦 [${socket.id}] Received dropItem event:`, "background: #FF9800; color: white;", data);
         
         // Validate input
         const player = players[socket.id];
         if (!player) {
           console.error(`[${socket.id}] Player not found in dropItem handler`);
+          socket.emit('error', 'Player not found');
           return;
         }
         
@@ -813,19 +814,23 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         const itemId = data.itemId || data.id;
         if (!itemId) {
           console.error(`[${socket.id}] No itemId or id provided in dropItem event`, data);
+          socket.emit('error', 'Missing itemId in drop request');
           return;
         }
         
-        console.log(`[${socket.id}] Looking for item ${itemId} in inventory:`, player.inventory);
+        console.log(`[${socket.id}] Looking for item ${itemId} in inventory with ${player.inventory?.length || 0} items`);
+        console.log(`Player inventory:`, player.inventory);
         
-        if (!player.inventory) {
-          console.error(`[${socket.id}] Player inventory is missing`);
+        if (!player.inventory || player.inventory.length === 0) {
+          console.error(`[${socket.id}] Player inventory is empty or missing`);
+          socket.emit('error', 'Inventory is empty');
           return;
         }
         
         const itemIndex = player.inventory.findIndex(i => i.id === itemId);
         if (itemIndex === -1) {
           console.error(`[${socket.id}] Item ${itemId} not found in player's inventory`);
+          socket.emit('error', `Item ${itemId} not found in inventory`);
           return;
         }
         
@@ -849,48 +854,59 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         const x = data.x !== undefined ? data.x : player.x;
         const y = data.y !== undefined ? data.y : player.y;
         const z = data.z !== undefined ? data.z : player.z;
+
+        // Get item type - either from the data or from the inventory item
+        const itemType = data.itemType || droppedItem.type;
         
-        // Add to world items
-        const worldItem: WorldItem = {
-          dropId: dropId,
-          itemType: droppedItem.type,
+        console.log(`[${socket.id}] Creating world item at position (${x}, ${y}, ${z}) with type: ${itemType}`);
+        
+        // Create the world item object
+        const worldItem = {
+          dropId,
+          itemType,
           x,
           y,
           z,
           droppedBy: socket.id
         };
         
+        // Add to the worldItems array
         worldItems.push(worldItem);
+        console.log(`[${socket.id}] Added item to worldItems array. Current count: ${worldItems.length}`);
         
-        console.log(`[${socket.id}] Created world item at position (${x}, ${y}, ${z}):`, worldItem);
-        
-        // Tell all clients about the new world item (broadcast BOTH event types for compatibility)
-        io.emit('worldItemAdded', worldItem);
-        io.emit('itemDropped', worldItem);
-        
-        console.log(`[${socket.id}] Broadcasted item drop to ALL clients`);
+        // Broadcast to all clients - IMPORTANT: Only send ONE event type to prevent duplicates
+        console.log(`[${socket.id}] Broadcasting item to all clients:`, worldItem);
+        io.emit('worldItemAdded', worldItem); // Broadcast to all clients including sender
         
         // Update client's inventory
         socket.emit('inventoryUpdate', player.inventory);
-        console.log(`[${socket.id}] Sent updated inventory to client`);
         
-        // Save to database
+        // Send a specific drop success event for this drop request with clientDropId for tracking
+        if (data.clientDropId) {
+          socket.emit('dropSuccess', {
+            clientDropId: data.clientDropId,
+            dropId: worldItem.dropId,
+            itemType: worldItem.itemType
+          });
+        }
+        
+        // Save to database if database functions exist
         try {
-          // Save updated inventory to database
+          // Save the dropped item to the world items collection
+          await dropItemInWorld(dropId, itemType, x, y, z);
+          console.log(`[${socket.id}] Saved world item to database: ${dropId}`);
+          
+          // Save the player's updated inventory
           if (socket.user && socket.user.id) {
             await savePlayerInventory(socket.user.id, player.inventory);
-            console.log(`[${socket.id}] Saved inventory to database for user ${socket.user.id}`);
+            console.log(`[${socket.id}] Saved player inventory to database`);
           }
-          
-          // Add the item to the world in database
-          await dropItemInWorld(dropId, droppedItem.type, x, y, z);
-          console.log(`[${socket.id}] Saved world item to database`);
-        } catch (error) {
-          console.error(`[${socket.id}] Failed to save data to database:`, error instanceof Error ? error : new Error(String(error)));
+        } catch (dbError) {
+          console.error(`[${socket.id}] Database error:`, dbError);
         }
       } catch (error) {
-        console.error(`[${socket.id}] Error in dropItem handler:`, error instanceof Error ? error : new Error(String(error)));
-        socket.emit('error', 'Failed to drop item. Please try again.');
+        console.error(`[${socket.id}] Error in dropItem handler:`, error);
+        socket.emit('error', 'Internal error processing drop request');
       }
     });
     
@@ -933,6 +949,79 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         
         // Broadcast the updated player count
         broadcastPlayerCount(io);
+      }
+    });
+
+    // Handle registerWorldItem event to ensure server has the item
+    socket.on('registerWorldItem', (data: any) => {
+      try {
+        // Check if valid data
+        if (!data || !data.dropId || !data.itemType) {
+          console.error(`Invalid data in registerWorldItem event:`, data);
+          
+          if (data && data.requireConfirmation) {
+            socket.emit('registerWorldItemResponse', { error: 'Invalid data' });
+          }
+          return;
+        }
+        
+        console.log(`Received registerWorldItem event for dropId: ${data.dropId}`);
+        
+        // Check if the item is already in the worldItems array
+        const existingItem = worldItems.find(item => item.dropId === data.dropId);
+        if (existingItem) {
+          console.log(`Item ${data.dropId} already exists in server worldItems`);
+          
+          if (data.requireConfirmation) {
+            socket.emit('registerWorldItemResponse', { exists: true, dropId: data.dropId });
+          }
+          return;
+        }
+        
+        // Add the item to the worldItems array
+        const worldItem: WorldItem = {
+          dropId: data.dropId,
+          itemType: data.itemType,
+          x: data.x,
+          y: data.y,
+          z: data.z,
+          droppedBy: socket.id
+        };
+        
+        worldItems.push(worldItem);
+        console.log(`Added client item ${data.dropId} to server worldItems. Current count: ${worldItems.length}`);
+        
+        // Broadcast to other clients (excluding the sender)
+        socket.broadcast.emit('worldItemAdded', worldItem);
+        
+        // Send confirmation if requested
+        if (data.requireConfirmation) {
+          socket.emit('registerWorldItemResponse', { 
+            success: true, 
+            dropId: data.dropId 
+          });
+        }
+        
+        // Save to database
+        try {
+          dropItemInWorld(data.dropId, data.itemType, data.x, data.y, data.z);
+          console.log(`Saved client item to database: ${data.dropId}`);
+        } catch (dbError) {
+          console.error(`Database error while saving client item:`, dbError);
+          
+          if (data.requireConfirmation) {
+            socket.emit('registerWorldItemResponse', { 
+              warning: 'Item registered but database save failed',
+              dropId: data.dropId 
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`Error in registerWorldItem handler:`, error);
+        
+        if (data && data.requireConfirmation) {
+          socket.emit('registerWorldItemResponse', { error: 'Server error processing request' });
+        }
       }
     });
 
@@ -993,6 +1082,47 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       
       // Send world items to the client
       socket.emit('worldItems', worldItems);
+    });
+
+    // Handle test add item to inventory
+    socket.on('testAddItem', async (itemType: string = 'coal') => {
+      console.log(`[${socket.id}] Received testAddItem event for type: ${itemType}`);
+      
+      const player = players[socket.id];
+      if (!player) {
+        console.error(`[${socket.id}] Player not found for testAddItem`);
+        return;
+      }
+      
+      // Ensure player has an inventory array
+      if (!player.inventory) {
+        player.inventory = [];
+      }
+      
+      // Create a new inventory item with unique ID
+      const newItem = {
+        id: `inv-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        type: itemType,
+        quantity: 1
+      };
+      
+      // Add to player's inventory on server
+      player.inventory.push(newItem);
+      console.log(`[${socket.id}] Added test item to player inventory:`, newItem);
+      
+      // Send updated inventory to client
+      socket.emit('inventoryUpdate', player.inventory);
+      console.log(`[${socket.id}] Sent inventoryUpdate with ${player.inventory.length} items`);
+      
+      // Save to database if we have a user ID
+      try {
+        if (socket.user && socket.user.id) {
+          await savePlayerInventory(socket.user.id, player.inventory);
+          console.log(`[${socket.id}] Saved inventory to database for user: ${socket.user.id}`);
+        }
+      } catch (error) {
+        console.error(`[${socket.id}] Failed to save inventory:`, error);
+      }
     });
   } catch (error) {
     console.error(`Error in handleSingleConnection for ${socket.id}:`, error);

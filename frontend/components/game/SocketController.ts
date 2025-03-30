@@ -541,15 +541,48 @@ export class SocketController {
   }
 
   public async sendDropItem(itemId: string, quantity: number): Promise<void> {
+    console.log(`%c 📦 SocketController.sendDropItem called for item: ${itemId}`, "background: #FF9800; color: white; font-size: 14px;");
+    
     const socket = await getSocket();
     const player = this.playerRef.current;
     
     if (!socket || !player) return;
     
-    socket.emit('dropItem', {
-      itemId,
-      itemType: 'item' // Default type, should be determined from inventory
-    });
+    // Try to find the item type from player inventory state
+    let itemType = 'item'; // Default type
+    
+    // Use item lookup logic to find the correct type
+    try {
+      // For now, use a direct socket event with position data
+      const positionElement = document.querySelector('[data-player-position]');
+      let positionData = {};
+      
+      if (positionElement && positionElement.getAttribute('data-position')) {
+        try {
+          positionData = JSON.parse(positionElement.getAttribute('data-position') || '{}');
+          console.log('Retrieved player position for drop:', positionData);
+        } catch (e) {
+          console.error('Failed to parse player position:', e);
+        }
+      } else {
+        // Use the player's actual position if data attribute is not available
+        positionData = {
+          x: player.position.x,
+          y: player.position.y,
+          z: player.position.z
+        };
+      }
+      
+      // Send the drop with complete data
+      console.log(`Emitting dropItem with itemId: ${itemId}, type: ${itemType}, position:`, positionData);
+      socket.emit('dropItem', {
+        itemId,
+        itemType,
+        ...positionData
+      });
+    } catch (error) {
+      console.error('Error in sendDropItem:', error);
+    }
   }
 
   public async updateDisplayName(name: string): Promise<void> {

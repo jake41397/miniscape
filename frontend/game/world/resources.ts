@@ -131,7 +131,12 @@ export const createFishingSpotMesh = (): THREE.Mesh => {
 
 // Create a dropped item mesh
 export const createItemMesh = (itemType: string): THREE.Mesh => {
-  console.log(`Creating item mesh for type: '${itemType}'`);
+  console.log(`%c 🔧 Creating item mesh for type: '${itemType}'`, "background:#FF9800; color: white; font-size: 14px;");
+  
+  if (!itemType) {
+    console.error("Attempt to create item mesh with null or undefined itemType");
+    itemType = "unknown";
+  }
   
   let geometry;
   let material;
@@ -139,6 +144,7 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
   
   // Normalize itemType to lowercase for consistent handling
   const type = String(itemType).toLowerCase();
+  console.log(`Normalized item type: '${type}'`);
   
   // Choose geometry and color based on item type
   switch (type) {
@@ -193,6 +199,42 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
       mesh = new THREE.Mesh(geometry, material);
       break;
       
+    // Add more cases for other item types  
+    case 'stone':
+    case 'rock':
+      geometry = new THREE.IcosahedronGeometry(0.2, 0);
+      material = new THREE.MeshStandardMaterial({
+        color: 0x808080, // Gray
+        roughness: 0.9,
+        metalness: 0.1
+      });
+      mesh = new THREE.Mesh(geometry, material);
+      break;
+      
+    case 'berries':
+    case 'berry':
+      geometry = new THREE.SphereGeometry(0.1, 8, 8);
+      material = new THREE.MeshStandardMaterial({
+        color: 0xFF0000, // Red
+        roughness: 0.2,
+        metalness: 0.1,
+        emissive: 0x330000,
+        emissiveIntensity: 0.2
+      });
+      mesh = new THREE.Mesh(geometry, material);
+      break;
+      
+    case 'item': // Handle generic "item" type that might come from SocketController
+      // Bright box for generic item
+      geometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+      material = new THREE.MeshStandardMaterial({
+        color: 0xFFD700, // Gold
+        emissive: 0xFFD700,
+        emissiveIntensity: 0.2
+      });
+      mesh = new THREE.Mesh(geometry, material);
+      break;
+      
     default:
       console.warn(`Unknown item type '${itemType}', using default box`);
       // Default fallback - simple box
@@ -218,7 +260,7 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   
-  console.log(`Created mesh for '${itemType}' at initial y: ${mesh.position.y}`);
+  console.log(`%c ✅ Created mesh for '${itemType}' at position y: ${mesh.position.y}`, "color: #4CAF50;");
   return mesh;
 };
 

@@ -138,6 +138,10 @@ export const useInteraction = ({
     const [contextMenuPos, setContextMenuPos] = useState<{ x: number, y: number } | null>(null);
     const [nearbyItems, setNearbyItems] = useState<WorldItem[]>([]);
 
+    // Add state for pickup progress
+    const [pickupInProgress, setPickupInProgress] = useState(false);
+    const [pickupErrorMessage, setPickupErrorMessage] = useState<string | null>(null);
+
     // --- Cleanup Function for Indicator ---
     const removeClickIndicator = useCallback(() => {
         if (clickIndicatorRef.current && sceneRef.current) {
@@ -292,10 +296,42 @@ export const useInteraction = ({
                             if (latestWorldItem && movementCompletedRef.current) {
                                 console.log(`Arrived at item ${worldItem.dropId}. Sending pickup request.`);
                                 
-                                // Send pickup request
+                                // Send pickup request using both formats for maximum compatibility
                                 socketPromise.then(socket => {
                                     if (socket) {
-                                        socket.emit('pickup', worldItem.dropId);
+                                        console.log(`Sending pickupItem event with dropId: ${worldItem.dropId}`);
+                                        
+                                        // Format 1: Object format
+                                        (socket as any).emit('pickupItem', {
+                                            dropId: worldItem.dropId,
+                                            timestamp: Date.now()
+                                        });
+                                        
+                                        // Format 2: String format (legacy)
+                                        console.log("Also sending legacy pickup event for compatibility");
+                                        (socket as any).emit('pickup', worldItem.dropId);
+                                        
+                                        // Set up listeners for confirmation
+                                        const inventoryUpdateHandler = (updatedInventory: any) => {
+                                            console.log("%c ✅ Received inventory update:", "background: #4CAF50; color: white;", updatedInventory);
+                                            // Play successful pickup sound
+                                            soundManager.play('itemPickup' as any);
+                                        };
+                                        
+                                        const errorHandler = (error: string) => {
+                                            console.error(`Server error during pickup: ${error}`);
+                                            if (error.includes('not found')) {
+                                                refreshWorldItems();
+                                            }
+                                        };
+                                        
+                                        // Add handlers with timeouts to remove them
+                                        (socket as any).once('inventoryUpdate', inventoryUpdateHandler);
+                                        (socket as any).once('error', errorHandler);
+                                        setTimeout(() => {
+                                            (socket as any).off('inventoryUpdate', inventoryUpdateHandler);
+                                            (socket as any).off('error', errorHandler);
+                                        }, 3000);
                                     }
                                 });
                             }
@@ -628,9 +664,8 @@ export const useInteraction = ({
     }, [itemManagerRef]);
 
     // Handle item pickup from context menu
-    const handlePickupItemFromMenu = useCallback((itemDropId: string) => {
-        console.log(`%c 🔍 CONTEXT MENU PICKUP: ${itemDropId}`, "background: #4CAF50; color: white; font-size: 14px;");
-        closeContextMenu();
+    const handlePickupItemFromMenu = useCallback(async (itemDropId: string) => {
+        console.log(`%c 🖱️ Handling pickup from context menu for item: ${itemDropId}`, "background: #9C27B0; color: white; font-size: 14px;");
         
         // Find the item in worldItems
         const worldItem = worldItemsRef.current?.find(item => item.dropId === itemDropId);
@@ -675,112 +710,99 @@ export const useInteraction = ({
         // Set the item position to player height for movement
         itemPosition.y = player.position.y;
         
-        // TESTING WORKAROUND: Simulate left-click on item
-        console.log(`%c 🧪 SIMULATING LEFT-CLICK ON ITEM`, "background: red; color: white; font-size: 14px;");
-        
-        if (distance <= 2) {
-            // Within range - pickup immediately
-            console.log("Item within range - attempting immediate pickup via simulated left-click");
-            
-            // Direct socket call
-            getSocket().then(socket => {
-                if (socket) {
-                    console.log(`Emitting 'pickup' event with string dropId: "${itemDropId}"`);
-                    // Try sending as a plain string, not an object
-                    socket.emit('pickup', String(itemDropId));
+        try {
+            if (distance <= 2) {
+                // Within range - pickup immediately
+                console.log("Item within range - attempting immediate pickup");
+                
+                // Use our new ItemManager pickup method
+                if (itemManagerRef?.current) {
+                    console.log(`Using ItemManager.pickupItem method for ${itemDropId}`);
+                    await itemManagerRef.current.pickupItem(itemDropId);
                     
-                    // Set up temporary error listener for this pickup attempt
-                    const errorHandler = (error: string) => {
-                        console.error(`Server error during pickup: ${error}`);
-                        if (error.includes('not found')) {
-                            refreshWorldItems();
-                        }
-                    };
-                    
-                    // Add and then remove error handler after a delay
-                    socket.once('error', errorHandler);
-                    setTimeout(() => {
-                        socket.off('error', errorHandler);
-                    }, 3000);
-                    
-                    // Log what we're sending
-                    console.log("Sent pickup event with payload:", itemDropId, "Type:", typeof itemDropId);
-                    
+                    // Play successful pickup sound
                     soundManager.play('itemPickup' as any);
                 } else {
-                    console.error("Failed to get socket for item pickup");
+                    console.error("ItemManager ref not available for pickup");
+                    
+                    // Fall back to socket method
+                    const socket = await getSocket();
+                    if (!socket) {
+                        console.error("Failed to get socket for item pickup");
+                        return;
+                    }
+                    
+                    console.log(`%c 📡 Falling back to direct socket emission for pickupItem: ${itemDropId}`, "color: #FF9800;");
+                    (socket as any).emit('pickupItem', {
+                        dropId: itemDropId,
+                        timestamp: Date.now()
+                    });
                 }
-            }).catch(err => {
-                console.error("Socket error:", err);
-            });
-        } else {
-            // SAME CODE FOR MOVING TO ITEM
-            // Too far - need to move closer
-            console.log(`Item too far away (${distance.toFixed(2)} units) - need to move closer`);
-            
-            if (!controller) {
-                console.error("PlayerController not available for movement");
-                return;
-            }
-            
-            console.log("Starting movement to item position:", itemPosition);
-            
-            // Remove previous indicator and create a new one
-            removeClickIndicator();
-            clickIndicatorRef.current = createClickIndicator(scene, itemPosition);
-            
-            // Reset movement flag
-            movementCompletedRef.current = false;
-            
-            // Store the itemId for use after movement completes
-            const pickupItemId = itemDropId;
-            
-            // Move to the item using a different movement approach
-            console.log("Using modified movement approach for right-click pickup");
-            controller.moveToPosition(itemPosition)
-                .then(() => {
+                
+                // Close menu
+                closeContextMenu();
+            } else {
+                // Too far - need to move closer
+                console.log(`Item too far away (${distance.toFixed(2)} units) - need to move closer`);
+                
+                if (!controller) {
+                    console.error("PlayerController not available for movement");
+                    return;
+                }
+                
+                console.log("Starting movement to item position:", itemPosition);
+                
+                // Remove previous indicator and create a new one
+                removeClickIndicator();
+                clickIndicatorRef.current = createClickIndicator(scene, itemPosition);
+                
+                // Reset movement flag
+                movementCompletedRef.current = false;
+                
+                // Move to the item and then pick it up
+                try {
+                    await controller.moveToPosition(itemPosition);
                     console.log("Reached item position, attempting pickup");
                     
                     // After reaching the item, try to pick it up
-                    const updatedWorldItem = worldItemsRef.current?.find(item => item.dropId === pickupItemId);
+                    const updatedWorldItem = worldItemsRef.current?.find(item => item.dropId === itemDropId);
                     if (updatedWorldItem) {
-                        getSocket().then(socket => {
+                        // Use our new ItemManager pickup method
+                        if (itemManagerRef?.current) {
+                            console.log(`Using ItemManager.pickupItem method for ${itemDropId} after movement`);
+                            await itemManagerRef.current.pickupItem(itemDropId);
+                            
+                            // Play successful pickup sound
+                            soundManager.play('itemPickup' as any);
+                        } else {
+                            console.error("ItemManager ref not available for pickup after movement");
+                            
+                            // Fall back to socket method
+                            const socket = await getSocket();
                             if (socket) {
-                                console.log(`Emitting 'pickup' event with string dropId: "${pickupItemId}"`);
-                                // Try sending as a plain string, not an object
-                                socket.emit('pickup', String(pickupItemId));
-                                
-                                // Set up temporary error listener for this pickup attempt
-                                const errorHandler = (error: string) => {
-                                    console.error(`Server error during pickup after movement: ${error}`);
-                                    if (error.includes('not found')) {
-                                        refreshWorldItems();
-                                    }
-                                };
-                                
-                                // Add and then remove error handler after a delay
-                                socket.once('error', errorHandler);
-                                setTimeout(() => {
-                                    socket.off('error', errorHandler);
-                                }, 3000);
-                                
-                                console.log("Sent pickup event with payload:", pickupItemId, "Type:", typeof pickupItemId);
-                                soundManager.play('itemPickup' as any);
-                            } else {
-                                console.error("Failed to get socket for item pickup after movement");
+                                console.log(`%c 📡 Falling back to direct socket emission for pickupItem: ${itemDropId}`, "color: #FF9800;");
+                                (socket as any).emit('pickupItem', {
+                                    dropId: itemDropId,
+                                    timestamp: Date.now()
+                                });
                             }
-                        });
+                        }
                     } else {
                         console.log("Item no longer exists after reaching it");
                     }
-                    removeClickIndicator();
-                })
-                .catch(err => {
+                } catch (err) {
                     console.error("Error walking to item:", err);
+                } finally {
                     removeClickIndicator();
-                });
+                    closeContextMenu();
+                }
+            }
+        } catch (error) {
+            console.error("Error in item pickup process:", error);
+            removeClickIndicator();
+            closeContextMenu();
         }
-    }, [playerRef, worldItemsRef, sceneRef, playerControllerRef, removeClickIndicator, closeContextMenu, refreshWorldItems]);
+    }, [playerRef, worldItemsRef, sceneRef, playerControllerRef, removeClickIndicator, closeContextMenu, refreshWorldItems, itemManagerRef]);
     
     // Add cleanup for context menu when component unmounts
     useEffect(() => {
