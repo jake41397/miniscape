@@ -37,6 +37,11 @@ class ItemManager {
     console.log('%c 🎮 SETTING UP ITEM SOCKET LISTENERS', 'background: #4CAF50; color: white; font-size: 14px;');
     console.log('Socket ID:', (socket as any).id);
 
+    // Create a single global tracking object for all drops across events
+    if (!(window as any).processedItemDropIds) {
+      (window as any).processedItemDropIds = {};
+    }
+
     // Listen for new dropped items
     (socket as any).on('itemDropped', (item: any) => {
       try {
@@ -45,35 +50,22 @@ class ItemManager {
           console.error('Invalid item data received in itemDropped event:', item);
           return;
         }
-        
-        // Track this drop ID to prevent duplicates between itemDropped and worldItemAdded events
-        const dropTrackingId = `drop-tracking-${item.dropId}`;
-        if ((window as any)[dropTrackingId]) {
-          console.log(`%c ⚠️ Item ${item.dropId} already processed by another event, skipping duplicate`, "color: #FF9800;");
+
+        // Use a global set to track which drop IDs we've processed
+        if ((window as any).processedItemDropIds[item.dropId]) {
+          console.log(`%c 🚫 Drop ID ${item.dropId} already processed - SKIPPING to prevent duplicate mesh`, "background: #FF9800; color: white;");
           return;
         }
         
-        // Mark this item as being processed to prevent duplicates
-        (window as any)[dropTrackingId] = true;
-        
-        // Set a timeout to clean up the tracking flag after a few seconds
-        setTimeout(() => {
-          delete (window as any)[dropTrackingId];
-        }, 5000);
-        
-        // Check if we already have this item (could be our own drop)
-        const existingItem = this.worldItems.find(i => i.dropId === item.dropId);
-        if (existingItem && existingItem.mesh) {
-          console.log(`Item already exists in world items: ${item.dropId}`);
-          return;
-        }
+        // Mark this item as processed IMMEDIATELY to prevent race conditions
+        (window as any).processedItemDropIds[item.dropId] = true;
         
         console.log(`%c 🌎 Creating world item from itemDropped event: ${item.itemType} at (${item.x}, ${item.y}, ${item.z})`, "background: #4CAF50; color: white;");
         
         // Play a sound for item dropping
         soundManager.play('itemDrop' as any);
         
-        // Add to world items
+        // Add to world items - this creates the animated mesh
         this.addWorldItem({
           dropId: item.dropId,
           itemType: item.type || item.itemType, // Try both formats - important
@@ -86,7 +78,7 @@ class ItemManager {
       }
     });
 
-    // Also listen for the alternative worldItemAdded event
+    // Handle worldItemAdded events - only create mesh if not already processed
     (socket as any).on('worldItemAdded', (item: any) => {
       try {
         console.log(`%c 📦 SOCKET EVENT: Received worldItemAdded event:`, "background: #2196F3; color: white; font-size: 14px;", item);
@@ -95,43 +87,39 @@ class ItemManager {
           return;
         }
         
-        // Check for duplicate processing using the same tracking mechanism
-        const dropTrackingId = `drop-tracking-${item.dropId}`;
-        if ((window as any)[dropTrackingId]) {
-          console.log(`%c ⚠️ Item ${item.dropId} already processed by another event, skipping duplicate`, "color: #FF9800;");
+        // Check if we've already processed this drop ID
+        if ((window as any).processedItemDropIds[item.dropId]) {
+          console.log(`%c 🚫 Drop ID ${item.dropId} already processed - SKIPPING to prevent duplicate mesh`, "background: #2196F3; color: white;");
+          
+          // Even if we skip creating a new mesh, ensure the existing one has animation
+          const existingItem = this.worldItems.find(i => i.dropId === item.dropId);
+          if (existingItem && existingItem.mesh) {
+            existingItem.mesh.userData.animateY = true;
+            existingItem.mesh.userData.baseY = existingItem.mesh.position.y || 0.25;
+            existingItem.mesh.userData.phase = Math.random() * Math.PI * 2;
+            existingItem.mesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
+          }
           return;
         }
         
-        // Mark this item as being processed to prevent duplicates
-        (window as any)[dropTrackingId] = true;
+        // Mark this item as processed IMMEDIATELY
+        (window as any).processedItemDropIds[item.dropId] = true;
         
-        // Set a timeout to clean up the tracking flag after a few seconds
-        setTimeout(() => {
-          delete (window as any)[dropTrackingId];
-        }, 5000);
-        
-        // Check if we already have this item (could be our own drop)
-        const existingItem = this.worldItems.find(i => i.dropId === item.dropId);
-        if (existingItem && existingItem.mesh) {
-          console.log(`Item already exists in world items: ${item.dropId}`);
-          return;
-        }
-        
-        // Check if it's our own drop or another player's
+        // Check if it's our own drop or another player's - just for logging
         const isOurDrop = item.droppedBy === (socket as any).id;
         console.log(`%c Item dropped by ${isOurDrop ? 'us' : 'another player'}: ${item.itemType}`, isOurDrop ? "color: #FF5722;" : "color: #00BCD4;");
         
         console.log(`%c 🌎 Creating world item from worldItemAdded event: ${item.itemType} at (${item.x}, ${item.y}, ${item.z})`, "background: #4CAF50; color: white;");
         
-        // Play sound only if it's not our own drop (since we already played on itemDropped)
+        // Play sound only for other players' drops
         if (!isOurDrop) {
           soundManager.play('itemDrop' as any);
         }
         
-        // Add to world items
+        // Add to world items - this will create the mesh with animation properties
         this.addWorldItem({
           dropId: item.dropId,
-          itemType: item.type || item.itemType, // Try both formats - important
+          itemType: item.type || item.itemType,
           x: item.x,
           y: item.y,
           z: item.z
@@ -141,21 +129,33 @@ class ItemManager {
       }
     });
 
-    // Check for existing world items
-    console.log('Requesting initial world items');
-    this.requestWorldItems();
-
     // Listen for item pickup events
     (socket as any).on('itemPickedUp', (data: any) => {
       console.log(`Received itemPickedUp event:`, data);
+      // When an item is picked up, we need to:
+      // 1. Remove the item from the scene
       this.removeWorldItem(data.dropId);
+      // 2. Remove it from our tracking to allow it to be recreated if dropped again
+      if ((window as any).processedItemDropIds) {
+        delete (window as any).processedItemDropIds[data.dropId];
+      }
     });
 
     // Also listen for the alternative worldItemRemoved event
     (socket as any).on('worldItemRemoved', (dropId: string) => {
       console.log(`Received worldItemRemoved event: ${dropId}`);
+      // When an item is removed, we need to:
+      // 1. Remove the item from the scene
       this.removeWorldItem(dropId);
+      // 2. Remove it from our tracking to allow it to be recreated if dropped again
+      if ((window as any).processedItemDropIds) {
+        delete (window as any).processedItemDropIds[dropId];
+      }
     });
+
+    // Check for existing world items
+    console.log('Requesting initial world items');
+    this.requestWorldItems();
 
     // Listen for all world items (initial sync)
     (socket as any).on('worldItems', (items: any[]) => {
@@ -255,6 +255,15 @@ class ItemManager {
           clearTimeout(dropSuccessTimeout);
           delete (window as any).pendingItemDrops[clientDropId];
           (socket as any).off('worldItemAdded', worldItemHandler);
+          
+          // Important: Force animation to be enabled for this item if we have it in our world items
+          const existingItem = this.worldItems.find(i => i.dropId === worldItem.dropId);
+          if (existingItem && existingItem.mesh) {
+            existingItem.mesh.userData.animateY = true;
+            existingItem.mesh.userData.baseY = existingItem.mesh.position.y || 0.25;
+            existingItem.mesh.userData.phase = Math.random() * Math.PI * 2;
+            existingItem.mesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
+          }
         }
       };
       
@@ -298,26 +307,47 @@ class ItemManager {
       return;
     }
     
-    // Add item ID tracking to window for debugging
-    // This helps us track which items have been processed across page refreshes
-    if (!(window as any).processedWorldItems) {
-      (window as any).processedWorldItems = {};
-    }
-    
-    // Track this item by ID
-    const trackingId = `item-${item.dropId}`;
-    if ((window as any).processedWorldItems[trackingId]) {
-      console.log(`%c ⚠️ Item ${item.dropId} has already been processed, skipping duplicate`, "color: #FF9800;");
+    // First check if we have the item mesh in the scene already
+    const existingItemInScene = Array.from(this.scene.children).find(
+      child => child.userData && child.userData.dropId === item.dropId
+    );
+
+    if (existingItemInScene) {
+      console.log(`%c 🚫 Found existing mesh in scene for drop ID: ${item.dropId} - preventing duplicate`, "background: #FF5722; color: white;");
+      
+      // Make sure this mesh is animated
+      if (!existingItemInScene.userData.animateY) {
+        console.log(`Ensuring mesh is animated`);
+        existingItemInScene.userData.animateY = true;
+        existingItemInScene.userData.baseY = existingItemInScene.position.y || 0.25; 
+        existingItemInScene.userData.phase = Math.random() * Math.PI * 2;
+        existingItemInScene.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
+      }
+      
+      // Still update our tracking array if the item isn't there
+      const existingItemIndex = this.worldItems.findIndex(i => i.dropId === item.dropId);
+      if (existingItemIndex === -1) {
+        // Add to our tracking array with the existing mesh
+        this.worldItems.push({
+          ...item,
+          mesh: existingItemInScene as THREE.Mesh
+        });
+        
+        console.log(`Added item to worldItems array with existing mesh`);
+        
+        // Notify listeners
+        if (this.onWorldItemsUpdated) {
+          this.onWorldItemsUpdated(this.worldItems);
+        }
+      }
+      
       return;
     }
     
-    // Mark this item as being processed
-    (window as any).processedWorldItems[trackingId] = true;
-    
-    // Check if item already exists
+    // Check if item already exists in our tracking array
     const existingItem = this.worldItems.find(i => i.dropId === item.dropId);
     if (existingItem) {
-      console.log(`Item ${item.dropId} already exists, updating position`);
+      console.log(`Item ${item.dropId} already exists in tracking array`);
       
       // Check if the mesh exists and is in the scene
       if (existingItem.mesh && existingItem.mesh.parent) {
@@ -329,19 +359,21 @@ class ItemManager {
         // Update mesh position
         existingItem.mesh.position.set(item.x, item.y, item.z);
         console.log(`Updated mesh position for ${item.itemType}`);
+        
+        // Ensure animation properties are set
+        existingItem.mesh.userData.animateY = true;
+        return;
       } else {
         // Mesh doesn't exist or isn't in scene - remove the item and recreate it
         console.log(`Item ${item.dropId} exists but mesh is missing or not in scene, recreating`);
         this.removeWorldItem(item.dropId);
-        // Continue with creation below (don't return)
+        // Continue with creation below
       }
-      
-      return;
     }
 
     // Create mesh for the item
     try {
-      console.log(`%c 🔨 Creating mesh for ${item.itemType}`, "background: #2196F3; color: white; font-size: 14px;");
+      console.log(`%c 🔨 Creating NEW mesh for ${item.itemType}`, "background: #2196F3; color: white; font-size: 14px;");
       
       // Normalize item type to lowercase and handle possible type variations
       let normalizedType = String(item.itemType || "unknown").toLowerCase();
@@ -406,7 +438,7 @@ class ItemManager {
       // Force a re-render of all items on update to make sure they're visible
       this.updateItems(0.01);
       
-      // Ensure server has this item in its worldItems list - this helps synchronize client and server
+      // Ensure server has this item in its worldItems list 
       this.ensureServerHasItem(item);
     } catch (error) {
       console.error(`%c 💥 FATAL ERROR: Failed to create mesh for ${item.itemType}:`, "background: red; color: white; font-size: 16px;", error);
@@ -463,61 +495,66 @@ class ItemManager {
   public removeWorldItem = (dropId: string) => {
     console.log(`%c 🗑️ Removing world item with dropId: ${dropId}`, "background: #F44336; color: white; font-size: 14px;");
     
-    // Find item by dropId
-    const itemIndex = this.worldItems.findIndex(item => item.dropId === dropId);
+    // First, remove from our global tracking to allow recreation if needed
+    if ((window as any).processedItemDropIds) {
+      delete (window as any).processedItemDropIds[dropId];
+      console.log(`Removed ${dropId} from global tracking`);
+    }
     
-    if (itemIndex >= 0) {
-      const item = this.worldItems[itemIndex];
-      console.log(`%c Found item to remove: ${item.itemType} at index ${itemIndex}`, "color: #F44336;");
+    // Next, search the scene directly for any meshes with this dropId
+    // This is the most reliable way to find and remove any duplicate meshes
+    const itemMeshes = Array.from(this.scene.children).filter(
+      child => child.userData && child.userData.dropId === dropId
+    );
+    
+    if (itemMeshes.length > 0) {
+      console.log(`%c Found ${itemMeshes.length} mesh(es) in scene with dropId: ${dropId}`, "color: #F44336;");
       
-      // Remove mesh from scene
-      if (item.mesh) {
-        // First make it invisible to prevent any flickering during removal
-        item.mesh.visible = false;
+      // Remove all meshes with this dropId from the scene
+      itemMeshes.forEach(mesh => {
+        // Make it invisible first to prevent flickering
+        mesh.visible = false;
         
-        // Then remove from scene
-        this.scene.remove(item.mesh);
+        // Remove from scene
+        this.scene.remove(mesh);
         console.log(`Removed mesh from scene`);
         
-        // Clean up geometry and materials
-        if (item.mesh.geometry) {
-          item.mesh.geometry.dispose();
+        // Clean up resources
+        if ((mesh as THREE.Mesh).geometry) {
+          (mesh as THREE.Mesh).geometry.dispose();
         }
         
-        if (Array.isArray(item.mesh.material)) {
-          item.mesh.material.forEach(material => material.dispose());
-        } else if (item.mesh.material) {
-          item.mesh.material.dispose();
+        const material = (mesh as THREE.Mesh).material;
+        if (Array.isArray(material)) {
+          material.forEach(m => m.dispose());
+        } else if (material) {
+          material.dispose();
         }
         
-        // Clear any UserData references
-        item.mesh.userData = {};
-      }
-      
-      // Remove from list
+        // Clear userData to release references
+        mesh.userData = {};
+      });
+    }
+    
+    // Then, remove from our tracking array
+    const itemIndex = this.worldItems.findIndex(item => item.dropId === dropId);
+    if (itemIndex >= 0) {
+      // Remove from the array
       this.worldItems.splice(itemIndex, 1);
       console.log(`%c Item removed from worldItems array. Remaining: ${this.worldItems.length}`, "color: #F44336;");
-      
-      // Remove from tracking list to allow recreation if needed
-      if ((window as any).processedWorldItems) {
-        const trackingId = `item-${dropId}`;
-        delete (window as any).processedWorldItems[trackingId];
-        console.log(`%c ✅ Removed item from tracking list: ${trackingId}`, "color: #4CAF50;");
-      }
-      
-      // Notify listeners
-      if (this.onWorldItemsUpdated) {
-        this.onWorldItemsUpdated(this.worldItems);
-      }
-      
-      // Force a render update
-      this.updateItems(0.01);
-      
-      return true;
     } else {
-      console.warn(`%c ⚠️ Item with dropId ${dropId} not found in worldItems`, "color: #FF9800;");
-      return false;
+      console.warn(`%c ⚠️ Item with dropId ${dropId} not found in worldItems array`, "color: #FF9800;");
     }
+    
+    // Notify listeners
+    if (this.onWorldItemsUpdated) {
+      this.onWorldItemsUpdated(this.worldItems);
+    }
+    
+    // Force a render update
+    this.updateItems(0.01);
+    
+    return true;
   };
 
   // Clear all items
@@ -572,11 +609,18 @@ class ItemManager {
       // Process a batch of items
       for (let i = startIdx; i < endIdx; i++) {
         const item = this.worldItems[i];
-        if (item.mesh && item.mesh.userData.animateY) {
+        if (item.mesh) {
+          // Always make sure the animateY property is set for all items
+          if (!item.mesh.userData.animateY) {
+            console.log(`%c 🔄 Forcing animation for item mesh: ${item.itemType}`, "color: #FF9800;");
+            item.mesh.userData.animateY = true;
+            item.mesh.userData.baseY = item.mesh.position.y || 0.25;
+            item.mesh.userData.phase = Math.random() * Math.PI * 2; // Random phase for varied motion
+            item.mesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
+          }
+          
+          // Always animate ALL items - we never want static meshes
           // Apply halving/doubling scalar logic to hover animation
-          // Original: sin(time * 2) * 0.1
-          // Optimized: sin(time * 4 * 0.5) * (0.2 * 0.5)
-          // This can improve instruction pipelining
           const phase = item.mesh.userData.phase || 0;
           const baseY = item.mesh.userData.baseY || 0.25;
           
@@ -587,10 +631,8 @@ class ItemManager {
           item.mesh.position.y = baseY + Math.sin(time * timeMultiplier + phase) * amplitudeMultiplier;
           
           // Apply halving/doubling scalar logic to rotation
-          // Original: delta * 0.5
-          // Optimized: (delta * 1.0) * 0.5 
-          // This maintains the same behavior but potentially allows better CPU optimization
-          item.mesh.rotation.y += (delta * 1.0) * 0.5;
+          const rotationSpeed = item.mesh.userData.rotationSpeed || 0.5;
+          item.mesh.rotation.y += (delta * 1.0) * rotationSpeed;
         }
       }
     }

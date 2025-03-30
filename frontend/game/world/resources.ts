@@ -250,8 +250,9 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
   // Position slightly above ground to avoid z-fighting
   mesh.position.y = 0.25; 
   
-  // Add animation properties
-  mesh.userData.animateY = true;
+  // Add animation properties - CRITICAL - This is what makes items animate and hover
+  // Ensure these are always set to prevent static meshes
+  mesh.userData.animateY = true; // MUST be set to enable animation
   mesh.userData.baseY = mesh.position.y;
   mesh.userData.phase = Math.random() * Math.PI * 2; // Random phase for varied motion
   mesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2; // Random rotation speed
@@ -261,6 +262,7 @@ export const createItemMesh = (itemType: string): THREE.Mesh => {
   mesh.receiveShadow = true;
   
   console.log(`%c ✅ Created mesh for '${itemType}' at position y: ${mesh.position.y}`, "color: #4CAF50;");
+  console.log(`%c ✅ Animation properties set: animateY=${mesh.userData.animateY}, baseY=${mesh.userData.baseY}`, "color: #4CAF50;");
   return mesh;
 };
 
