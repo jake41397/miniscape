@@ -293,13 +293,6 @@ export const initializeSocket = async () => {
         return;
       }
       
-      const start = Date.now();
-      socket.emit('ping', () => {
-        lastPong = Date.now();
-        const duration = lastPong - start;
-        console.log(`Pong received! Round trip: ${duration}ms`);
-      });
-      
       // Check if we've missed too many pongs
       if (Date.now() - lastPong > 15000) {
         console.warn('No pong received for 15s, socket may be zombie. Reconnecting...');
@@ -357,6 +350,13 @@ export const initializeSocket = async () => {
 
 // Get the socket instance with additional validation
 export const getSocket = async () => {
+  console.log('getSocket called, current status:', {
+    socketExists: !!socket,
+    connected: socket?.connected,
+    connecting: connectionState.connecting,
+    id: socket?.id
+  });
+  
   // If we have a socket and it's connected, just return it
   if (socket && socket.connected) {
     return socket;
@@ -364,7 +364,6 @@ export const getSocket = async () => {
   
   // If we have a socket but it's not connected, check if it's a zombie
   if (socket && !socket.connected && !connectionState.connecting) {
-    console.log('Socket exists but is disconnected, attempting to reconnect');
     return await initializeSocket();
   }
   
@@ -372,7 +371,6 @@ export const getSocket = async () => {
   if (!socket || connectionState.connecting) {
     // If we're already connecting, just return the current socket (which might be null)
     if (connectionState.connecting) {
-      console.log('Socket connection in progress, waiting...');
       return socket;
     }
     return await initializeSocket();

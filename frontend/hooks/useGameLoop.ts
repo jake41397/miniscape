@@ -59,37 +59,11 @@ export const useGameLoop = ({
         
         // Update delta time for timing
         const delta = clockRef.current.getDelta();
-
-        // Log gameloop activity occasionally to avoid spam
-        const shouldLog = Math.random() < 0.01; // ~1% of frames
-        if (shouldLog) {
-            console.log("%c 🔄 Game loop running", "color: #009688;", {
-                delta: delta.toFixed(4),
-                playerControllerExists: !!playerController?.current,
-                updatePlayerMovementExists: !!updatePlayerMovement,
-                playersCount: playersRef.current?.size || 0,
-                time: new Date().toISOString().split('T')[1]
-            });
-        }
         
         // Simple FPS calculation - done directly without updating refs
         if (onFpsUpdate) {
             const currentFps = Math.round(1 / delta);
             onFpsUpdate(currentFps);
-        }
-        
-        // Log gamestate info every ~10 seconds for diagnostics
-        if (Math.random() < 0.001) { // ~0.1% of frames
-            console.log("%c 📊 GAME STATE", "background: #000000; color: #00ff00; font-size: 14px;", {
-                localPlayerPosition: playerRef.current ? {
-                    x: playerRef.current.position.x.toFixed(2),
-                    y: playerRef.current.position.y.toFixed(2),
-                    z: playerRef.current.position.z.toFixed(2)
-                } : null,
-                remotePlayerCount: playersRef.current?.size || 0,
-                remotePlayerIds: Array.from(playersRef.current?.keys() || []),
-                time: new Date().toISOString()
-            });
         }
         
         // Update player position using the enhanced PlayerController if available
@@ -102,9 +76,6 @@ export const useGameLoop = ({
             if (movementOccurred && sendPositionUpdate) {
                 console.log("%c 📡 Movement occurred - sending position update", "color: #E91E63;");
                 sendPositionUpdate(false);
-            } else if (shouldLog) {
-                // Log occasional status when no movement
-                console.log("%c 🚫 No movement detected from PlayerController", "color: gray;");
             }
         } else {
             // Fallback to old movement logic
@@ -121,9 +92,6 @@ export const useGameLoop = ({
                 }
             } else {
                 // No player movement method available at all!
-                if (shouldLog) {
-                    console.warn("❌ No player movement method available! Neither PlayerController nor updatePlayerMovement exist.");
-                }
             }
         }
         

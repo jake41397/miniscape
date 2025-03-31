@@ -304,10 +304,8 @@ export const useNetworkSync = ({
                     // after the socket connection is confirmed
                     setTimeout(() => {
                         if (socket.connected && socket.id) {
-                            console.log("Requesting player data via getPlayerData");
                             try {
                                 socket.emit('getPlayerData', socket.id, (data: any) => {
-                                    console.log("Received player data:", data);
                                 });
                             } catch (err) {
                                 console.error("Error requesting player data:", err);

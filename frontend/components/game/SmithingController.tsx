@@ -30,7 +30,11 @@ const SmithingController: React.FC<SmithingControllerProps> = ({
 
   // Initialize the smithing system
   useEffect(() => {
-    smithingSystemRef.current = new SmithingSystem(playerRef);
+    console.log(`%c 🔨 Setting up SmithingSystem`, "color: #3f51b5;");
+    if (!smithingSystemRef.current) {
+      smithingSystemRef.current = new SmithingSystem(playerRef);
+      console.log(`%c 🔨 SmithingSystem created`, "color: #3f51b5;");
+    }
     
     // Add the openSmithingPanel function to the window object to allow global access
     window.openSmithingPanel = (mode: string) => {
@@ -56,6 +60,30 @@ const SmithingController: React.FC<SmithingControllerProps> = ({
       
       // Play UI sound
       soundManager.play('ui_click');
+      
+      // Check if there's a selected recipe from the dialog system
+      if ((window as any).selectedSmithingRecipe) {
+        console.log('SmithingController: Found selected recipe from dialog:', (window as any).selectedSmithingRecipe);
+        
+        // Automatically trigger smelting for the selected recipe
+        setTimeout(() => {
+          try {
+            const selectedRecipe = (window as any).selectedSmithingRecipe;
+            console.log('SmithingController: Auto-smelting selected recipe:', selectedRecipe);
+            
+            if (mode === 'smelting') {
+              handleSmelt(selectedRecipe);
+            } else {
+              handleSmith(selectedRecipe);
+            }
+            
+            // Clear the selected recipe
+            delete (window as any).selectedSmithingRecipe;
+          } catch (err) {
+            console.error('SmithingController: Error auto-smelting recipe:', err);
+          }
+        }, 500); // Small delay to ensure panel is fully rendered
+      }
     };
     
     return () => {
@@ -71,38 +99,68 @@ const SmithingController: React.FC<SmithingControllerProps> = ({
 
   // Listen for the open-smithing event
   useEffect(() => {
-    const handleOpenSmithingEvent = (e: CustomEvent) => {
-      console.log('SmithingController: Received open-smithing event:', e.detail);
+    console.log(`%c 🔨 Setting up open-smithing event listener`, "color: #3f51b5;");
+    
+    const handleOpenSmithing = (event: any) => {
+      console.log(`%c 🔨 Received open-smithing event`, "background: #3f51b5; color: white; font-size: 14px;", event.detail);
       
       // If player isn't connected, don't show the panel
       if (!socketConnected) {
-        console.log('SmithingController: Cannot open panel - disconnected from server');
+        console.error('SmithingController: Socket not connected, cannot open smithing panel');
         return;
       }
       
-      // Stop event propagation to prevent other handlers from being triggered
-      if (e.stopPropagation) {
-        e.stopPropagation();
-      }
-      
-      // Reset progress
-      setProgress(0);
-      
-      // Set panel to visible
+      // Set panel visibility first to ensure it's visible
+      console.log(`%c 🔨 Setting panel visible=true`, "background: #3f51b5; color: white; font-size: 14px;");
       setVisible(true);
       
-      // Set mode based on event detail
-      if (e.detail && e.detail.mode) {
-        setMode(e.detail.mode);
+      // Stop event propagation to prevent other handlers from being triggered
+      if (event.stopPropagation) {
+        event.stopPropagation();
       }
+      
+      // Set mode based on event detail
+      if (event.detail && event.detail.mode) {
+        setMode(event.detail.mode);
+      }
+      
+      // Store the selected recipe if it's in the event
+      if (event.detail && event.detail.recipeKey) {
+        console.log(`%c 🔨 Received recipe: ${event.detail.recipeKey}`, "color: #3f51b5;");
+        (window as any).selectedSmithingRecipe = event.detail.recipeKey;
+        
+        // Auto-trigger smelting after a short delay
+        setTimeout(() => {
+          try {
+            if (event.detail.mode === 'smelting' || event.detail.mode === SmithingMode.SMELTING) {
+              console.log(`%c 🔨 Auto-triggering handleSmelt with: ${event.detail.recipeKey}`, "background: #3f51b5; color: white; font-size: 14px;");
+              handleSmelt(event.detail.recipeKey);
+            } else {
+              console.log('SmithingController: Auto-triggering handleSmith with:', event.detail.recipeKey);
+              handleSmith(event.detail.recipeKey);
+            }
+          } catch (err) {
+            console.error('SmithingController: Error auto-triggering smithing function:', err);
+          }
+        }, 500); // Increased delay to ensure panel is fully rendered
+      }
+      
+      // Play UI sound
+      //soundManager.play('ui_click');
     };
     
     // Add event listener
-    document.addEventListener('open-smithing' as any, handleOpenSmithingEvent as any);
+    document.addEventListener('open-smithing', handleOpenSmithing);
     
-    // Clean up
+    // Check if window has the global recipe
+    if ((window as any).selectedSmithingRecipe) {
+      console.log(`%c 🔨 Found window.selectedSmithingRecipe = ${(window as any).selectedSmithingRecipe}`, "background: #3f51b5; color: white; font-size: 14px;");
+    } else {
+      console.log(`%c 🔨 No window.selectedSmithingRecipe found`, "color: #3f51b5;");
+    }
+    
     return () => {
-      document.removeEventListener('open-smithing' as any, handleOpenSmithingEvent as any);
+      document.removeEventListener('open-smithing', handleOpenSmithing);
     };
   }, [socketConnected]);
 
@@ -174,6 +232,12 @@ const SmithingController: React.FC<SmithingControllerProps> = ({
         document.dispatchEvent(notificationEvent);
       };
 
+      // Remove any existing listeners first to prevent duplicates
+      socket.off('smithingProgress' as any, handleProgress);
+      socket.off('smithingComplete' as any, handleSmithingComplete);
+      socket.off('inventoryUpdate' as any, handleInventoryUpdate);
+      socket.off('smithingError' as any, handleSmithingError);
+
       // Register handlers - use only smithingProgress and smithingComplete
       socket.on('smithingProgress' as any, handleProgress);
       socket.on('smithingComplete' as any, handleSmithingComplete);
@@ -219,19 +283,59 @@ const SmithingController: React.FC<SmithingControllerProps> = ({
 
   // Handle smelting
   const handleSmelt = (barType: string) => {
-    if (!smithingSystemRef.current || !socketConnected) return;
+    console.log(`%c 🔨 handleSmelt called with: ${barType}`, "background: #3f51b5; color: white; font-size: 14px;");
     
+    if (!socketConnected) {
+      console.error('SmithingController: Socket not connected, cannot start smelting');
+      
+      // Show error notification
+      const notificationEvent = new CustomEvent('show-notification', {
+        detail: { 
+          message: 'Cannot connect to server. Please try again later.',
+          type: 'error'
+        },
+        bubbles: true
+      });
+      document.dispatchEvent(notificationEvent);
+      return;
+    }
+    
+    console.log(`%c 🔨 Starting to smelt ${barType}, socket connected: ${socketConnected}`, "color: #3f51b5;");
+    console.log(`%c 🔨 Player inventory:`, "color: #3f51b5;", gameState.player?.inventory);
+    console.log(`%c 🔨 Player skills:`, "color: #3f51b5;", gameState.player?.skills);
+    
+    setIsProcessing(true);
+    
+    // Try to use the smithing system
     try {
-      smithingSystemRef.current.startSmelting(
-        barType,
-        gameState.player?.inventory || [],
-        gameState.player?.skills || {}
-      );
-      setIsProcessing(true);
+      // Use the smithing system
+      if (smithingSystemRef.current) {
+        console.log(`%c 🔨 Calling smithingSystemRef.current.startSmelting(${barType})`, "background: #3f51b5; color: white; font-size: 14px;");
+        
+        smithingSystemRef.current.startSmelting(
+          barType,
+          gameState.player?.inventory || [],
+          gameState.player?.skills || {}
+        );
+      } else {
+        console.error('SmithingController: smithingSystemRef.current is null');
+      }
+      
       // Sound effect for smelting
       soundManager.play('mining_hit'); // Reusing mining sound for now
     } catch (error) {
       console.error('SmithingController: Error starting smelting:', error);
+      setIsProcessing(false);
+      
+      // Show error notification
+      const notificationEvent = new CustomEvent('show-notification', {
+        detail: { 
+          message: 'Error starting smelting process. Please try again.',
+          type: 'error'
+        },
+        bubbles: true
+      });
+      document.dispatchEvent(notificationEvent);
     }
   };
   
@@ -252,6 +356,22 @@ const SmithingController: React.FC<SmithingControllerProps> = ({
       console.error('SmithingController: Error starting smithing:', error);
     }
   };
+
+  // Add a notification when the panel is made visible or invisible
+  useEffect(() => {
+    console.log(`%c 🔨 SmithingPanel visibility changed to: ${visible}`, "background: purple; color: white; font-size: 20px;");
+    
+    if (visible) {
+      const notificationEvent = new CustomEvent('show-notification', {
+        detail: { 
+          message: `Smithing panel opened in ${mode} mode`,
+          type: 'info'
+        },
+        bubbles: true
+      });
+      document.dispatchEvent(notificationEvent);
+    }
+  }, [visible, mode]);
 
   // Only render the panel if visible
   if (!visible) return null;

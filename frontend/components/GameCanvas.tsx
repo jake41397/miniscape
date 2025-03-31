@@ -592,18 +592,6 @@ const GameCanvas: React.FC = () => {
   const updateRemotePlayerPositions = useCallback((delta: number) => {
     if (!playersRef.current) return;
 
-    // Debug: Log the number of remote players we're tracking - MAKE VERY VISIBLE
-    if (playersRef.current.size > 0) {
-      // Only log occasionally to avoid spam
-      if (Math.random() < 0.01) { // ~1% of frames
-        console.log("%c 🎮 UPDATING REMOTE PLAYERS: " + playersRef.current.size, 
-          "background: #00bb00; color: white; font-size: 14px; font-weight: bold;");
-        
-        // Log the IDs of all tracked players
-        console.log("Tracked player IDs:", Array.from(playersRef.current.keys()));
-      }
-    }
-
     playersRef.current.forEach((playerMesh, playerId) => {
       // Debug: Validate userData and targetPosition exist
       if (!playerMesh.userData) {

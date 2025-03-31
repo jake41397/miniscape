@@ -787,8 +787,6 @@ export class SocketController {
     const now = Date.now();
     const CLEANUP_THRESHOLD = 30000; // 30 seconds
     
-    console.log(`🧹 Running cleanup check on ${this.playersRef.current.size} tracked players`);
-    
     this.playersRef.current.forEach((mesh, id) => {
       if (mesh.userData && mesh.userData.lastUpdateTime && now - mesh.userData.lastUpdateTime > CLEANUP_THRESHOLD) {
         console.log(`🧹 Cleaning up disconnected player: ${id} (${mesh.userData.playerName || 'Unknown'}), last update: ${new Date(mesh.userData.lastUpdateTime).toLocaleTimeString()}`);
@@ -1033,8 +1031,6 @@ export class SocketController {
     
     // Dispatch the event for the chat panel to receive
     window.dispatchEvent(playerCountEvent);
-    
-    console.log(`Broadcasting player count: ${count}`);
   }
 
   public getSocketId(): string | null {

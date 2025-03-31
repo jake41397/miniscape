@@ -91,7 +91,6 @@ export class PlayerHandler {
   private broadcastPlayerCount(): void {
     const totalPlayers = Object.keys(this.players).length;
     this.io.emit('playerCount', totalPlayers);
-    console.log(`Broadcasting player count to all clients: ${totalPlayers}`);
   }
   
   /**

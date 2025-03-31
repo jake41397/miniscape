@@ -56,16 +56,6 @@ export const setupSocketListeners = async ({
   createNameLabel,
   setPlayerCount
 }: SocketHandlerOptions) => {
-  // 🔴 CRITICAL DEBUG LOGGING 🔴
-  console.log("%c 🔷 SOCKET LISTENERS SETUP STARTED 🔷 ", "background: #00aaff; color: white; font-size: 18px; font-weight: bold;");
-  console.log("Setup context:", {
-    sceneExists: !!scene,
-    playerRefExists: !!playerRef.current,
-    playersMapSize: playersRef.current.size,
-    nameLabelsMapSize: nameLabelsRef.current.size,
-    worldManagerExists: !!worldManagerRef.current,
-    itemManagerExists: !!itemManagerRef?.current
-  });
 
   const socket = await getSocket();
   if (!socket) {
@@ -73,12 +63,6 @@ export const setupSocketListeners = async ({
     return () => {};
   }
 
-  console.log("%c ✅ SOCKET CONNECTION ESTABLISHED! ", "background: green; color: white; font-size: 16px;");
-  console.log("Socket ID:", socket.id);
-  
-  // Add logging when setting up listeners
-  console.log("%c 🔄 REGISTERING playerMoved EVENT HANDLER... ", "background: #794bc4; color: white;");
-  
   // Setup position correction handler
   setupPositionCorrectionHandler(socket, playerRef);
 
@@ -88,11 +72,6 @@ export const setupSocketListeners = async ({
     if (socket.id === player.id) {
       return null;
     }
-    
-    console.log(`Creating mesh for player ${player.id}`, {
-      playerExists: playersRef.current.has(player.id),
-      position: { x: player.x, y: player.y, z: player.z }
-    });
     
     // Find any existing meshes for this player to ensure proper cleanup
     const existingMeshes: THREE.Object3D[] = [];
@@ -195,13 +174,6 @@ export const setupSocketListeners = async ({
     
     // Store in players map
     playersRef.current.set(player.id, otherPlayerMesh);
-    
-    console.log(`Player mesh created and added to tracking for ${player.id}`, {
-      meshCreated: !!otherPlayerMesh,
-      position: otherPlayerMesh.position,
-      inTrackingMap: playersRef.current.has(player.id),
-      trackedMeshId: playersRef.current.get(player.id)?.id
-    });
     
     return otherPlayerMesh;
   };

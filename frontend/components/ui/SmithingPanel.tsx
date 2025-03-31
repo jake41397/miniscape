@@ -18,44 +18,22 @@ interface SmithingPanelProps {
 const SmithingPanel: React.FC<SmithingPanelProps> = ({
   visible,
   onClose,
-  mode,
-  progress,
-  isProcessing,
+  mode = SmithingMode.SMELTING,
+  progress = 0,
+  isProcessing = false,
   onSmelt,
   onSmith
 }) => {
-  const { gameState } = useGame();
+  console.log(`%c 🏺 SmithingPanel rendered: visible=${visible}, mode=${mode}`, "background: #cc7000; color: white; font-size: 14px;");
+  
+  // Get inventory and skills from window
+  const inventory = window.playerInventory || [];
+  const skills = window.playerSkills || {};
+  
+  // Track selected recipe
   const [selectedRecipe, setSelectedRecipe] = useState<string | null>(null);
-  const [socketConnected, setSocketConnected] = useState(true);
   
-  // Reset selected recipe when mode changes
-  useEffect(() => {
-    setSelectedRecipe(null);
-  }, [mode]);
-  
-  // Check if socket is connected
-  useEffect(() => {
-    const checkConnection = async () => {
-      const socket = await getSocket();
-      setSocketConnected(!!socket && socket.connected);
-    };
-    
-    checkConnection();
-    
-    // Set up a connection check interval
-    const interval = setInterval(checkConnection, 5000);
-    
-    return () => clearInterval(interval);
-  }, []);
-
-  // Auto-close panel on disconnect
-  useEffect(() => {
-    if (!socketConnected && visible) {
-      onClose();
-    }
-  }, [socketConnected, visible, onClose]);
-
-  // Close on escape key
+  // Use ESC key to close panel
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && visible) {
@@ -66,14 +44,40 @@ const SmithingPanel: React.FC<SmithingPanelProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [visible, onClose]);
-
+  
+  // When panel opens, check for recipe in window object
+  useEffect(() => {
+    if (visible && (window as any).selectedSmithingRecipe) {
+      const recipeKey = (window as any).selectedSmithingRecipe;
+      console.log(`%c 🏺 Found window.selectedSmithingRecipe = ${recipeKey}`, "background: #cc7000; color: white; font-size: 14px;");
+      
+      // Validate recipe exists in the appropriate collection based on mode
+      const recipeCollection = mode === SmithingMode.SMELTING ? SMELTING_RECIPES : SMITHING_RECIPES;
+      if (recipeCollection[recipeKey]) {
+        console.log(`%c 🏺 Setting selected recipe to ${recipeKey}`, "color: #cc7000;");
+        setSelectedRecipe(recipeKey);
+        
+        // Auto-trigger the action if auto-smelting is enabled
+        if (mode === SmithingMode.SMELTING && !isProcessing) {
+          console.log(`%c 🏺 Auto-triggering onSmelt with ${recipeKey}`, "background: #cc7000; color: white; font-size: 14px;");
+          setTimeout(() => onSmelt(recipeKey), 200);
+        } else if (mode === SmithingMode.SMITHING && !isProcessing) {
+          console.log(`%c 🏺 Auto-triggering onSmith with ${recipeKey}`, "background: #cc7000; color: white; font-size: 14px;");
+          setTimeout(() => onSmith(recipeKey), 200);
+        }
+      } else {
+        console.error(`%c 🏺 Recipe ${recipeKey} not found in ${mode} recipes`, "color: red;");
+      }
+      
+      // Clear the recipe from window to avoid reusing it accidentally
+      delete (window as any).selectedSmithingRecipe;
+    }
+  }, [visible, mode, isProcessing, onSmelt, onSmith]);
+  
   if (!visible) return null;
 
   // Get player's smithing level
-  const smithingLevel = gameState.player?.skills?.smithing?.level || 1;
-  
-  // Get player's inventory
-  const inventory = gameState.player?.inventory || [];
+  const smithingLevel = skills?.smithing?.level || 1;
   
   // Render recipes based on current mode
   const renderRecipes = () => {
@@ -169,9 +173,17 @@ const SmithingPanel: React.FC<SmithingPanelProps> = ({
   const handleButtonClick = () => {
     if (!selectedRecipe || isProcessing) return;
     
+    console.log('SmithingPanel: handleButtonClick called with:', {
+      mode,
+      selectedRecipe,
+      isProcessing
+    });
+    
     if (mode === SmithingMode.SMELTING) {
+      console.log('SmithingPanel: Calling onSmelt with:', selectedRecipe);
       onSmelt(selectedRecipe);
     } else {
+      console.log('SmithingPanel: Calling onSmith with:', selectedRecipe);
       onSmith(selectedRecipe);
     }
   };

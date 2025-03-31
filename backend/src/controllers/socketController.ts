@@ -110,11 +110,49 @@ let smithingHandler: SmithingHandler;
 
 // Initialize handlers with IO instance
 const initializeHandlers = (io: Server) => {
+  console.log('[SOCKET INIT] Initializing handlers');
+  
   inventoryHandler = new InventoryHandler(io, players);
   worldItemHandler = new WorldItemHandler(io, players);
   chatHandler = new ChatHandler(io, players);
   resourceHandler = new ResourceHandler(io, players);
   smithingHandler = new SmithingHandler(io, players);
+  
+  console.log('[SOCKET INIT] Handlers initialized successfully, smithingHandler created');
+};
+
+// Add a global listener for testing
+const setupGlobalDebugListeners = (io: Server) => {
+  console.log('[SOCKET DEBUG] Setting up global debug listeners');
+  
+  io.on('connection', (socket) => {
+    // Clear any existing listeners to prevent memory leaks
+    socket.removeAllListeners('testEvent');
+    socket.removeAllListeners('smithingDebug');
+    socket.removeAllListeners('startSmelting');
+    
+    // Add a test event listener to all sockets to verify event handling
+    socket.on('testEvent', (data) => {
+      console.log(`[SOCKET TEST] Received test event from ${socket.id}:`, data);
+      socket.emit('testResponse', { received: true, message: 'Test event received successfully' });
+    });
+    
+    // Add another smithingDebug handler at the global level
+    socket.on('smithingDebug', (data) => {
+      console.log(`[SOCKET TEST] Global smithingDebug listener received message from ${socket.id}:`, data);
+      // Echo back the message
+      socket.emit('smithingResponse', { 
+        received: true, 
+        message: 'Debug message received at global level',
+        originalData: data
+      });
+    });
+    
+    // Also add a separate startSmelting handler at the global level for debugging
+    socket.on('startSmelting', (data) => {
+      console.log(`[SOCKET TEST] Global startSmelting listener caught event from ${socket.id}:`, data);
+    });
+  });
 };
 
 // Add function to broadcast player count
@@ -138,7 +176,6 @@ const broadcastPlayerCount = (io: Server) => {
   };
 
   const count = getConnectedClientsCount();
-  console.log(`Broadcasting player count: ${count} to all clients`);
   io.emit('playerCount', { count });
 };
 
@@ -171,6 +208,9 @@ const setupSocketHandlers = (io: Server, socket?: ExtendedSocket): void => {
   // Initialize handlers first
   initializeHandlers(io);
   
+  // Set up global debug listeners
+  setupGlobalDebugListeners(io);
+  
   // If socket is provided, we're handling a single connection
   if (socket) {
     console.log(`Setting up handlers for existing socket: ${socket.id}`);
@@ -195,9 +235,72 @@ const setupSocketHandlers = (io: Server, socket?: ExtendedSocket): void => {
 
 // Handle a single socket connection
 const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promise<void> => {
-  console.log(`New connection: ${socket.id}`);
-  
   try {
+    console.log(`[SOCKET CONNECT] Setting up handlers for socket ${socket.id}`);
+    
+    // Set a higher max listeners to properly handle events
+    socket.setMaxListeners(30);
+    
+    // Clean up on disconnect
+    socket.on('disconnect', () => {
+      console.log(`[SOCKET DISCONNECT] Socket ${socket.id} disconnected, cleaning up listeners`);
+      
+      // Clean up all listeners to prevent memory leaks
+      socket.removeAllListeners();
+    });
+    
+    // Ensure smithingHandler exists
+    if (!smithingHandler) {
+      console.error('[SOCKET CONNECT] SmithingHandler not initialized, creating it now');
+      smithingHandler = new SmithingHandler(io, players);
+    }
+    
+    // Setup other handlers with the correct method names
+    if (inventoryHandler) {
+      try {
+        inventoryHandler.setupAllHandlers(socket);
+      } catch (error) {
+        console.error('[SOCKET CONNECT] Error setting up inventory handlers:', error);
+      }
+    }
+    
+    if (worldItemHandler) {
+      try {
+        worldItemHandler.setupItemPickupHandler(socket);
+      } catch (error) {
+        console.error('[SOCKET CONNECT] Error setting up world item handlers:', error);
+      }
+    }
+    
+    if (chatHandler) {
+      try {
+        chatHandler.setupChatHandler(socket);
+      } catch (error) {
+        console.error('[SOCKET CONNECT] Error setting up chat handlers:', error);
+      }
+    }
+    
+    if (resourceHandler) {
+      try {
+        resourceHandler.setupResourceGatheringHandler(socket);
+      } catch (error) {
+        console.error('[SOCKET CONNECT] Error setting up resource handlers:', error);
+      }
+    }
+    
+    // Setup smithing handlers - debug the process
+    if (smithingHandler) {
+      console.log('[SOCKET CONNECT] Setting up smithing handlers for socket', socket.id);
+      try {
+        smithingHandler.setupSmithingHandlers(socket);
+        console.log('[SOCKET CONNECT] Successfully set up smithing handlers');
+      } catch (error) {
+        console.error('[SOCKET CONNECT] Error setting up smithing handlers:', error);
+      }
+    } else {
+      console.error('[SOCKET CONNECT] SmithingHandler still not available');
+    }
+    
     let playerData;
     let profile;
     

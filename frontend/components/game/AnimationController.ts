@@ -126,14 +126,9 @@ export class AnimationController {
     if (this.playersRef.current.size > 0) {
       this.updateOtherPlayers(delta);
     } else {
-      // If there are no other players, just log periodically (every ~5 seconds to avoid spam)
-      if (Math.random() < 0.01) {
-        console.log("No other players to update. This is normal if you're the only player.");
-      }
       
       // Periodically ask the server for players (once every ~15 seconds)
       if (Math.random() < 0.001) {
-        console.log("🔄 Requesting player data from server...");
         this.socketController.requestPlayersData();
       }
     }
@@ -155,14 +150,8 @@ export class AnimationController {
     if (Math.random() < 0.02) { // Roughly once every 50 frames
       const socketController = this.socketController;
       
-      console.log(`Updating ${playerCount} other players`, {
-        playerIds: Array.from(this.playersRef.current.keys()),
-        ownSocketId: socketController.getSocketId ? socketController.getSocketId() : 'unknown'
-      });
-      
       // If no players, log warning about possible issue and run detailed scene inspection
       if (playerCount === 0) {
-        console.warn("No other players found in playersRef map. Inspecting scene for orphaned player meshes...");
         
         // Scan the scene for player meshes that might not be in playersRef
         let orphanedPlayerMeshes = 0;
