@@ -1128,6 +1128,10 @@ class LandmarkManager {
         this.activeNPC.userData.cleanupSocketListeners();
       }
       
+      // Reset dialogue to initial state
+      // Tutorial Guide starts with 'welcome', others start with 'default'
+      this.activeNPC.currentDialogueId = this.activeNPC.id === 'tutorial_guide' ? 'welcome' : 'default';
+      
       // Mark NPC as no longer interacting
       this.activeNPC.isInteracting = false;
       

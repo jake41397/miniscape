@@ -191,156 +191,96 @@ export class SmithingSystem {
   
   // Start smelting a bar
   public startSmelting(barType: string, inventory: { type: ItemType, count: number }[], playerSkills: any): void {
-    console.log(`%c 🔥🔨 SmithingSystem.startSmelting called with barType=${barType}`, "background: #ff9800; color: white; font-size: 16px;");
+    console.log(`[SMELTING] Starting smelting request for ${barType}`);
     
-    if (this.isProcessing) {
-      console.log('SmithingSystem: Already processing a smithing operation');
+    // Only handle bronze bar smelting for now
+    if (barType !== 'BRONZE_BAR') {
+      console.log('[SMELTING] Only bronze bar smelting is supported');
       return;
     }
-    
+
     const recipe = SMELTING_RECIPES[barType];
     if (!recipe) {
-      console.log('SmithingSystem: Invalid recipe:', barType);
+      console.log('[SMELTING] Invalid recipe');
       return;
     }
-    
-    // Check if player has the required level
+
+    // Check level requirement
     const smithingLevel = playerSkills[SkillType.SMITHING]?.level || 1;
-    console.log(`%c 🔥🔨 Player smithing level=${smithingLevel}, required=${recipe.requiredLevel}`, "color: #ff9800;");
-    
     if (smithingLevel < recipe.requiredLevel) {
-      console.log(`SmithingSystem: Smithing level ${recipe.requiredLevel} required to smelt ${barType}, player has ${smithingLevel}`);
+      console.log(`[SMELTING] Requires smithing level ${recipe.requiredLevel}`);
       return;
     }
-    
-    // Check if player has the required items
-    const canSmelt = this.canSmeltBar(barType, inventory);
-    console.log(`%c 🔥🔨 Can smelt bar: ${canSmelt}`, "color: #ff9800;");
-    
-    if (!canSmelt) {
-      console.log(`SmithingSystem: Missing required items to smelt ${barType}`);
-      console.log('SmithingSystem: Player inventory:', inventory);
-      console.log('SmithingSystem: Required ingredients:', recipe.ingredients);
+
+    // Check ingredients
+    const hasIngredients = this.canSmeltBar(barType, inventory);
+    if (!hasIngredients) {
+      console.log('[SMELTING] Missing required ingredients');
       return;
     }
-    
-    // Start smelting process
-    console.log(`%c 🔥🔨 All checks passed, proceeding with smelting ${barType}`, "background: #ff9800; color: white; font-size: 16px;");
-    
-    this.isProcessing = true;
-    
-    // Play smelting sound
-    soundManager.play('mining_hit'); // Reusing mining sound for now
-    
-    // Emit smelting start event with retry mechanism
-    this.emitSmeltingEvent(barType, inventory, playerSkills, 3);
-  }
-  
-  // New helper method to handle socket emission with retries
-  private emitSmeltingEvent(barType: string, inventory: any[], playerSkills: any, retries: number): void {
-    if (retries <= 0) {
-      console.error(`%c 🔥🔨 Failed to emit smelting event after all retry attempts`, "background: red; color: white; font-size: 16px;");
-      this.isProcessing = false;
-      return;
-    }
-    
-    console.log(`%c 🔥🔨 Getting socket connection (attempts left: ${retries})...`, "color: #ff9800;");
-    
-    getSocket()
-      .then(socket => {
-        console.log(`%c 🔥🔨 Socket promise resolved, socket exists: ${!!socket}`, "color: #ff9800;");
-        
-        if (!socket) {
-          console.error('SmithingSystem: Socket is null');
-          // Retry with backoff
-          setTimeout(() => this.emitSmeltingEvent(barType, inventory, playerSkills, retries - 1), 500);
-          return;
-        }
-        
-        console.log(`%c 🔥🔨 Socket connected: ${socket.connected}, ID: ${socket.id}`, "color: #ff9800;");
-        
-        if (!socket.connected) {
-          console.error('SmithingSystem: Socket exists but is not connected');
-          // Retry with backoff
-          setTimeout(() => this.emitSmeltingEvent(barType, inventory, playerSkills, retries - 1), 500);
-          return;
-        }
-        
-        // Check if socket.emit is a function
-        if (typeof socket.emit !== 'function') {
-          console.error(`%c 🔥🔨 CRITICAL ERROR: socket.emit is not a function!`, "background: red; color: white; font-size: 16px;");
-          console.log(`%c 🔥🔨 Socket object:`, "color: #ff9800;", socket);
-          this.isProcessing = false;
-          return;
-        }
-        
-        console.log('SmithingSystem: Socket connected, socket ID:', socket.id);
-        console.log('SmithingSystem: Emitting startSmelting event with data:', {
-          barType,
-          mode: SmithingMode.SMELTING,
-          inventorySize: inventory.length,
-          skillsAvailable: !!playerSkills
-        });
-        
-        // Log all event listeners on socket to see if handlers are registered
-        console.log(`%c 🔥🔨 Socket object type:`, "color: #ff9800;", typeof socket, Object.prototype.toString.call(socket));
-        console.log(`%c 🔥🔨 Socket methods:`, "color: #ff9800;", Object.keys(socket).filter(key => typeof (socket as any)[key] === 'function'));
-        
-        // Add an immediate callback to verify if the event was sent
-        console.log(`%c 🔥🔨 About to emit 'startSmelting' event to server`, "background: #ff9800; color: white; font-size: 16px;");
-        
-        // First remove any existing listeners to prevent duplicates
-        socket.off('smithingProgress' as any);
-        socket.off('smithingComplete' as any);
-        socket.off('smithingError' as any);
-        
-        // Add listeners for progress, completion and error
-        const onProgress = (data: { progress: number }) => {
-          console.log(`%c 🔥🔨 Received progress update:`, "color: #ff9800;", data);
-        };
-        
-        const onComplete = (data: any) => {
-          console.log(`%c 🔥🔨 Smelting completed:`, "background: green; color: white; font-size: 16px;", data);
-          this.isProcessing = false;
-          // Remove the listeners to avoid duplicates
-          socket.off('smithingProgress' as any, onProgress);
-          socket.off('smithingComplete' as any, onComplete);
-          socket.off('smithingError' as any, onError);
-        };
-        
-        const onError = (data: any) => {
-          console.error(`%c 🔥🔨 Received error from server:`, "background: red; color: white; font-size: 16px;", data);
-          this.isProcessing = false;
-          // Remove the listeners to avoid duplicates
-          socket.off('smithingProgress' as any, onProgress);
-          socket.off('smithingComplete' as any, onComplete);
-          socket.off('smithingError' as any, onError);
-        };
-        
-        // Register the listeners
-        socket.on('smithingProgress' as any, onProgress);
-        socket.on('smithingComplete' as any, onComplete);
-        socket.on('smithingError' as any, onError);
-        
-        // Emit the event with acknowledgment callback
-        socket.emit('startSmelting' as any, {
-          barType,
-          mode: SmithingMode.SMELTING,
-          inventory,
-          skills: playerSkills
-        }, (response: any) => {
-          console.log(`%c 🔥🔨 Server acknowledgement received:`, "background: green; color: white; font-size: 16px;", response);
-        });
-        
-        console.log(`%c 🔥🔨 'startSmelting' event emitted, listeners set up`, "color: #ff9800;");
-      })
-      .catch(error => {
-        console.error(`%c 🔥🔨 Error getting socket:`, "background: red; color: white; font-size: 16px;", error);
-        this.isProcessing = false;
-        
-        // Retry with backoff
-        setTimeout(() => this.emitSmeltingEvent(barType, inventory, playerSkills, retries - 1), 500);
+
+    // Get socket and emit simple smelting request
+    console.log('[SMELTING] Getting socket to emit smeltBronzeBar event...');
+    getSocket().then(socket => {
+      if (!socket) {
+        console.error('[SMELTING] Socket not available');
+        return;
+      }
+
+      console.log('[SMELTING] Socket available, emitting smeltBronzeBar event with data:', {
+        inventory: inventory.length + ' items',
+        hasSkills: !!playerSkills
       });
+
+      socket.emit('smeltBronzeBar', {
+        inventory,
+        skills: playerSkills
+      }, (response: { success: boolean, error?: string, updatedInventory?: any[] }) => {
+        console.log('[SMELTING] Received response from server:', response);
+        
+        if (response.success) {
+          // Play success sound
+          soundManager.play('mining_hit');
+          
+          // Update inventory in window global
+          if (window.playerInventory && response.updatedInventory) {
+            window.playerInventory = response.updatedInventory;
+          }
+          
+          // Dispatch inventory update event
+          const inventoryUpdateEvent = new CustomEvent('inventory-updated', {
+            detail: { inventory: response.updatedInventory },
+            bubbles: true
+          });
+          document.dispatchEvent(inventoryUpdateEvent);
+          
+          // Show success notification
+          const notificationEvent = new CustomEvent('show-notification', {
+            detail: { 
+              message: 'Successfully smelted a bronze bar!',
+              type: 'success'
+            },
+            bubbles: true
+          });
+          document.dispatchEvent(notificationEvent);
+        } else {
+          console.error('[SMELTING] Server returned error:', response.error);
+          // Show error notification
+          const notificationEvent = new CustomEvent('show-notification', {
+            detail: { 
+              message: response.error || 'Failed to smelt bronze bar',
+              type: 'error'
+            },
+            bubbles: true
+          });
+          document.dispatchEvent(notificationEvent);
+        }
+      });
+
+      console.log('[SMELTING] Event emitted, waiting for response...');
+    }).catch(error => {
+      console.error('[SMELTING] Error getting socket:', error);
+    });
   }
   
   // Cancel any active smithing operation

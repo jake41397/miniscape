@@ -35,6 +35,7 @@ export interface ClientToServerEvents {
   getPlayerData: (playerId: string, callback: (player: Player | null) => void) => void;
   ping: (callback: () => void) => void;
   updateDisplayName: (data: { name: string }) => void;
+  smeltBronzeBar: (data: { inventory: any[], skills: any }, callback: (response: { success: boolean, error?: string, updatedInventory?: any[] }) => void) => void;
 }
 
 // Create socket instance with better lifecycle management

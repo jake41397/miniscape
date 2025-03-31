@@ -199,370 +199,71 @@ export class SmithingHandler {
    * Setup all smithing-related socket handlers
    */
   public setupSmithingHandlers(socket: any): void {
-    console.log(`[SMITHING] Setting up handlers for socket ${socket.id}`);
+    console.log(`[SMITHING] Setting up smithing handlers for socket ${socket.id}`);
     
-    // Set a higher value for max listeners to avoid memory leak warnings
-    socket.setMaxListeners(20);
+    // Remove any existing listeners
+    socket.removeAllListeners('smeltBronzeBar');
     
-    // IMPORTANT: Remove any existing listeners first to prevent duplicates
-    socket.removeAllListeners('startSmelting');
-    socket.removeAllListeners('startSmithing');
-    socket.removeAllListeners('cancelSmelting');
-    
-    // Track socket connections/disconnections
-    socket.on('disconnect', () => {
-      console.log(`[SMITHING] Socket ${socket.id} disconnected`);
-      // Clean up any ongoing smithing operations
-      if (this.playerSmithing[socket.id]) {
-        clearInterval(this.playerSmithing[socket.id]);
-        delete this.playerSmithing[socket.id];
-        console.log(`[SMITHING] Cleaned up smithing operation for disconnected player ${socket.id}`);
-      }
-    });
-    
-    // Setup handlers with explicit binding to ensure 'this' context is maintained
-    this.setupStartSmeltingHandler(socket);
-    this.setupStartSmithingHandler(socket);
-    this.setupCancelSmithingHandler(socket);
-    
-    // Verify handlers are registered
-    console.log(`[SMITHING] Successfully set up smithing handlers for socket ${socket.id}`);
-  }
+    // Add handler for bronze bar smelting
+    socket.on('smeltBronzeBar', (data: { inventory: any[], skills: any }, callback: Function) => {
+      console.log(`[SMITHING] Received smeltBronzeBar request from ${socket.id}`, {
+        inventorySize: data.inventory.length,
+        hasSkills: !!data.skills,
+        skillsData: JSON.stringify(data.skills)
+      });
 
-  /**
-   * Setup the handler for starting smelting
-   */
-  private setupStartSmeltingHandler(socket: any): void {
-    console.log(`[SMITHING] Setting up startSmelting handler for socket ${socket.id}`);
-    
-    // Make sure to remove any existing listeners first
-    socket.removeAllListeners('startSmelting');
-    
-    // Add a diagnostic test endpoint first
-    socket.on('testSmelting', (data: any) => {
-      console.log(`[SMITHING] 🧪 TEST EVENT RECEIVED from ${socket.id}:`, data);
-      socket.emit('testSmeltingResponse', { received: true, socketId: socket.id });
-    });
-    
-    const boundHandler = (data: { barType: string, mode: SmithingMode, inventory?: any[], skills?: any }) => {
-      console.log(`[SMITHING] 🔶🔶🔶 RECEIVED startSmelting EVENT from ${socket.id} 🔶🔶🔶`);
-      console.log(`[SMITHING] FULL DATA:`, JSON.stringify(data, null, 2).substring(0, 500));
-      
       try {
-        console.log(`[SMITHING] Player ${socket.id} started smelting request for ${data.barType}`, { 
-          inventorySent: !!data.inventory, 
-          skillsSent: !!data.skills,
-          mode: data.mode
-        });
-        
         const player = this.players[socket.id];
         if (!player) {
-          console.error(`[SMITHING] Player ${socket.id} not found`);
-          socket.emit('smithingError', { message: 'Player not found' });
+          console.log(`[SMITHING] Player ${socket.id} not found`);
+          callback({ success: false, error: 'Player not found' });
           return;
         }
+
+        console.log(`[SMITHING] Found player ${socket.id}, checking requirements...`);
+
+        // Get bronze bar recipe
+        const recipe = SMELTING_RECIPES.BRONZE_BAR;
         
-        // Log player inventory and skills for debugging
-        console.log(`[SMITHING] Player ${socket.id} inventory items: ${player.inventory.length}`, 
-          player.inventory.map((item: any) => `${item.type}:${item.count || item.quantity || 0}`));
-        console.log(`[SMITHING] Player ${socket.id} smithing level: ${player.skills?.smithing?.level || 1}`);
-        
-        // Get the recipe for this bar
-        const recipe = SMELTING_RECIPES[data.barType];
-        if (!recipe) {
-          console.error(`[SMITHING] Invalid bar type: ${data.barType}`);
-          socket.emit('smithingError', { message: 'Invalid recipe' });
-          return;
-        }
-        
-        console.log(`[SMITHING] Recipe for ${data.barType}:`, recipe);
-        
-        // Check if player has required level
+        // Check smithing level
         const smithingLevel = player.skills?.smithing?.level || 1;
+        console.log(`[SMITHING] Player smithing level: ${smithingLevel}, required: ${recipe.requiredLevel}`);
+
         if (smithingLevel < recipe.requiredLevel) {
-          console.log(`[SMITHING] Player ${socket.id} does not have required smithing level ${recipe.requiredLevel}, has ${smithingLevel}`);
-          socket.emit('smithingError', { message: `Requires smithing level ${recipe.requiredLevel}` });
+          console.log(`[SMITHING] Player ${socket.id} lacks required level ${recipe.requiredLevel}, has ${smithingLevel}`);
+          callback({ success: false, error: `Requires smithing level ${recipe.requiredLevel}` });
           return;
         }
+
+        // Check ingredients with detailed logging
+        console.log(`[SMITHING] Checking ingredients in inventory:`, JSON.stringify(player.inventory));
+        let missingIngredients: string[] = [];
         
-        // Calculate maximum number of bars that can be created based on available ingredients
-        let maxBars = Infinity;
-        recipe.ingredients.forEach(ingredient => {
+        const hasIngredients = recipe.ingredients.every(ingredient => {
           const playerItem = player.inventory.find((item: any) => item.type === ingredient.type);
-          const availableCount = playerItem ? (playerItem.count || playerItem.quantity || 0) : 0;
-          const possibleBars = Math.floor(availableCount / ingredient.count);
-          console.log(`[SMITHING] For ingredient ${ingredient.type}, player has ${availableCount}, needs ${ingredient.count} per bar, can make ${possibleBars} bars`);
-          maxBars = Math.min(maxBars, possibleBars);
-        });
-        
-        if (maxBars <= 0) {
-          console.log(`[SMITHING] Player ${socket.id} does not have required items for ${data.barType}`);
-          socket.emit('smithingError', { message: 'You don\'t have the required materials' });
-          return;
-        }
-        
-        console.log(`[SMITHING] Player ${socket.id} can smelt up to ${maxBars} ${data.barType}`);
-        
-        // Maximum of 28 items to simulate inventory space limitations (typical MMO inventory size)
-        const MAX_INVENTORY_SIZE = 28;
-        const currentInventorySize = player.inventory.length;
-        
-        // Check if player has an existing stack of the result item
-        const existingItemIndex = player.inventory.findIndex((item: any) => item.type === recipe.resultItem);
-        
-        // If there's no existing stack and inventory is full, limit bars
-        if (existingItemIndex === -1 && currentInventorySize >= MAX_INVENTORY_SIZE) {
-          console.log(`[SMITHING] Player ${socket.id} inventory is full`);
-          socket.emit('smithingError', { message: 'Your inventory is full' });
-          return;
-        }
-        
-        // Track bars to be created
-        let barsToCreate = maxBars;
-        
-        // Start smelting process for multiple bars
-        let barsCompleted = 0;
-        let currentBarProgress = 0;
-        
-        // Clear any existing interval
-        if (this.playerSmithing[socket.id]) {
-          clearInterval(this.playerSmithing[socket.id]);
-          console.log(`[SMITHING] Cleared existing smelting interval for player ${socket.id}`);
-        }
-        
-        // Function to update total progress
-        const getOverallProgress = () => {
-          if (barsToCreate === 0) return 1;
-          return (barsCompleted + currentBarProgress / 100) / barsToCreate;
-        };
-        
-        console.log(`[SMITHING] Starting smelting process for player ${socket.id}, creating up to ${barsToCreate} bars of ${data.barType}`);
-        
-        // Create the interval for smelting progress
-        const progressInterval = setInterval(() => {
-          // Update progress for current bar
-          currentBarProgress += 10;
+          const itemCount = playerItem ? (playerItem.count || playerItem.quantity || 0) : 0;
+          console.log(`[SMITHING] Checking ${ingredient.type}: need ${ingredient.count}, has ${itemCount}`);
           
-          // Send progress update to client
-          const overallProgress = getOverallProgress();
-          socket.emit('smithingProgress', { progress: overallProgress });
-          
-          // Check if current bar is complete
-          if (currentBarProgress >= 100) {
-            console.log(`[SMITHING] Player ${socket.id} completed bar ${barsCompleted + 1} of ${barsToCreate}`);
-            
-            // Process one completed bar
-            
-            // Remove ingredients from inventory for this bar
-            recipe.ingredients.forEach(ingredient => {
-              const playerItemIndex = player.inventory.findIndex((item: any) => item.type === ingredient.type);
-              if (playerItemIndex !== -1) {
-                const playerItem = player.inventory[playerItemIndex];
-                // Handle count or quantity property
-                if (playerItem.count !== undefined) {
-                  playerItem.count -= ingredient.count;
-                  console.log(`[SMITHING] Removed ${ingredient.count} of ${ingredient.type}, ${playerItem.count} remaining`);
-                  if (playerItem.count <= 0) {
-                    player.inventory.splice(playerItemIndex, 1);
-                    console.log(`[SMITHING] Item ${ingredient.type} depleted and removed from inventory`);
-                  }
-                } else if (playerItem.quantity !== undefined) {
-                  playerItem.quantity -= ingredient.count;
-                  console.log(`[SMITHING] Removed ${ingredient.count} of ${ingredient.type}, ${playerItem.quantity} remaining`);
-                  if (playerItem.quantity <= 0) {
-                    player.inventory.splice(playerItemIndex, 1);
-                    console.log(`[SMITHING] Item ${ingredient.type} depleted and removed from inventory`);
-                  }
-                }
-              }
-            });
-            
-            // Add the bar to player's inventory
-            const existingItemIndex = player.inventory.findIndex((item: any) => item.type === recipe.resultItem);
-            
-            if (existingItemIndex !== -1) {
-              // Player already has this item, just increment count/quantity
-              const existingItem = player.inventory[existingItemIndex];
-              if (existingItem.count !== undefined) {
-                existingItem.count += 1;
-                console.log(`[SMITHING] Added 1 ${recipe.resultItem} to existing stack, now ${existingItem.count}`);
-              } else if (existingItem.quantity !== undefined) {
-                existingItem.quantity += 1;
-                console.log(`[SMITHING] Added 1 ${recipe.resultItem} to existing stack, now ${existingItem.quantity}`);
-              }
-            } else {
-              // Add new item to inventory
-              player.inventory.push({
-                type: recipe.resultItem,
-                count: 1
-              });
-              console.log(`[SMITHING] Added new item to inventory: ${recipe.resultItem}`);
-            }
-            
-            // Send updated inventory to client after each bar is processed
-            socket.emit('inventoryUpdate', { 
-              inventory: player.inventory 
-            });
-            console.log(`[SMITHING] Sent inventory update to client with ${player.inventory.length} items`);
-            
-            // Add experience for smithing
-            if (!player.skills) {
-              player.skills = {};
-            }
-            
-            if (!player.skills.smithing) {
-              player.skills.smithing = { level: 1, xp: 0 };
-            }
-            
-            // Handle different property names (xp vs experience)
-            if (player.skills.smithing.xp !== undefined) {
-              player.skills.smithing.xp += recipe.experienceReward;
-              console.log(`[SMITHING] Added ${recipe.experienceReward} experience, now ${player.skills.smithing.xp}`);
-              
-              // Check for level up
-              const oldLevel = player.skills.smithing.level;
-              const newLevel = Math.floor(1 + Math.sqrt(player.skills.smithing.xp / 100));
-              
-              if (newLevel > oldLevel) {
-                player.skills.smithing.level = newLevel;
-                console.log(`[SMITHING] Player leveled up smithing from ${oldLevel} to ${newLevel}`);
-                socket.emit('levelUp', {
-                  skill: 'smithing',
-                  level: newLevel
-                });
-              }
-            } else if (player.skills.smithing.experience !== undefined) {
-              player.skills.smithing.experience += recipe.experienceReward;
-              console.log(`[SMITHING] Added ${recipe.experienceReward} experience, now ${player.skills.smithing.experience}`);
-              
-              // Check for level up
-              const oldLevel = player.skills.smithing.level;
-              const newLevel = Math.floor(1 + Math.sqrt(player.skills.smithing.experience / 100));
-              
-              if (newLevel > oldLevel) {
-                player.skills.smithing.level = newLevel;
-                console.log(`[SMITHING] Player leveled up smithing from ${oldLevel} to ${newLevel}`);
-                socket.emit('levelUp', {
-                  skill: 'smithing',
-                  level: newLevel
-                });
-              }
-            }
-            
-            // Increment completed bars counter
-            barsCompleted++;
-            
-            // Reset progress for next bar
-            currentBarProgress = 0;
-            
-            // Check if we've created all planned bars or should continue
-            // Recalculate max possible bars for the next iteration
-            let canContinue = false;
-            
-            if (barsCompleted < barsToCreate) {
-              // Check if we still have materials for the next bar
-              let hasMaterials = true;
-              recipe.ingredients.forEach(ingredient => {
-                const playerItem = player.inventory.find((item: any) => item.type === ingredient.type);
-                const availableCount = playerItem ? (playerItem.count || playerItem.quantity || 0) : 0;
-                if (availableCount < ingredient.count) {
-                  hasMaterials = false;
-                  console.log(`[SMITHING] Not enough ${ingredient.type} for next bar, have ${availableCount}, need ${ingredient.count}`);
-                }
-              });
-              
-              // Check if we have inventory space
-              const existingItemIndex = player.inventory.findIndex((item: any) => item.type === recipe.resultItem);
-              const inventoryFull = existingItemIndex === -1 && player.inventory.length >= MAX_INVENTORY_SIZE;
-              
-              // Continue only if we have materials and inventory space
-              canContinue = hasMaterials && !inventoryFull;
-              console.log(`[SMITHING] Can continue smelting: ${canContinue} (hasMaterials: ${hasMaterials}, inventoryFull: ${inventoryFull})`);
-            }
-            
-            // If we can't continue or have finished all bars, complete the process
-            if (!canContinue || barsCompleted >= barsToCreate) {
-              clearInterval(progressInterval);
-              console.log(`[SMITHING] Smelting complete for player ${socket.id}, created ${barsCompleted} bars`);
-              socket.emit('smithingComplete', { barsCreated: barsCompleted });
-              
-              // Save player data
-              if (player.userId) {
-                console.log(`[SMITHING] Saving player data for user ID ${player.userId}`);
-                savePlayerInventory(player.userId, player.inventory)
-                  .catch((error: Error) => console.error('Error saving player inventory:', error));
-                  
-                savePlayerSkills(player.userId, player.skills)
-                  .catch((error: Error) => console.error('Error saving player skills:', error));
-              }
-              
-              // Clean up interval reference
-              delete this.playerSmithing[socket.id];
-            }
+          if (!playerItem || itemCount < ingredient.count) {
+            missingIngredients.push(ingredient.type);
+            return false;
           }
-        }, 500);
-        
-        // Store the interval ID to cancel if needed
-        this.playerSmithing[socket.id] = progressInterval;
-      } catch (error) {
-        console.error('[SMITHING] Error in startSmelting handler:', error);
-        socket.emit('smithingError', { message: 'Internal server error' });
-      }
-    };
-    
-    // Register the handler with proper binding
-    socket.on('startSmelting', boundHandler);
-    
-    // Store a reference to the bound handler in socket data for cleanup
-    socket.smithingHandlers = socket.smithingHandlers || {};
-    socket.smithingHandlers.startSmelting = boundHandler;
-  }
-  
-  /**
-   * Setup the handler for starting smithing
-   */
-  private setupStartSmithingHandler(socket: any): void {
-    socket.on('startSmithing', (data: { itemType: string, mode: SmithingMode }) => {
-      try {
-        console.log(`Player ${socket.id} started smithing a ${data.itemType}`);
-        
-        const player = this.players[socket.id];
-        if (!player) {
-          console.error(`Player ${socket.id} not found`);
-          return;
-        }
-        
-        // Get the recipe for this item
-        const recipe = SMITHING_RECIPES[data.itemType];
-        if (!recipe) {
-          console.error(`Invalid item type: ${data.itemType}`);
-          return;
-        }
-        
-        // Check if player has required level
-        const smithingLevel = player.skills?.smithing?.level || 1;
-        if (smithingLevel < recipe.requiredLevel) {
-          console.log(`Player ${socket.id} does not have required smithing level ${recipe.requiredLevel}`);
-          return;
-        }
-        
-        // Check if player has required items
-        const hasItems = recipe.ingredients.every(ingredient => {
-          const playerItem = player.inventory.find((item: any) => item.type === ingredient.type);
-          return playerItem && (playerItem.count || playerItem.quantity) >= ingredient.count;
+          return true;
         });
-        
-        if (!hasItems) {
-          console.log(`Player ${socket.id} does not have required items for ${data.itemType}`);
+
+        if (!hasIngredients) {
+          console.log(`[SMITHING] Player ${socket.id} missing ingredients: ${missingIngredients.join(', ')}`);
+          callback({ success: false, error: `Missing required ingredients: ${missingIngredients.join(', ')}` });
           return;
         }
-        
+
+        console.log(`[SMITHING] All requirements met, processing smelting...`);
+
         // Remove ingredients from inventory
         recipe.ingredients.forEach(ingredient => {
           const playerItemIndex = player.inventory.findIndex((item: any) => item.type === ingredient.type);
           if (playerItemIndex !== -1) {
             const playerItem = player.inventory[playerItemIndex];
-            // Handle count or quantity property
             if (playerItem.count !== undefined) {
               playerItem.count -= ingredient.count;
               if (playerItem.count <= 0) {
@@ -576,131 +277,64 @@ export class SmithingHandler {
             }
           }
         });
-        
-        // Start smithing progress simulation
-        let progress = 0;
-        const progressInterval = setInterval(() => {
-          progress += 10;
-          socket.emit('smithingProgress', { progress });
-          
-          if (progress >= 100) {
-            clearInterval(progressInterval);
-            
-            // Add the crafted item to player's inventory
-            const existingItemIndex = player.inventory.findIndex((item: any) => item.type === recipe.resultItem);
-            
-            if (existingItemIndex !== -1) {
-              // Player already has this item, just increment count/quantity
-              const existingItem = player.inventory[existingItemIndex];
-              if (existingItem.count !== undefined) {
-                existingItem.count += 1;
-              } else if (existingItem.quantity !== undefined) {
-                existingItem.quantity += 1;
-              }
-            } else {
-              // Add new item to inventory
-              player.inventory.push({
-                type: recipe.resultItem,
-                count: 1
-              });
-            }
-            
-            // Send updated inventory to client after each bar is processed
-            socket.emit('inventoryUpdate', { 
-              inventory: player.inventory 
-            });
-            
-            // Add experience for smithing
-            if (!player.skills) {
-              player.skills = {};
-            }
-            
-            if (!player.skills.smithing) {
-              player.skills.smithing = { level: 1, xp: 0 };
-            }
-            
-            // Handle different property names (xp vs experience)
-            if (player.skills.smithing.xp !== undefined) {
-              player.skills.smithing.xp += recipe.experienceReward;
-              
-              // Check for level up
-              const oldLevel = player.skills.smithing.level;
-              const newLevel = Math.floor(1 + Math.sqrt(player.skills.smithing.xp / 100));
-              
-              if (newLevel > oldLevel) {
-                player.skills.smithing.level = newLevel;
-                socket.emit('levelUp', {
-                  skill: 'smithing',
-                  level: newLevel
-                });
-              }
-            } else if (player.skills.smithing.experience !== undefined) {
-              player.skills.smithing.experience += recipe.experienceReward;
-              
-              // Check for level up
-              const oldLevel = player.skills.smithing.level;
-              const newLevel = Math.floor(1 + Math.sqrt(player.skills.smithing.experience / 100));
-              
-              if (newLevel > oldLevel) {
-                player.skills.smithing.level = newLevel;
-                socket.emit('levelUp', {
-                  skill: 'smithing',
-                  level: newLevel
-                });
-              }
-            }
-            
-            // Send completion event
-            socket.emit('smithingComplete');
-            
-            // Clean up interval reference
-            delete this.playerSmithing[socket.id];
-            
-            // Save player data
-            if (player.userId) {
-              savePlayerInventory(player.userId, player.inventory)
-                .catch((error: Error) => console.error('Error saving player inventory:', error));
-                
-              savePlayerSkills(player.userId, player.skills)
-                .catch((error: Error) => console.error('Error saving player skills:', error));
-            }
+
+        // Add bronze bar to inventory
+        const existingBarIndex = player.inventory.findIndex((item: any) => item.type === recipe.resultItem);
+        if (existingBarIndex !== -1) {
+          const existingBar = player.inventory[existingBarIndex];
+          if (existingBar.count !== undefined) {
+            existingBar.count += 1;
+          } else if (existingBar.quantity !== undefined) {
+            existingBar.quantity += 1;
           }
-        }, 500);
-        
-        // Store the interval ID to cancel if needed
-        this.playerSmithing[socket.id] = progressInterval;
+        } else {
+          player.inventory.push({
+            type: recipe.resultItem,
+            count: 1
+          });
+        }
+
+        // Add experience
+        if (!player.skills) {
+          player.skills = {};
+        }
+        if (!player.skills.smithing) {
+          player.skills.smithing = { level: 1, xp: 0 };
+        }
+
+        // Add experience and check for level up
+        if (player.skills.smithing.xp !== undefined) {
+          player.skills.smithing.xp += recipe.experienceReward;
+          const newLevel = Math.floor(1 + Math.sqrt(player.skills.smithing.xp / 100));
+          if (newLevel > player.skills.smithing.level) {
+            player.skills.smithing.level = newLevel;
+            socket.emit('levelUp', {
+              skill: 'smithing',
+              level: newLevel
+            });
+          }
+        }
+
+        console.log(`[SMITHING] Successfully smelted bronze bar for player ${socket.id}`);
+
+        // Save player data
+        if (player.userId) {
+          savePlayerInventory(player.userId, player.inventory)
+            .catch((error: Error) => console.error('[SMITHING] Error saving player inventory:', error));
+          savePlayerSkills(player.userId, player.skills)
+            .catch((error: Error) => console.error('[SMITHING] Error saving player skills:', error));
+        }
+
+        // Send success response with updated inventory
+        callback({
+          success: true,
+          updatedInventory: player.inventory
+        });
+
       } catch (error) {
-        console.error('Error in startSmithing handler:', error);
+        console.error('[SMITHING] Error in smeltBronzeBar handler:', error);
+        callback({ success: false, error: 'Internal server error' });
       }
     });
-  }
-  
-  /**
-   * Setup the handler for canceling smithing
-   */
-  private setupCancelSmithingHandler(socket: any): void {
-    socket.on('cancelSmelting', () => {
-      this.cancelSmithing(socket);
-    });
-    
-    socket.on('cancelSmithing', () => {
-      this.cancelSmithing(socket);
-    });
-  }
-  
-  /**
-   * Cancel an active smithing operation
-   */
-  private cancelSmithing(socket: any): void {
-    try {
-      // Clear any existing smithing interval
-      if (this.playerSmithing[socket.id]) {
-        clearInterval(this.playerSmithing[socket.id]);
-        delete this.playerSmithing[socket.id];
-        console.log(`Player ${socket.id} cancelled smithing operation`);
-      }
-    } catch (error) {
-      console.error('Error in cancel smithing handler:', error);
-    }
   }
 } 
