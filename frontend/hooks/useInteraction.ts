@@ -7,6 +7,13 @@ import { GATHERING_COOLDOWN } from '../constants';
 import { PlayerController } from '../components/game/PlayerController';
 import ItemManager from '../game/world/ItemManager';
 
+// Add TypeScript declaration for the global openSmithingPanel function
+declare global {
+  interface Window {
+    openSmithingPanel?: (mode: string) => void;
+  }
+}
+
 // Since we don't have access to the actual SoundType, we'll use strings directly
 // This avoids the type error with the soundManager.play calls
 
@@ -403,6 +410,10 @@ export const useInteraction = ({
                     position: `(${resourceNode.x}, ${resourceNode.y}, ${resourceNode.z})`
                 });
                 
+                // Stop propagation when interacting with a resource, especially furnaces
+                // This prevents the click from closing the chat panel
+                e.stopPropagation();
+                
                 // Show context menu with just this resource
                 setNearbyResources([resourceNode]);
                 setNearbyItems([]);
@@ -527,8 +538,16 @@ export const useInteraction = ({
             button: e.button,
             clientX: e.clientX,
             clientY: e.clientY,
-            target: e.target
+            target: e.target,
+            handled: (e as any).handled
         });
+        
+        // Skip if the event has already been handled by another component (e.g., NPCInteractionController)
+        if ((e as any).handled) {
+            console.log("%c 🛑 Right-click already handled by another component, skipping WorldContextMenu", 
+                "background: orange; color: white;");
+            return;
+        }
         
         // Prevent default browser context menu
         e.preventDefault();
@@ -609,6 +628,10 @@ export const useInteraction = ({
                     position: `(${resourceNode.x}, ${resourceNode.y}, ${resourceNode.z})`
                 });
                 
+                // Stop propagation when interacting with a resource, especially furnaces
+                // This prevents the click from closing the chat panel
+                e.stopPropagation();
+                
                 // Show context menu with just this resource
                 setNearbyResources([resourceNode]);
                 setNearbyItems([]);
@@ -633,6 +656,9 @@ export const useInteraction = ({
             const worldItem = worldItems.find(item => item.mesh === intersectedItemMesh);
             
             if (worldItem) {
+                // Stop propagation for world item interactions to prevent closing chat panel
+                e.stopPropagation();
+                
                 // Show context menu with just this item
                 setNearbyItems([worldItem]);
                 setNearbyResources([]);
@@ -674,6 +700,9 @@ export const useInteraction = ({
         
         // If there are nearby items or resources, show the context menu
         if (nearbyWorldItems.length > 0 || nearbyWorldResources.length > 0) {
+            // Stop propagation to prevent the click from closing the chat panel
+            e.stopPropagation();
+            
             setNearbyItems(nearbyWorldItems);
             setNearbyResources(nearbyWorldResources);
             setContextMenuPos({ x: e.clientX, y: e.clientY });
@@ -929,6 +958,18 @@ export const useInteraction = ({
                         // Use appropriate event based on the action type
                         if (action === 'fish' && resourceNode.type === ResourceType.FISHING_SPOT) {
                             (socket as any).emit('interactWithResource', { resourceId });
+                        } else if (action === 'smelt' && (resourceNode.metadata?.isFurnace || resourceId === 'barbarian_furnace')) {
+                            console.log(`%c 🔥 Opening smelting interface for furnace`, "background: orange; color: white; font-size: 14px");
+                            // Use the global openSmithingPanel function instead of dispatching an event
+                            if (typeof window.openSmithingPanel === 'function') {
+                                window.openSmithingPanel('smelting');
+                            } else {
+                                console.error("openSmithingPanel function not available, falling back to custom event");
+                                // Fallback to the custom event as a backup
+                                document.dispatchEvent(new CustomEvent('open-smithing', { 
+                                    detail: { mode: 'smelting' } 
+                                }));
+                            }
                         } else {
                             (socket as any).emit('gatherWithTool', { resourceId, action });
                         }
@@ -951,6 +992,18 @@ export const useInteraction = ({
                 // Use appropriate event based on the action type
                 if (action === 'fish' && resourceNode.type === ResourceType.FISHING_SPOT) {
                     (socket as any).emit('interactWithResource', { resourceId });
+                } else if (action === 'smelt' && (resourceNode.metadata?.isFurnace || resourceId === 'barbarian_furnace')) {
+                    console.log(`%c 🔥 Opening smelting interface for furnace`, "background: orange; color: white; font-size: 14px");
+                    // Use the global openSmithingPanel function instead of dispatching an event
+                    if (typeof window.openSmithingPanel === 'function') {
+                        window.openSmithingPanel('smelting');
+                    } else {
+                        console.error("openSmithingPanel function not available, falling back to custom event");
+                        // Fallback to the custom event as a backup
+                        document.dispatchEvent(new CustomEvent('open-smithing', { 
+                            detail: { mode: 'smelting' } 
+                        }));
+                    }
                 } else {
                     (socket as any).emit('gatherWithTool', { resourceId, action });
                 }

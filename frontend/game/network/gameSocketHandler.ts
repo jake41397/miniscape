@@ -558,9 +558,9 @@ export const setupSocketListeners = async ({
 
     // Update the position of the moved player
     if (playerMesh) {
-      // Ensure received positions are within bounds before applying
-      const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, data.x));
-      const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, data.z));
+      // No longer clamping received positions to world boundaries
+      const validX = data.x;
+      const validZ = data.z;
       
       // Get the server timestamp or use current time
       const serverTime = data.timestamp || Date.now();

@@ -93,11 +93,11 @@ export const usePlayerMovement = ({
             const newX = currentPosition.x + moveX;
             const newZ = currentPosition.z + moveZ;
 
-            // Apply world boundaries
-            const boundedX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, newX));
-            const boundedZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, newZ));
+            // No longer applying world boundaries
+            const boundedX = newX;
+            const boundedZ = newZ;
 
-            // Check if position actually changed after bounding
+            // Check if position actually changed
             if (playerMesh.position.x !== boundedX || playerMesh.position.z !== boundedZ) {
                 playerMesh.position.x = boundedX;
                 playerMesh.position.z = boundedZ;

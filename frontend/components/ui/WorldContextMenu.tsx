@@ -3,6 +3,13 @@ import * as THREE from 'three';
 import { WorldItem, ResourceNode, ResourceType } from '../../game/world/resources';
 import { getSocket } from '../../game/network/socket';
 
+// Add TypeScript declaration for the global openSmithingPanel function
+declare global {
+  interface Window {
+    openSmithingPanel?: (mode: string) => void;
+  }
+}
+
 interface WorldContextMenuProps {
   position: { x: number, y: number } | null;
   playerPosition: THREE.Vector3 | null;
@@ -60,15 +67,21 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
   useEffect(() => {
     // Close menu when clicking outside
     const handleOutsideClick = (e: MouseEvent) => {
+      // Only handle this event if it hasn't been handled by another component
+      if ((e as any).handled) {
+        return;
+      }
+      
       // Check if clicking on the menu itself (prevent closing when clicking on a menu item)
       const target = e.target as HTMLElement;
       if (!target.closest('.world-context-menu')) {
+        e.stopPropagation(); // Stop propagation to prevent other handlers being affected
         onClose();
       }
     };
 
-    document.addEventListener('click', handleOutsideClick);
-    return () => document.removeEventListener('click', handleOutsideClick);
+    document.addEventListener('click', handleOutsideClick, true); // Use capture phase
+    return () => document.removeEventListener('click', handleOutsideClick, true);
   }, [onClose]);
 
   // Create menu items based on nearby items and resources
@@ -154,11 +167,24 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
           items.push({
             label: `Smith at Furnace ${tooFar ? '(too far)' : ''}`,
             action: () => {
-              console.log(`%c 🔥 SMELT ACTION: ${resource.id}`, "background: orange; color: white; font-size: 16px;");
-              // Dispatch the open-smithing event that the SmithingController listens for
-              document.dispatchEvent(new CustomEvent('open-smithing', { 
-                detail: { mode: 'smelting' } 
-              }));
+              console.log(`%c 🔥 FURNACE ACTION: ${resource.id}`, "background: orange; color: white; font-size: 16px;");
+              
+              // Instead of directly opening the panel, initiate the dialogue interaction
+              // which will present options to the player
+              onInteractWithResource(resource.id, 'interact');
+            },
+            disabled: tooFar
+          });
+        } else if (resource.metadata?.isAnvil || resource.id === 'barbarian_anvil') {
+          // Handle anvil interaction for smithing
+          items.push({
+            label: `Smith at Anvil ${tooFar ? '(too far)' : ''}`,
+            action: () => {
+              console.log(`%c ⚒️ ANVIL ACTION: ${resource.id}`, "background: #CD853F; color: white; font-size: 16px;");
+              
+              // Instead of directly opening the panel, initiate the dialogue interaction
+              // which will present options to the player
+              onInteractWithResource(resource.id, 'interact');
             },
             disabled: tooFar
           });
@@ -188,6 +214,11 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
         left: `${position.x}px`,
         top: `${position.y}px`
       }}
+      onClick={(e) => {
+        // Mark event as handled to prevent other components from processing it
+        (e as any).handled = true;
+        e.stopPropagation();
+      }}
     >
       <div className="menu-header">{menuTitle}</div>
       
@@ -198,11 +229,13 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
           <div 
             key={`menu-item-${index}`}
             className={`menu-item ${item.disabled ? 'disabled' : ''}`}
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation(); // Stop propagation to prevent other click handlers
               console.log(`Menu item clicked: ${item.label}, disabled: ${item.disabled}`);
               if (!item.disabled) {
                 console.log(`Calling action for item: ${item.label}`);
                 item.action();
+                onClose(); // Close the menu after any action
               }
             }}
           >

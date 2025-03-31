@@ -34,6 +34,7 @@ import NPCInteractionController from './game/NPCInteractionController';
 import PlayerSocialController from './game/PlayerSocialController';
 import TutorialOverlay from './ui/TutorialOverlay';
 import SmithingController from './game/SmithingController';
+import NotificationController from './game/NotificationController';
 
 // Player movement speed
 const MOVEMENT_SPEED = 0.02; // Reduced from 0.0375 (nearly 50% reduction again)
@@ -1195,8 +1196,12 @@ const GameCanvas: React.FC = () => {
       {playerRef.current && (
         <SmithingController
           playerRef={playerRef}
+          isConnected={isConnected}
         />
       )}
+
+      {/* Add Notification Controller */}
+      <NotificationController />
 
       {/* World Context Menu */}
       {contextMenuPos && playerRef.current && (

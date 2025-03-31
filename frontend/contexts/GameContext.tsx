@@ -160,7 +160,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return gameState.currentZone === 'Grand Exchange';
   };
 
-  // Setup socket listeners
+  // Setup socket listeners and custom events
   useEffect(() => {
     const setupSocketListeners = async () => {
       const socket = await getSocket();
@@ -195,6 +195,15 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           }
         }));
       });
+      
+      // Listen for custom inventory-updated event (from smithing, etc.)
+      const handleCustomInventoryUpdate = (e: CustomEvent) => {
+        if (e.detail && e.detail.inventory) {
+          handleInventoryUpdate(e.detail.inventory);
+        }
+      };
+      
+      document.addEventListener('inventory-updated', handleCustomInventoryUpdate as EventListener);
 
       // Clean up listeners
       return () => {
@@ -206,11 +215,20 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           socket.off('skillUpdate');
           socket.off('playerData');
         }
+        document.removeEventListener('inventory-updated', handleCustomInventoryUpdate as EventListener);
       };
     };
 
     setupSocketListeners();
   }, []);
+
+  // Expose player inventory and skills to the window object for global access
+  useEffect(() => {
+    if (gameState.player) {
+      window.playerInventory = gameState.player.inventory;
+      window.playerSkills = gameState.player.skills;
+    }
+  }, [gameState.player?.inventory, gameState.player?.skills]);
 
   // Context value
   const contextValue: GameContextValue = {

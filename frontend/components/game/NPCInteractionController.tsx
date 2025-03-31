@@ -95,48 +95,88 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
   }, [worldManager]);
   
   useEffect(() => {
-    // Set up right-click interaction
-    const handleRightClick = (event: MouseEvent) => {
-      if (event.button === 2) { // Right click
-        console.log("Right-click detected, checking for NPC interactions");
+    // Set up right-click interaction using the 'contextmenu' event
+    const handleContextMenu = (event: MouseEvent) => {
+      // Check if the event target is part of the game canvas/world, not UI elements
+      const targetElement = event.target as HTMLElement;
+      // Ensure this selector accurately targets your canvas or its container
+      if (!targetElement.closest('canvas')) { // Adjust selector if needed
+        console.log("ContextMenu event target is not canvas, ignoring.");
+        return; // Ignore if the click is on UI, not the game world
+      }
+
+      console.log("ContextMenu event detected on game world, checking interactions.");
+      
+      const landmarkManager = worldManager?.getLandmarkManager();
+      const player = playerRef.current;
+      
+      if (!landmarkManager || !player) {
+        console.log("ContextMenu: LandmarkManager or PlayerRef missing.");
+        // Don't prevent default if we can't check - allow normal browser context menu
+        return;
+      }
+      
+      console.log("ContextMenu: Checking interactions at", player.position);
+      
+      // Check if player is near any interactable NPC or landmark
+      const interactionFound = landmarkManager.checkInteractions(player.position, (target: NPC | Landmark) => {
+        console.log("ContextMenu: Interaction target found:", target);
         
-        const landmarkManager = worldManager?.getLandmarkManager();
-        const player = playerRef.current;
-        
-        if (!landmarkManager) {
-          console.log("No landmark manager available");
-          return;
-        }
-        
-        if (!player) {
-          console.log("No player reference available");
-          return;
-        }
-        
-        console.log("Checking for interactions at player position:", player.position);
-        
-        // Check if player is near any interactable NPC or landmark
-        landmarkManager.checkInteractions(player.position, (target: NPC | Landmark) => {
-          console.log("Interaction target found:", target);
+        if ('dialogues' in target) { // It's an NPC
+          console.log(`ContextMenu: Starting dialogue with NPC: ${target.name}`);
+          setActiveNPC(target);
+          landmarkManager.startDialogue(target.id);
           
-          if ('dialogues' in target) {
-            // It's an NPC
-            console.log(`Starting dialogue with NPC: ${target.name}`);
-            setActiveNPC(target);
-            landmarkManager.startDialogue(target.id);
-          } else if (target.interactable) {
-            // It's an interactable landmark
-            console.log(`Interacting with landmark: ${target.name}`);
-            showNotification(`${target.name}: ${target.onInteract ? 'Interacting...' : 'Nothing to interact with.'}`);
+          // Prevent the default browser context menu for NPC interaction
+          event.preventDefault();
+          // Stop propagation might still be useful if other listeners exist
+          event.stopPropagation();
+          
+        } else if (target.interactable) { // It's an interactable landmark
+          console.log(`ContextMenu: Interacting with landmark: ${target.name}`);
+          
+          // Specifically handle the furnace and anvil
+          if (target.metadata?.isFurnace || target.metadata?.isAnvil || target.id === 'barbarian_furnace' || target.id === 'barbarian_anvil') {
+            console.log('ContextMenu: Furnace/Anvil interaction detected. This will open a dialog interface and then smithing panel if selected.');
+            // The onInteract will handle showing the dialog interface
+            
+            // Prevent the browser's default context menu
+            event.preventDefault();
+            event.stopPropagation();
+            
+            // Mark the event as handled to prevent WorldContextMenu from processing it
+            (event as any).handled = true;
+            return; // Callback handled
           }
-        });
+          
+          // Handle other landmarks
+          showNotification(`${target.name}: ${target.onInteract ? 'Interacting...' : 'Nothing to interact with.'}`);
+          // Also prevent default for other landmarks
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      });
+      
+      // If checkInteractions found something and called the callback,
+      // preventDefault/stopPropagation was likely already called inside.
+      // If *no* interaction was found, we don't call preventDefault here,
+      // allowing the normal browser context menu to appear if desired for the background.
+      if (interactionFound) {
+        console.log("ContextMenu: Interaction found and handled within callback.");
+      } else {
+        console.log("ContextMenu: No interactable target found at player location.");
+        // Explicitly DO NOT call preventDefault/stopPropagation here
       }
     };
     
-    window.addEventListener('mousedown', handleRightClick);
+    // Add the contextmenu listener
+    window.addEventListener('contextmenu', handleContextMenu);
+    console.log("NPCInteractionController: Added contextmenu listener.");
     
+    // Cleanup
     return () => {
-      window.removeEventListener('mousedown', handleRightClick);
+      window.removeEventListener('contextmenu', handleContextMenu);
+      console.log("NPCInteractionController: Removed contextmenu listener.");
       if (notificationTimeoutRef.current) {
         clearTimeout(notificationTimeoutRef.current);
       }

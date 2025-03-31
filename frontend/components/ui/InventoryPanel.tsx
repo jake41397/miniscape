@@ -123,6 +123,22 @@ const ItemSprites: Record<string, () => JSX.Element> = {
       <line x1="55" y1="22" x2="65" y2="27" stroke="#B87333" strokeWidth="1" />
     </svg>
   ),
+  'bronze_bar': () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">
+      {/* Bronze bar shape */}
+      <rect x="10" y="35" width="80" height="30" rx="2" fill="#CD7F32" />
+      <rect x="15" y="40" width="70" height="20" rx="1" fill="#B87333" />
+      {/* Highlights */}
+      <line x1="20" y1="40" x2="20" y2="60" stroke="#E8A67C" strokeWidth="1" />
+      <line x1="30" y1="40" x2="30" y2="60" stroke="#E8A67C" strokeWidth="1" />
+      <line x1="40" y1="40" x2="40" y2="60" stroke="#E8A67C" strokeWidth="1" />
+      <line x1="50" y1="40" x2="50" y2="60" stroke="#E8A67C" strokeWidth="1" />
+      <line x1="60" y1="40" x2="60" y2="60" stroke="#E8A67C" strokeWidth="1" />
+      <line x1="70" y1="40" x2="70" y2="60" stroke="#E8A67C" strokeWidth="1" />
+      {/* Shiny edges */}
+      <rect x="10" y="35" width="80" height="30" rx="2" fill="none" stroke="#E8A67C" strokeWidth="1" />
+    </svg>
+  ),
   // Default for unknown items
   'default': () => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="40" height="40">

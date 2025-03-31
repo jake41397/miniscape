@@ -18,6 +18,13 @@ export interface NPC {
   }[];
   currentDialogueId: string;
   isInteracting: boolean;
+  userData?: {
+    selectedRecipe?: string;
+    startTime?: number;
+    smeltingInProgress?: boolean;
+    cleanupSocketListeners?: () => void;
+    [key: string]: any;
+  };
 }
 
 // Interface for a static landmark
@@ -28,6 +35,7 @@ export interface Landmark {
   mesh: THREE.Object3D;
   interactable: boolean;
   interactionRadius?: number;
+  metadata?: { [key: string]: any };
   onInteract?: () => void;
 }
 

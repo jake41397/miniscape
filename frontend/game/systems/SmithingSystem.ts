@@ -3,38 +3,26 @@ import { getSocket } from '../network/socket';
 import { ItemType } from '../../types/player';
 import { addExperience } from '../state/SkillSystem';
 import { SkillType } from '../../components/ui/SkillsPanel';
-import { XP_REWARDS, SKILL_REQUIREMENTS } from '../state/SkillSystem';
 import soundManager from '../audio/soundManager';
 
-// Smithing modes
+// Smithing mode - only SMELTING for now
 export enum SmithingMode {
   SMELTING = 'smelting',
   SMITHING = 'smithing'
 }
 
-// Bar types
-export enum BarType {
-  BRONZE = 'bronze_bar',
-  IRON = 'iron_bar',
-  STEEL = 'steel_bar',
-  GOLD = 'gold_bar',
-  MITHRIL = 'mithril_bar'
+// Recipe ingredient interface
+interface RecipeIngredient {
+  type: ItemType;
+  count: number;
 }
 
-// Smelting recipes
+// Smelting recipe interface
 export interface SmeltingRecipe {
   resultItem: ItemType;
   requiredLevel: number;
   experienceReward: number;
-  ingredients: { type: ItemType, count: number }[];
-}
-
-// Smithing recipes
-export interface SmithingRecipe {
-  resultItem: ItemType;
-  requiredLevel: number;
-  experienceReward: number;
-  ingredients: { type: ItemType, count: number }[];
+  ingredients: RecipeIngredient[];
 }
 
 // Smelting recipes
@@ -84,7 +72,15 @@ export const SMELTING_RECIPES: { [key: string]: SmeltingRecipe } = {
   }
 };
 
-// Smithing recipes
+// Smithing recipe interface (for creating items from bars)
+export interface SmithingRecipe {
+  resultItem: ItemType;
+  requiredLevel: number;
+  experienceReward: number;
+  ingredients: RecipeIngredient[];
+}
+
+// Smithing recipes for creating tools and weapons from bars
 export const SMITHING_RECIPES: { [key: string]: SmithingRecipe } = {
   BRONZE_SWORD: {
     resultItem: ItemType.BRONZE_SWORD,
@@ -96,7 +92,7 @@ export const SMITHING_RECIPES: { [key: string]: SmithingRecipe } = {
   },
   BRONZE_PICKAXE: {
     resultItem: ItemType.BRONZE_PICKAXE,
-    requiredLevel: 5,
+    requiredLevel: 5, 
     experienceReward: 15,
     ingredients: [
       { type: ItemType.BRONZE_BAR, count: 2 }
@@ -104,7 +100,7 @@ export const SMITHING_RECIPES: { [key: string]: SmithingRecipe } = {
   },
   BRONZE_AXE: {
     resultItem: ItemType.BRONZE_AXE,
-    requiredLevel: 5,
+    requiredLevel: 6,
     experienceReward: 15,
     ingredients: [
       { type: ItemType.BRONZE_BAR, count: 2 }
@@ -128,7 +124,7 @@ export const SMITHING_RECIPES: { [key: string]: SmithingRecipe } = {
   },
   IRON_AXE: {
     resultItem: ItemType.IRON_AXE,
-    requiredLevel: 25,
+    requiredLevel: 26,
     experienceReward: 30,
     ingredients: [
       { type: ItemType.IRON_BAR, count: 2 }
@@ -137,7 +133,7 @@ export const SMITHING_RECIPES: { [key: string]: SmithingRecipe } = {
   STEEL_SWORD: {
     resultItem: ItemType.STEEL_SWORD,
     requiredLevel: 35,
-    experienceReward: 35,
+    experienceReward: 37,
     ingredients: [
       { type: ItemType.STEEL_BAR, count: 1 }
     ]
@@ -152,7 +148,7 @@ export const SMITHING_RECIPES: { [key: string]: SmithingRecipe } = {
   },
   STEEL_AXE: {
     resultItem: ItemType.STEEL_AXE,
-    requiredLevel: 40,
+    requiredLevel: 41,
     experienceReward: 40,
     ingredients: [
       { type: ItemType.STEEL_BAR, count: 2 }
@@ -160,53 +156,42 @@ export const SMITHING_RECIPES: { [key: string]: SmithingRecipe } = {
   }
 };
 
-// Smithing System class
+// SmithingSystem class
 export class SmithingSystem {
   private playerRef: React.MutableRefObject<THREE.Mesh | null>;
-  private isSmithing: boolean = false;
-  private currentAction: SmithingMode | null = null;
-  private actionProgress: number = 0;
-  private actionDuration: number = 3000; // 3 seconds for smithing actions
+  private isProcessing: boolean = false;
   
   constructor(playerRef: React.MutableRefObject<THREE.Mesh | null>) {
     this.playerRef = playerRef;
   }
-  
-  // Check if player has required items for smelting
+
+  // Check if player has the required ingredients for smelting
   public canSmeltBar(barType: string, inventory: { type: ItemType, count: number }[]): boolean {
     const recipe = SMELTING_RECIPES[barType];
     if (!recipe) return false;
     
-    // Check each ingredient
-    for (const ingredient of recipe.ingredients) {
+    // Check if player has all required ingredients
+    return recipe.ingredients.every(ingredient => {
       const playerItem = inventory.find(item => item.type === ingredient.type);
-      if (!playerItem || playerItem.count < ingredient.count) {
-        return false;
-      }
-    }
-    
-    return true;
+      return playerItem && playerItem.count >= ingredient.count;
+    });
   }
   
-  // Check if player has required items for smithing
+  // Check if player has the required ingredients for smithing an item
   public canSmithItem(itemType: string, inventory: { type: ItemType, count: number }[]): boolean {
     const recipe = SMITHING_RECIPES[itemType];
     if (!recipe) return false;
     
-    // Check each ingredient
-    for (const ingredient of recipe.ingredients) {
+    // Check if player has all required ingredients
+    return recipe.ingredients.every(ingredient => {
       const playerItem = inventory.find(item => item.type === ingredient.type);
-      if (!playerItem || playerItem.count < ingredient.count) {
-        return false;
-      }
-    }
-    
-    return true;
+      return playerItem && playerItem.count >= ingredient.count;
+    });
   }
   
   // Start smelting a bar
   public startSmelting(barType: string, inventory: { type: ItemType, count: number }[], playerSkills: any): void {
-    if (this.isSmithing) return;
+    if (this.isProcessing) return;
     
     const recipe = SMELTING_RECIPES[barType];
     if (!recipe) return;
@@ -225,9 +210,7 @@ export class SmithingSystem {
     }
     
     // Start smelting process
-    this.isSmithing = true;
-    this.currentAction = SmithingMode.SMELTING;
-    this.actionProgress = 0;
+    this.isProcessing = true;
     
     // Play smelting sound
     soundManager.play('mining_hit'); // Reusing mining sound for now
@@ -237,7 +220,7 @@ export class SmithingSystem {
     if (socket) {
       socket.then(socket => {
         if (socket) {
-          socket.emit('startSmithing', {
+          socket.emit('startSmelting' as any, {
             barType,
             mode: SmithingMode.SMELTING
           });
@@ -246,9 +229,26 @@ export class SmithingSystem {
     }
   }
   
+  // Cancel any active smithing operation
+  public cancelSmelting(): void {
+    if (!this.isProcessing) return;
+    
+    this.isProcessing = false;
+    
+    // Emit cancel event to server
+    const socket = getSocket();
+    if (socket) {
+      socket.then(socket => {
+        if (socket) {
+          socket.emit('cancelSmelting' as any);
+        }
+      });
+    }
+  }
+  
   // Start smithing an item
   public startSmithing(itemType: string, inventory: { type: ItemType, count: number }[], playerSkills: any): void {
-    if (this.isSmithing) return;
+    if (this.isProcessing) return;
     
     const recipe = SMITHING_RECIPES[itemType];
     if (!recipe) return;
@@ -267,9 +267,7 @@ export class SmithingSystem {
     }
     
     // Start smithing process
-    this.isSmithing = true;
-    this.currentAction = SmithingMode.SMITHING;
-    this.actionProgress = 0;
+    this.isProcessing = true;
     
     // Play smithing sound
     soundManager.play('mining_hit'); // Reusing mining sound for now
@@ -279,82 +277,13 @@ export class SmithingSystem {
     if (socket) {
       socket.then(socket => {
         if (socket) {
-          socket.emit('startSmithing', {
+          socket.emit('startSmithing' as any, {
             itemType,
             mode: SmithingMode.SMITHING
           });
         }
       });
     }
-  }
-  
-  // Update smithing progress
-  public update(delta: number): void {
-    if (!this.isSmithing || !this.currentAction) return;
-    
-    // Update progress
-    this.actionProgress += delta;
-    
-    // Check if action is complete
-    if (this.actionProgress >= this.actionDuration) {
-      this.completeSmithing();
-    }
-  }
-  
-  // Complete smithing action
-  private completeSmithing(): void {
-    this.isSmithing = false;
-    
-    // Emit complete event
-    const socket = getSocket();
-    if (socket) {
-      socket.then(socket => {
-        if (socket) {
-          socket.emit('completeSmithing', {
-            mode: this.currentAction
-          });
-        }
-      });
-    }
-    
-    // Reset state
-    this.currentAction = null;
-    this.actionProgress = 0;
-  }
-  
-  // Cancel smithing action
-  public cancelSmithing(): void {
-    if (!this.isSmithing) return;
-    
-    this.isSmithing = false;
-    this.currentAction = null;
-    this.actionProgress = 0;
-    
-    // Emit cancel event
-    const socket = getSocket();
-    if (socket) {
-      socket.then(socket => {
-        if (socket) {
-          socket.emit('cancelSmithing');
-        }
-      });
-    }
-  }
-  
-  // Get current smithing progress percentage
-  public getProgress(): number {
-    if (!this.isSmithing) return 0;
-    return Math.min(100, (this.actionProgress / this.actionDuration) * 100);
-  }
-  
-  // Check if player is currently smithing
-  public getIsSmithing(): boolean {
-    return this.isSmithing;
-  }
-  
-  // Get current smithing mode
-  public getCurrentAction(): SmithingMode | null {
-    return this.currentAction;
   }
   
   // Create a furnace mesh for the scene
@@ -406,24 +335,34 @@ export class SmithingSystem {
   public static createAnvilMesh(): THREE.Group {
     const anvilGroup = new THREE.Group();
     
-    // Anvil base - box
-    const baseGeometry = new THREE.BoxGeometry(1.5, 0.5, 0.8);
-    const anvilMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
-    const base = new THREE.Mesh(baseGeometry, anvilMaterial);
-    base.position.y = 0.25;
+    // Anvil base - rectangular prism
+    const baseGeometry = new THREE.BoxGeometry(1.5, 0.5, 1);
+    const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+    const base = new THREE.Mesh(baseGeometry, baseMaterial);
+    base.position.y = 0.25; // Half of the height
     anvilGroup.add(base);
     
-    // Anvil middle section - narrower box
-    const middleGeometry = new THREE.BoxGeometry(0.8, 0.3, 0.6);
-    const middle = new THREE.Mesh(middleGeometry, anvilMaterial);
-    middle.position.y = 0.65;
+    // Anvil middle section - narrower rectangular prism
+    const middleGeometry = new THREE.BoxGeometry(0.7, 0.7, 0.8);
+    const middleMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
+    const middle = new THREE.Mesh(middleGeometry, middleMaterial);
+    middle.position.y = 0.85; // Base height + half of this height
     anvilGroup.add(middle);
     
-    // Anvil top section
-    const topGeometry = new THREE.BoxGeometry(1.2, 0.4, 0.6);
-    const top = new THREE.Mesh(topGeometry, anvilMaterial);
-    top.position.y = 1;
+    // Anvil top - working surface
+    const topGeometry = new THREE.BoxGeometry(1.8, 0.4, 0.8);
+    const topMaterial = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    const top = new THREE.Mesh(topGeometry, topMaterial);
+    top.position.y = 1.4; // Base + middle + half of this height
     anvilGroup.add(top);
+    
+    // Anvil horn - conical part
+    const hornGeometry = new THREE.ConeGeometry(0.2, 0.8, 8);
+    const hornMaterial = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    const horn = new THREE.Mesh(hornGeometry, hornMaterial);
+    horn.rotation.z = Math.PI / 2; // Rotate to point horizontally
+    horn.position.set(-1.1, 1.4, 0); // Position at the left end of the anvil
+    anvilGroup.add(horn);
     
     // Add userData for interaction
     anvilGroup.userData.isAnvil = true;

@@ -310,6 +310,17 @@ const ChatPanel: React.FC = () => {
         overflow: 'hidden',
         zIndex: 100
       }}
+      onClick={(e) => {
+        // Stop propagation of clicks inside the chat panel
+        // This prevents document-level handlers from closing it
+        e.stopPropagation();
+      }}
+      onMouseDown={(e) => {
+        // Also stop propagation of mousedown events (including right clicks)
+        // This prevents document-level handlers from closing it
+        e.stopPropagation();
+        // Don't mark as "handled" to allow specific mousedown behaviors within the panel
+      }}
     >
       <div 
         style={{

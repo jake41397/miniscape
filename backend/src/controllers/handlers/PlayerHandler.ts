@@ -141,9 +141,9 @@ export class PlayerHandler {
           return;
         }
         
-        // Ensure position is within world boundaries
-        const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, position.x));
-        const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, position.z));
+        // No longer clamping to world boundaries
+        const validX = position.x;
+        const validZ = position.z;
         
         // Check if position has actually changed significantly from current position
         const dx = validX - player.x;

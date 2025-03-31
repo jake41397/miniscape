@@ -397,11 +397,11 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       
       // Update player position in server state
       if (players[socket.id]) {
-        // Ensure position is within world boundaries
-        const validX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, position.x));
-        const validZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, position.z));
+        // No longer clamping player positions to world boundaries
+        const validX = position.x;
+        const validZ = position.z;
         
-        // Update player position with validated coordinates
+        // Update player position with coordinates
         players[socket.id].x = validX;
         players[socket.id].y = position.y;
         players[socket.id].z = validZ;
@@ -515,16 +515,13 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     
     // Handle getPlayerData requests
     socket.on('getPlayerData', (playerId: string, callback) => {
-      console.log(`Player ${socket.id} requested data for player ${playerId}`);
       
       // Find the requested player
       const player = players[playerId];
       
       if (player) {
-        console.log(`Returning player data for ${playerId}`);
         callback(player);
       } else {
-        console.log(`Player ${playerId} not found`);
         callback(null);
       }
     });

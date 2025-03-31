@@ -1,7 +1,33 @@
 import * as THREE from 'three';
 import { NPC, Landmark, createTutorialGuideNPC, createSignpost, createLumbridgeCastleMesh, createComingSoonSign, createBarbarianHut, createNPC } from './landmarks';
 import { ZONES } from './zones';
-import { SmithingSystem, SmithingMode } from '../systems/SmithingSystem';
+import { SmithingSystem, SmithingMode, SMELTING_RECIPES, SMITHING_RECIPES } from '../systems/SmithingSystem';
+import { SkillType } from '../../components/ui/SkillsPanel';
+import { ItemType } from '../../types/player';
+import { getSocket } from '../network/socket';
+import soundManager from '../audio/soundManager';
+
+// Add TypeScript declaration for the global window.openSmithingPanel function
+declare global {
+  interface Window {
+    openSmithingPanel?: (mode: string) => void;
+    playerInventory?: { type: ItemType, count: number }[];
+    playerSkills?: { [key: string]: { level: number, experience: number } };
+  }
+}
+
+// Update the NPC interface to include userData property
+declare module './landmarks' {
+  interface NPC {
+    userData?: {
+      selectedRecipe?: string;
+      startTime?: number;
+      smeltingInProgress?: boolean;
+      cleanupSocketListeners?: () => void;
+      [key: string]: any;
+    };
+  }
+}
 
 interface LandmarkManagerProps {
   scene: THREE.Scene;
@@ -195,12 +221,323 @@ class LandmarkManager {
       mesh: furnaceMesh,
       interactable: true,
       interactionRadius: 3,
+      metadata: { isFurnace: true },
       onInteract: () => {
         console.log('Interacted with Barbarian Furnace');
-        // Emit an event to open the smelting interface
-        document.dispatchEvent(new CustomEvent('open-smithing', { 
-          detail: { mode: SmithingMode.SMELTING } 
-        }));
+        // Create a "virtual NPC" for the furnace
+        const furnaceNPC = {
+          id: 'furnace_dialog',
+          name: 'Furnace',
+          position: furnacePosition.clone(),
+          interactionRadius: 3,
+          isInteracting: true,
+          mesh: furnaceMesh,
+          currentDialogueId: 'default',
+          dialogues: [
+            {
+              id: 'default',
+              text: 'The furnace is hot and ready to smelt ores into metal bars. You can create bronze bars from copper and tin, iron bars from iron ore, steel bars from iron and coal, gold bars from gold ore, and mithril bars from mithril ore and coal.',
+              responses: [
+                {
+                  text: 'Smelt metals',
+                  nextDialogueId: 'smelting_options',
+                },
+                {
+                  text: 'Go back',
+                  nextDialogueId: 'default'
+                }
+              ]
+            },
+            {
+              id: 'smelting_options',
+              text: 'What would you like to smelt?',
+              responses: Object.entries(SMELTING_RECIPES).map(([key, recipe]) => {
+                // Format recipe name for display
+                const recipeName = key.replace(/_/g, ' ').toLowerCase()
+                  .split(' ')
+                  .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                  .join(' ');
+                
+                // Create formatted ingredients description
+                const ingredientsDesc = recipe.ingredients.map(ingredient => {
+                  const ingredientName = ingredient.type.replace(/_/g, ' ').toLowerCase()
+                    .split(' ')
+                    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                    .join(' ');
+                  return `${ingredientName} (${ingredient.count})`;
+                }).join(', ');
+                
+                return {
+                  text: `${recipeName} - Requires: ${ingredientsDesc} - Level: ${recipe.requiredLevel}`,
+                  nextDialogueId: 'smelting_confirmation',
+                  action: () => {
+                    // Save the selected recipe to NPC temporary data
+                    if ((furnaceNPC as any).userData) {
+                      (furnaceNPC as any).userData.selectedRecipe = key;
+                    } else {
+                      (furnaceNPC as any).userData = { selectedRecipe: key };
+                    }
+                  }
+                };
+              }).concat([
+                {
+                  text: 'Go back',
+                  nextDialogueId: 'default',
+                  action: () => {} // Empty action to satisfy TypeScript
+                }
+              ])
+            },
+            {
+              id: 'smelting_confirmation',
+              text: 'Are you sure you want to smelt this item?',
+              responses: [
+                {
+                  text: 'Yes, begin smelting',
+                  nextDialogueId: 'smelting_progress',
+                  action: () => {
+                    // Get the selected recipe key from NPC userData
+                    const selectedRecipe = (furnaceNPC as any).userData?.selectedRecipe;
+                    if (!selectedRecipe) {
+                      console.error('No recipe selected');
+                      return;
+                    }
+                    
+                    // Check if player has required level and items
+                    const inventory = window.playerInventory || [];
+                    const skills = window.playerSkills || {};
+                    const smithingLevel = skills[SkillType.SMITHING]?.level || 1;
+                    const recipe = SMELTING_RECIPES[selectedRecipe];
+                    
+                    // Check if player meets level requirement
+                    if (smithingLevel < recipe.requiredLevel) {
+                      const notificationEvent = new CustomEvent('show-notification', {
+                        detail: { message: `You need smithing level ${recipe.requiredLevel} to smelt this.`, type: 'error' },
+                        bubbles: true
+                      });
+                      document.dispatchEvent(notificationEvent);
+                      this.endDialogue();
+                      return;
+                    }
+                    
+                    // Check if player has all ingredients
+                    const hasAllIngredients = recipe.ingredients.every(ingredient => {
+                      const playerItem = inventory.find(item => item.type === ingredient.type);
+                      return playerItem && playerItem.count >= ingredient.count;
+                    });
+                    
+                    if (!hasAllIngredients) {
+                      const notificationEvent = new CustomEvent('show-notification', {
+                        detail: { message: 'You don\'t have the required materials.', type: 'error' },
+                        bubbles: true
+                      });
+                      document.dispatchEvent(notificationEvent);
+                      this.endDialogue();
+                      return;
+                    }
+                    
+                    // Start smelting process by emitting socket event
+                    const socket = getSocket();
+                    if (socket) {
+                      socket.then(socket => {
+                        if (socket) {
+                          socket.emit('startSmelting' as any, {
+                            barType: selectedRecipe,
+                            mode: SmithingMode.SMELTING,
+                            inventory: window.playerInventory || [],
+                            skills: window.playerSkills || {}
+                          });
+                          
+                          // Save start time for progress calculation
+                          if (!(furnaceNPC as any).userData) {
+                            (furnaceNPC as any).userData = {};
+                          }
+                          (furnaceNPC as any).userData.startTime = Date.now();
+                          (furnaceNPC as any).userData.smeltingInProgress = true;
+                          
+                          // Play sound
+                          if (typeof soundManager !== 'undefined') {
+                            soundManager.play('mining_hit');
+                          }
+                        }
+                      });
+                    }
+                  }
+                },
+                {
+                  text: 'No, let me choose again',
+                  nextDialogueId: 'smelting_options'
+                }
+              ]
+            },
+            {
+              id: 'smelting_progress',
+              text: 'Smelting in progress... Please wait.',
+              responses: [
+                {
+                  text: 'Cancel smelting',
+                  nextDialogueId: 'default',
+                  action: () => {
+                    // Cancel smelting process
+                    const socket = getSocket();
+                    if (socket) {
+                      socket.then(socket => {
+                        if (socket) {
+                          socket.emit('cancelSmelting' as any);
+                        }
+                      });
+                    }
+                    
+                    // Clear smelting flags
+                    if ((furnaceNPC as any).userData) {
+                      (furnaceNPC as any).userData.smeltingInProgress = false;
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              id: 'smelting_complete',
+              text: 'You have successfully smelted the metal!',
+              responses: [
+                {
+                  text: 'Smelt something else',
+                  nextDialogueId: 'smelting_options'
+                },
+                {
+                  text: 'Go back',
+                  nextDialogueId: 'default'
+                }
+              ]
+            }
+          ]
+        };
+        
+        // Add socket listener for smelting progress updates
+        const socket = getSocket();
+        if (socket) {
+          socket.then(socket => {
+            if (socket) {
+              // Set up smelting progress listener
+              const onSmithingProgress = (data: any) => {
+                console.log('Smithing progress:', data.progress);
+                
+                // Check if the dialogue is still open and we're in the progress dialogue
+                if (this.activeNPC?.id === 'furnace_dialog' && 
+                    this.activeNPC.currentDialogueId === 'smelting_progress') {
+                  
+                  // Update dialogue text to show progress
+                  const progress = Math.round(data.progress * 100);
+                  const progressDialogue = this.activeNPC.dialogues.find(d => d.id === 'smelting_progress');
+                  if (progressDialogue) {
+                    progressDialogue.text = `Smelting in progress: ${progress}% complete...`;
+                    
+                    // Force a UI update by calling onDialogOpen
+                    if (this.onDialogOpen) {
+                      this.onDialogOpen({...this.activeNPC});
+                    }
+                  }
+                  
+                  // If progress is complete, move to completion dialogue
+                  if (data.progress >= 1) {
+                    if (this.activeNPC) {
+                      this.activeNPC.currentDialogueId = 'smelting_complete';
+                      if (this.onDialogOpen) {
+                        this.onDialogOpen({...this.activeNPC});
+                      }
+                    }
+                  }
+                }
+              };
+              
+              // Set up smelting complete listener
+              const onSmithingComplete = (data: any) => {
+                console.log('Smithing complete:', data);
+                
+                // Check if the dialogue is still open
+                if (this.activeNPC?.id === 'furnace_dialog') {
+                  // Update completion text if multiple bars were created
+                  if (data && data.barsCreated > 1) {
+                    const completeDialogue = this.activeNPC.dialogues.find(d => d.id === 'smelting_complete');
+                    if (completeDialogue) {
+                      completeDialogue.text = `You have successfully smelted ${data.barsCreated} bars!`;
+                    }
+                  }
+                  
+                  // Move to completion dialogue
+                  if (this.activeNPC) {
+                    this.activeNPC.currentDialogueId = 'smelting_complete';
+                    if (this.onDialogOpen) {
+                      this.onDialogOpen({...this.activeNPC});
+                    }
+                  }
+                }
+              };
+              
+              // Set up smelting error listener
+              const onSmithingError = (data: any) => {
+                console.error('Smithing error:', data);
+                
+                // Check if the dialogue is still open
+                if (this.activeNPC?.id === 'furnace_dialog') {
+                  // Display error message in dialogue
+                  if (data.message) {
+                    const errorDialogue = this.activeNPC.dialogues.find(d => d.id === 'smelting_progress');
+                    if (errorDialogue) {
+                      errorDialogue.text = `Error: ${data.message}`;
+                      
+                      // Force a UI update by calling onDialogOpen
+                      if (this.onDialogOpen) {
+                        this.onDialogOpen({...this.activeNPC});
+                      }
+                    }
+                  }
+                  
+                  // Show notification
+                  const notificationEvent = new CustomEvent('show-notification', {
+                    detail: { 
+                      message: data.message || 'Error during smelting',
+                      type: 'error'
+                    },
+                    bubbles: true
+                  });
+                  document.dispatchEvent(notificationEvent);
+                  
+                  // Reset the dialogue to default
+                  setTimeout(() => {
+                    if (this.activeNPC?.id === 'furnace_dialog') {
+                      this.activeNPC.currentDialogueId = 'default';
+                      if (this.onDialogOpen) {
+                        this.onDialogOpen({...this.activeNPC});
+                      }
+                    }
+                  }, 3000);
+                }
+              };
+              
+              // Add listeners
+              socket.on('smithingProgress' as any, onSmithingProgress);
+              socket.on('smithingComplete' as any, onSmithingComplete);
+              socket.on('smithingError' as any, onSmithingError);
+              
+              // Store cleanup function in userData
+              if (!(furnaceNPC as any).userData) {
+                (furnaceNPC as any).userData = {};
+              }
+              (furnaceNPC as any).userData.cleanupSocketListeners = () => {
+                socket.off('smithingProgress' as any, onSmithingProgress);
+                socket.off('smithingComplete' as any, onSmithingComplete);
+                socket.off('smithingError' as any, onSmithingError);
+              };
+            }
+          });
+        }
+        
+        // Treat the furnace interaction like an NPC dialogue
+        this.activeNPC = furnaceNPC;
+        
+        if (this.onDialogOpen) {
+          this.onDialogOpen(furnaceNPC);
+        }
       }
     });
     
@@ -218,12 +555,319 @@ class LandmarkManager {
       mesh: anvilMesh,
       interactable: true,
       interactionRadius: 2,
+      metadata: { isAnvil: true },
       onInteract: () => {
         console.log('Interacted with Barbarian Anvil');
-        // Emit an event to open the smithing interface
-        document.dispatchEvent(new CustomEvent('open-smithing', { 
-          detail: { mode: SmithingMode.SMITHING } 
-        }));
+        // Create a "virtual NPC" for the anvil
+        const anvilNPC = {
+          id: 'anvil_dialog',
+          name: 'Anvil',
+          position: anvilPosition.clone(),
+          interactionRadius: 3,
+          isInteracting: true,
+          mesh: anvilMesh,
+          currentDialogueId: 'default',
+          dialogues: [
+            {
+              id: 'default',
+              text: 'The anvil is used to smith metal bars into tools, weapons, and armor. You need smithing levels and metal bars to craft items.',
+              responses: [
+                {
+                  text: 'Smith items',
+                  nextDialogueId: 'smithing_options',
+                },
+                {
+                  text: 'Go back',
+                  nextDialogueId: 'default',
+                  action: () => {
+                    // End the dialogue when going back
+                    this.endDialogue();
+                  }
+                }
+              ]
+            },
+            {
+              id: 'smithing_options',
+              text: 'What would you like to smith?',
+              responses: Object.entries(SMITHING_RECIPES).map(([key, recipe]) => {
+                // Format recipe name for display
+                const recipeName = key.replace(/_/g, ' ').toLowerCase()
+                  .split(' ')
+                  .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                  .join(' ');
+                
+                // Create formatted ingredients description
+                const ingredientsDesc = recipe.ingredients.map(ingredient => {
+                  const ingredientName = ingredient.type.replace(/_/g, ' ').toLowerCase()
+                    .split(' ')
+                    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                    .join(' ');
+                  return `${ingredientName} (${ingredient.count})`;
+                }).join(', ');
+                
+                return {
+                  text: `${recipeName} - Requires: ${ingredientsDesc} - Level: ${recipe.requiredLevel}`,
+                  nextDialogueId: 'smithing_confirmation',
+                  action: () => {
+                    // Save the selected recipe to NPC temporary data
+                    if ((anvilNPC as any).userData) {
+                      (anvilNPC as any).userData.selectedRecipe = key;
+                    } else {
+                      (anvilNPC as any).userData = { selectedRecipe: key };
+                    }
+                  }
+                };
+              }).concat([
+                {
+                  text: 'Go back',
+                  nextDialogueId: 'default',
+                  action: () => {} // Empty action to satisfy TypeScript
+                }
+              ])
+            },
+            {
+              id: 'smithing_confirmation',
+              text: 'Are you sure you want to smith this item?',
+              responses: [
+                {
+                  text: 'Yes, begin smithing',
+                  nextDialogueId: 'smithing_progress',
+                  action: () => {
+                    // Get the selected recipe key from NPC userData
+                    const selectedRecipe = (anvilNPC as any).userData?.selectedRecipe;
+                    if (!selectedRecipe) {
+                      console.error('No recipe selected');
+                      return;
+                    }
+                    
+                    // Check if player has required level and items
+                    const inventory = window.playerInventory || [];
+                    const skills = window.playerSkills || {};
+                    const smithingLevel = skills[SkillType.SMITHING]?.level || 1;
+                    const recipe = SMITHING_RECIPES[selectedRecipe];
+                    
+                    // Check if player meets level requirement
+                    if (smithingLevel < recipe.requiredLevel) {
+                      const notificationEvent = new CustomEvent('show-notification', {
+                        detail: { message: `You need smithing level ${recipe.requiredLevel} to smith this.`, type: 'error' },
+                        bubbles: true
+                      });
+                      document.dispatchEvent(notificationEvent);
+                      this.endDialogue();
+                      return;
+                    }
+                    
+                    // Check if player has all ingredients
+                    const hasAllIngredients = recipe.ingredients.every(ingredient => {
+                      const playerItem = inventory.find(item => item.type === ingredient.type);
+                      return playerItem && playerItem.count >= ingredient.count;
+                    });
+                    
+                    if (!hasAllIngredients) {
+                      const notificationEvent = new CustomEvent('show-notification', {
+                        detail: { message: 'You don\'t have the required materials.', type: 'error' },
+                        bubbles: true
+                      });
+                      document.dispatchEvent(notificationEvent);
+                      this.endDialogue();
+                      return;
+                    }
+                    
+                    // Start smithing process by emitting socket event
+                    const socket = getSocket();
+                    if (socket) {
+                      socket.then(socket => {
+                        if (socket) {
+                          socket.emit('startSmithing' as any, {
+                            itemType: selectedRecipe,
+                            mode: SmithingMode.SMITHING,
+                            inventory: window.playerInventory || [],
+                            skills: window.playerSkills || {}
+                          });
+                          
+                          // Save start time for progress calculation
+                          if (!(anvilNPC as any).userData) {
+                            (anvilNPC as any).userData = {};
+                          }
+                          (anvilNPC as any).userData.startTime = Date.now();
+                          (anvilNPC as any).userData.smithingInProgress = true;
+                          
+                          // Play sound
+                          if (typeof soundManager !== 'undefined') {
+                            soundManager.play('mining_hit');
+                          }
+                        }
+                      });
+                    }
+                  }
+                },
+                {
+                  text: 'No, let me choose again',
+                  nextDialogueId: 'smithing_options'
+                }
+              ]
+            },
+            {
+              id: 'smithing_progress',
+              text: 'Smithing in progress... Please wait.',
+              responses: [
+                {
+                  text: 'Cancel smithing',
+                  nextDialogueId: 'default',
+                  action: () => {
+                    // Cancel smithing process
+                    const socket = getSocket();
+                    if (socket) {
+                      socket.then(socket => {
+                        if (socket) {
+                          socket.emit('cancelSmithing' as any);
+                        }
+                      });
+                    }
+                    
+                    // Clear smithing flags
+                    if ((anvilNPC as any).userData) {
+                      (anvilNPC as any).userData.smithingInProgress = false;
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              id: 'smithing_complete',
+              text: 'You have successfully smithed the item!',
+              responses: [
+                {
+                  text: 'Smith something else',
+                  nextDialogueId: 'smithing_options'
+                },
+                {
+                  text: 'Go back',
+                  nextDialogueId: 'default'
+                }
+              ]
+            }
+          ]
+        };
+        
+        // Add socket listener for smithing progress updates
+        const socket = getSocket();
+        if (socket) {
+          socket.then(socket => {
+            if (socket) {
+              // Set up smithing progress listener
+              const onSmithingProgress = (data: any) => {
+                console.log('Smithing progress:', data.progress);
+                
+                // Check if the dialogue is still open and we're in the progress dialogue
+                if (this.activeNPC?.id === 'anvil_dialog' && 
+                    this.activeNPC.currentDialogueId === 'smithing_progress') {
+                  
+                  // Update dialogue text to show progress
+                  const progress = Math.round(data.progress * 100);
+                  const progressDialogue = this.activeNPC.dialogues.find(d => d.id === 'smithing_progress');
+                  if (progressDialogue) {
+                    progressDialogue.text = `Smithing in progress: ${progress}% complete...`;
+                    
+                    // Force a UI update by calling onDialogOpen
+                    if (this.onDialogOpen) {
+                      this.onDialogOpen({...this.activeNPC});
+                    }
+                  }
+                  
+                  // If progress is complete, move to completion dialogue
+                  if (data.progress >= 1) {
+                    if (this.activeNPC) {
+                      this.activeNPC.currentDialogueId = 'smithing_complete';
+                      if (this.onDialogOpen) {
+                        this.onDialogOpen({...this.activeNPC});
+                      }
+                    }
+                  }
+                }
+              };
+              
+              // Set up smithing complete listener
+              const onSmithingComplete = (data: any) => {
+                console.log('Smithing complete:', data);
+                
+                // Check if the dialogue is still open
+                if (this.activeNPC?.id === 'anvil_dialog') {
+                  // Move to completion dialogue
+                  if (this.activeNPC) {
+                    this.activeNPC.currentDialogueId = 'smithing_complete';
+                    if (this.onDialogOpen) {
+                      this.onDialogOpen({...this.activeNPC});
+                    }
+                  }
+                }
+              };
+              
+              // Set up smithing error listener
+              const onSmithingError = (data: any) => {
+                console.error('Smithing error:', data);
+                
+                // Check if the dialogue is still open
+                if (this.activeNPC?.id === 'anvil_dialog') {
+                  // Display error message in dialogue
+                  if (data.message) {
+                    const errorDialogue = this.activeNPC.dialogues.find(d => d.id === 'smithing_progress');
+                    if (errorDialogue) {
+                      errorDialogue.text = `Error: ${data.message}`;
+                      
+                      // Force a UI update by calling onDialogOpen
+                      if (this.onDialogOpen) {
+                        this.onDialogOpen({...this.activeNPC});
+                      }
+                    }
+                  }
+                  
+                  // Show notification
+                  const notificationEvent = new CustomEvent('show-notification', {
+                    detail: { 
+                      message: data.message || 'Error during smithing',
+                      type: 'error'
+                    },
+                    bubbles: true
+                  });
+                  document.dispatchEvent(notificationEvent);
+                  
+                  // Reset the dialogue to default
+                  setTimeout(() => {
+                    if (this.activeNPC?.id === 'anvil_dialog') {
+                      this.activeNPC.currentDialogueId = 'default';
+                      if (this.onDialogOpen) {
+                        this.onDialogOpen({...this.activeNPC});
+                      }
+                    }
+                  }, 3000);
+                }
+              };
+              
+              // Add listeners
+              socket.on('smithingProgress' as any, onSmithingProgress);
+              socket.on('smithingComplete' as any, onSmithingComplete);
+              socket.on('smithingError' as any, onSmithingError);
+              
+              // Store cleanup function in userData
+              if (!(anvilNPC as any).userData) {
+                (anvilNPC as any).userData = {};
+              }
+              (anvilNPC as any).userData.cleanupSocketListeners = () => {
+                socket.off('smithingProgress' as any, onSmithingProgress);
+                socket.off('smithingComplete' as any, onSmithingComplete);
+                socket.off('smithingError' as any, onSmithingError);
+              };
+            }
+          });
+        }
+        
+        // Treat the anvil interaction like an NPC dialogue
+        this.activeNPC = anvilNPC;
+        
+        if (this.onDialogOpen) {
+          this.onDialogOpen(anvilNPC);
+        }
       }
     });
     
@@ -432,40 +1076,24 @@ class LandmarkManager {
 
   // End the current dialogue
   public endDialogue() {
+    console.log('Ending dialogue');
+    
     if (this.activeNPC) {
-      console.log(`Ending dialogue with ${this.activeNPC.name}`);
-      
-      // Reset the dialogue ID to the initial page ('welcome' for tutorial guide, 'default' for others)
-      // Find initial dialogue ID - use the first one in the dialogues array or 'default'/'welcome'
-      const initialDialogues = ['welcome', 'default'];
-      let initialDialogueId = 'default';
-      
-      if (this.activeNPC.dialogues && this.activeNPC.dialogues.length > 0) {
-        // Check if the NPC has any of the standard initial dialogues
-        for (const id of initialDialogues) {
-          if (this.activeNPC.dialogues.some(d => d.id === id)) {
-            initialDialogueId = id;
-            break;
-          }
-        }
-        
-        // If no standard initial dialogue found, use the first one
-        if (!initialDialogueId) {
-          initialDialogueId = this.activeNPC.dialogues[0].id;
-        }
+      // Run cleanup if available
+      if (this.activeNPC.userData?.cleanupSocketListeners) {
+        this.activeNPC.userData.cleanupSocketListeners();
       }
       
-      console.log(`Resetting ${this.activeNPC.name}'s dialogue to: ${initialDialogueId}`);
-      this.activeNPC.currentDialogueId = initialDialogueId;
+      // Mark NPC as no longer interacting
       this.activeNPC.isInteracting = false;
       
-      // Store a reference before clearing activeNPC
-      const npc = this.activeNPC;
-      this.activeNPC = null;
-      
+      // Trigger the dialog close event
       if (this.onDialogClose) {
         this.onDialogClose();
       }
+      
+      // Clear the active NPC
+      this.activeNPC = null;
     }
   }
 
