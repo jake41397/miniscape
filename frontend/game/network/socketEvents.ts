@@ -37,6 +37,28 @@ interface ServerToClientEvents {
   // Chat events
   chatMessage: (message: any) => void;
   
+  // NPC and Combat events
+  updateNPCs: (npcs: any[]) => void;
+  npcStateUpdate: (data: { 
+    id: string, 
+    health?: number, 
+    maxHealth?: number, 
+    combatState?: 'idle' | 'engaged' | 'dead',
+    attacker?: string
+  }) => void;
+  updateHealth: (data: { amount: number }) => void;
+  updatePlayerHealth: (data: { current: number, max: number }) => void;
+  playerDeath: (data: { respawnPosition: { x: number, y: number, z: number } }) => void;
+  
+  // Experience and skill events
+  experienceGained: (data: { 
+    skill: string, 
+    experience: number, 
+    totalExperience: number,
+    level: number 
+  }) => void;
+  levelUp: (data: { skill: string, level: number }) => void;
+  
   // System events
   error: (error: { message: string }) => void;
   playerData: (data: any) => void;
@@ -45,6 +67,11 @@ interface ServerToClientEvents {
   skillUpdate: (data: { skillType: string, level: number, experience: number }) => void;
   ping: (startTime: number, callback: (startTime: number) => void) => void;
   initPlayers: (players: any[]) => void;
+  
+  // Smithing events
+  smithingProgress: (data: any) => void;
+  smithingComplete: (data: any) => void;
+  smithingError: (data: any) => void;
 }
 
 // Define client-to-server events
@@ -72,6 +99,11 @@ interface ClientToServerEvents {
   gather: (resourceId: string) => void;
   gatherWithTool: (data: { resourceId: string, action: string }) => void;
   
+  // NPC and Combat events
+  attackNPC: (data: { npcId: string }) => void;
+  damageNPC: (data: { npcId: string, damage: number }) => void;
+  updateHealth: (data: { amount: number }) => void;
+  
   // Chat events
   chat: (message: string) => void;
   chatCommand: (data: { command: string, params: any }) => void;
@@ -87,6 +119,11 @@ interface ClientToServerEvents {
   // System events
   ping: (startTime: number) => void;
   pong: (startTime: number) => void;
+  
+  // Smithing events
+  startSmithing: (data: any) => void;
+  cancelSmithing: () => void;
+  smeltBronzeBar: (data: { inventory: any[], skills: any, recipe?: string }, callback: (response: { success: boolean, error?: string, updatedInventory?: any[] }) => void) => void;
 }
 
 // Export both interfaces separately instead of combining them

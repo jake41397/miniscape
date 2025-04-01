@@ -599,18 +599,18 @@ class LandmarkManager {
               };
               
               // Add listeners
-              socket.on('smithingProgress' as any, onSmithingProgress);
-              socket.on('smithingComplete' as any, onSmithingComplete);
-              socket.on('smithingError' as any, onSmithingError);
+              socket.on('smithingProgress', onSmithingProgress);
+              socket.on('smithingComplete', onSmithingComplete);
+              socket.on('smithingError', onSmithingError);
               
               // Store cleanup function in userData
               if (!(furnaceNPC as any).userData) {
                 (furnaceNPC as any).userData = {};
               }
               (furnaceNPC as any).userData.cleanupSocketListeners = () => {
-                socket.off('smithingProgress' as any, onSmithingProgress);
-                socket.off('smithingComplete' as any, onSmithingComplete);
-                socket.off('smithingError' as any, onSmithingError);
+                socket.off('smithingProgress');
+                socket.off('smithingComplete');
+                socket.off('smithingError');
               };
             }
           });
@@ -770,7 +770,7 @@ class LandmarkManager {
                     if (socket) {
                       socket.then(socket => {
                         if (socket) {
-                          socket.emit('startSmithing' as any, {
+                          socket.emit('startSmithing', {
                             itemType: selectedRecipe,
                             mode: SmithingMode.SMITHING,
                             inventory: window.playerInventory || [],
@@ -812,7 +812,7 @@ class LandmarkManager {
                     if (socket) {
                       socket.then(socket => {
                         if (socket) {
-                          socket.emit('cancelSmithing' as any);
+                          socket.emit('cancelSmithing');
                         }
                       });
                     }
@@ -938,18 +938,18 @@ class LandmarkManager {
               };
               
               // Add listeners
-              socket.on('smithingProgress' as any, onSmithingProgress);
-              socket.on('smithingComplete' as any, onSmithingComplete);
-              socket.on('smithingError' as any, onSmithingError);
+              socket.on('smithingProgress', onSmithingProgress);
+              socket.on('smithingComplete', onSmithingComplete);
+              socket.on('smithingError', onSmithingError);
               
               // Store cleanup function in userData
               if (!(anvilNPC as any).userData) {
                 (anvilNPC as any).userData = {};
               }
               (anvilNPC as any).userData.cleanupSocketListeners = () => {
-                socket.off('smithingProgress' as any, onSmithingProgress);
-                socket.off('smithingComplete' as any, onSmithingComplete);
-                socket.off('smithingError' as any, onSmithingError);
+                socket.off('smithingProgress');
+                socket.off('smithingComplete');
+                socket.off('smithingError');
               };
             }
           });
@@ -1276,13 +1276,13 @@ class LandmarkManager {
     socket.then(socket => {
       if (socket) {
         // Handle initial NPC data
-        socket.on('updateNPCs' as any, (npcs: any[]) => {
+        socket.on('updateNPCs', (npcs: any[]) => {
           console.log('Received NPC data from server:', npcs);
           this.handleNPCsFromServer(npcs);
         });
         
         // Handle NPC state updates (combat, health, etc.)
-        socket.on('npcStateUpdate' as any, (data: any) => {
+        socket.on('npcStateUpdate', (data) => {
           this.updateNPCState(data);
         });
       }
@@ -1441,7 +1441,7 @@ class LandmarkManager {
     const socket = getSocket();
     socket.then(socket => {
       if (socket) {
-        socket.emit('attackNPC' as any, { npcId });
+        socket.emit('attackNPC', { npcId });
       }
     });
   }
