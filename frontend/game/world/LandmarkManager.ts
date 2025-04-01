@@ -29,17 +29,33 @@ declare module './landmarks' {
   }
 }
 
+// Add combat-related interfaces
+export interface CombatNPC extends NPC {
+  level: number;
+  health: number;
+  maxHealth: number;
+  isAttackable: boolean;
+  combatState: 'idle' | 'engaged' | 'dead';
+}
+
+// Add NPC types
+export enum NPCType {
+  TUTORIAL_GUIDE = 'tutorial_guide',
+  RAT = 'rat'
+}
+
 interface LandmarkManagerProps {
   scene: THREE.Scene;
 }
 
 class LandmarkManager {
   private scene: THREE.Scene;
-  private npcs: NPC[] = [];
+  private npcs: (NPC | CombatNPC)[] = [];
   private landmarks: Landmark[] = [];
   private activeNPC: NPC | null = null;
   private onDialogOpen: ((npc: NPC) => void) | null = null;
   private onDialogClose: (() => void) | null = null;
+  private smithingSystem: SmithingSystem | null = null;
 
   constructor(props: LandmarkManagerProps) {
     this.scene = props.scene;
@@ -61,6 +77,9 @@ class LandmarkManager {
     
     // Add Barbarian Village huts and NPCs
     this.addBarbarianVillage();
+    
+    // Create combat NPCs
+    this.createCombatNPCs();
   }
 
   private addTutorialGuide() {
@@ -1019,12 +1038,12 @@ class LandmarkManager {
 
   // Get all NPCs
   public getNPCs(): NPC[] {
-    return this.npcs;
+    return this.npcs as NPC[];
   }
   
   // Get a specific NPC by ID
   public getNPC(npcId: string): NPC | undefined {
-    return this.npcs.find(npc => npc.id === npcId);
+    return this.npcs.find(npc => npc.id === npcId) as NPC | undefined;
   }
 
   // Check for interactions with NPCs or landmarks at a given position
@@ -1069,7 +1088,7 @@ class LandmarkManager {
   public startDialogue(npcId: string) {
     console.log(`Starting dialogue with NPC ID: ${npcId}`);
     
-    const npc = this.npcs.find(n => n.id === npcId);
+    const npc = this.npcs.find(n => n.id === npcId) as NPC | undefined;
     if (!npc) {
       console.warn(`Cannot start dialogue: NPC with id ${npcId} not found`);
       return;
@@ -1240,6 +1259,401 @@ class LandmarkManager {
         this.disposeObject(obj.children[i]);
       }
     }
+  }
+
+  // Create combat NPCs like rats
+  private createCombatNPCs() {
+    console.log('Creating combat NPCs (rats)...');
+    
+    // Socket will provide NPC data from the server
+    const socket = getSocket();
+    if (!socket) {
+      console.error('Failed to get socket for NPCs');
+      return;
+    }
+    
+    // Listen for NPC updates from server
+    socket.then(socket => {
+      if (socket) {
+        // Handle initial NPC data
+        socket.on('updateNPCs' as any, (npcs: any[]) => {
+          console.log('Received NPC data from server:', npcs);
+          this.handleNPCsFromServer(npcs);
+        });
+        
+        // Handle NPC state updates (combat, health, etc.)
+        socket.on('npcStateUpdate' as any, (data: any) => {
+          this.updateNPCState(data);
+        });
+      }
+    });
+  }
+  
+  // Create NPCs from server data
+  private handleNPCsFromServer(npcData: any[]) {
+    npcData.forEach(data => {
+      // Check if NPC already exists
+      const existingNpc = this.npcs.find(npc => npc.id === data.id);
+      if (existingNpc) {
+        console.log(`NPC already exists: ${data.id}`);
+        return;
+      }
+      
+      // Create different types of NPCs
+      switch (data.type) {
+        case 'rat':
+          this.createRatNPC(data);
+          break;
+        default:
+          console.log(`Unknown NPC type: ${data.type}`);
+      }
+    });
+  }
+  
+  // Create a rat NPC with combat capabilities
+  private createRatNPC(data: any) {
+    console.log(`Creating rat NPC: ${data.name} at position ${data.x}, ${data.y}, ${data.z}`);
+    
+    // Create a group to hold the rat and its health bar
+    const group = new THREE.Group();
+    group.position.set(data.x, data.y, data.z);
+    
+    // Rat body - a small brown capsule
+    const ratGeometry = new THREE.CapsuleGeometry(0.2, 0.4, 4, 8);
+    const ratMaterial = new THREE.MeshStandardMaterial({ color: 0x795548 });
+    const ratMesh = new THREE.Mesh(ratGeometry, ratMaterial);
+    ratMesh.position.y = 0.3; // Lower to the ground
+    group.add(ratMesh);
+    
+    // Create level indicator above the rat
+    const levelCanvas = document.createElement('canvas');
+    levelCanvas.width = 128;
+    levelCanvas.height = 64;
+    const levelContext = levelCanvas.getContext('2d');
+    
+    if (levelContext) {
+      levelContext.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      levelContext.fillRect(0, 0, 128, 64);
+      levelContext.font = 'Bold 20px Arial';
+      levelContext.fillStyle = '#FFFFFF';
+      levelContext.textAlign = 'center';
+      levelContext.textBaseline = 'middle';
+      levelContext.fillText(`Level ${data.level}`, 64, 32);
+    }
+    
+    const levelTexture = new THREE.CanvasTexture(levelCanvas);
+    const levelMaterial = new THREE.SpriteMaterial({ map: levelTexture, transparent: true });
+    const levelSprite = new THREE.Sprite(levelMaterial);
+    levelSprite.position.set(0, 1.0, 0);
+    levelSprite.scale.set(1, 0.5, 1);
+    group.add(levelSprite);
+    
+    // Create health bar (initially hidden)
+    const healthBarWidth = 0.6;
+    const healthBarGeometry = new THREE.PlaneGeometry(healthBarWidth, 0.1);
+    const healthBarMaterial = new THREE.MeshBasicMaterial({
+      color: 0xFF0000,
+      side: THREE.DoubleSide
+    });
+    const healthBar = new THREE.Mesh(healthBarGeometry, healthBarMaterial);
+    healthBar.position.set(0, 0.8, 0);
+    healthBar.rotation.x = -Math.PI / 2; // Face the health bar toward the camera
+    healthBar.rotation.z = Math.PI; // Flip it correctly
+    healthBar.visible = false; // Initially hidden
+    healthBar.userData.isHealthBar = true;
+    group.add(healthBar);
+    
+    // Create name tag
+    const nameCanvas = document.createElement('canvas');
+    nameCanvas.width = 128;
+    nameCanvas.height = 32;
+    const nameContext = nameCanvas.getContext('2d');
+    
+    if (nameContext) {
+      nameContext.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      nameContext.fillRect(0, 0, 128, 32);
+      nameContext.font = '16px Arial';
+      nameContext.fillStyle = '#FFFFFF';
+      nameContext.textAlign = 'center';
+      nameContext.textBaseline = 'middle';
+      nameContext.fillText(data.name, 64, 16);
+    }
+    
+    const nameTexture = new THREE.CanvasTexture(nameCanvas);
+    const nameMaterial = new THREE.SpriteMaterial({ map: nameTexture, transparent: true });
+    const nameSprite = new THREE.Sprite(nameMaterial);
+    nameSprite.position.set(0, 0.6, 0);
+    nameSprite.scale.set(1, 0.25, 1);
+    group.add(nameSprite);
+    
+    // Mark mesh as NPC and attackable
+    group.userData.isNPC = true;
+    group.userData.isAttackable = data.isAttackable;
+    group.userData.npcId = data.id;
+    group.userData.npcType = data.type;
+    group.userData.level = data.level;
+    
+    // Add to scene
+    this.scene.add(group);
+    
+    // Create NPC object
+    const npc: CombatNPC = {
+      id: data.id,
+      name: data.name,
+      position: new THREE.Vector3(data.x, data.y, data.z),
+      mesh: group,
+      interactionRadius: 2,
+      dialogues: [
+        {
+          id: 'attack',
+          text: `Attack ${data.name}`,
+          responses: [
+            {
+              text: 'Attack',
+              action: () => this.attackNPC(data.id)
+            },
+            {
+              text: 'Cancel'
+            }
+          ]
+        }
+      ],
+      currentDialogueId: 'attack',
+      isInteracting: false,
+      level: data.level,
+      health: data.health,
+      maxHealth: data.maxHealth,
+      isAttackable: data.isAttackable,
+      combatState: data.combatState || 'idle'
+    };
+    
+    // Add to NPCs array
+    this.npcs.push(npc);
+    
+    console.log(`Created rat NPC: ${npc.name} with ID ${npc.id}`);
+    return npc;
+  }
+  
+  // Attack an NPC
+  private attackNPC(npcId: string) {
+    console.log(`Attacking NPC: ${npcId}`);
+    
+    const socket = getSocket();
+    socket.then(socket => {
+      if (socket) {
+        socket.emit('attackNPC' as any, { npcId });
+      }
+    });
+  }
+  
+  // Update NPC state (health, combat state, etc.)
+  public updateNPCState(data: any) {
+    const npc = this.npcs.find(npc => npc.id === data.id) as CombatNPC | undefined;
+    if (!npc) {
+      console.warn(`NPC not found for state update: ${data.id}`);
+      return;
+    }
+    
+    console.log(`Updating NPC state for ${npc.name}:`, data);
+    
+    // Update combat state if provided
+    if (data.combatState !== undefined) {
+      const oldState = npc.combatState;
+      npc.combatState = data.combatState;
+      console.log(`NPC ${npc.name} combat state changed: ${oldState} -> ${data.combatState}`);
+      
+      // Handle specific state transitions
+      if (data.combatState === 'engaged') {
+        // Show health bar when engaged in combat
+        this.showNPCHealthBar(npc);
+        console.log(`Showing health bar for NPC ${npc.name}`);
+        
+        // Update visual state to show engaged combat stance
+        const npcMesh = npc.mesh.children[0] as THREE.Mesh;
+        if (npcMesh && npcMesh.material) {
+          const material = npcMesh.material as THREE.MeshStandardMaterial;
+          material.emissive.set(0xff0000);
+          material.emissiveIntensity = 0.2;
+          
+          // Add a slight scale pulse animation
+          const originalScale = npcMesh.scale.clone();
+          const pulse = () => {
+            const s = 1.0 + Math.sin(Date.now() * 0.01) * 0.1;
+            npcMesh.scale.set(originalScale.x * s, originalScale.y * s, originalScale.z * s);
+            if (npc.combatState === 'engaged') {
+              requestAnimationFrame(pulse);
+            } else {
+              npcMesh.scale.copy(originalScale);
+            }
+          };
+          pulse();
+        }
+      } else if (data.combatState === 'dead') {
+        // Handle death state
+        console.log(`NPC ${npc.name} died!`);
+        npc.health = 0;
+        this.updateNPCHealthBar(npc);
+        this.hideNPCMesh(npc);
+      } else if (data.combatState === 'idle' && npc.health > 0) {
+        // Reset to idle state (typically after respawn)
+        console.log(`NPC ${npc.name} returned to idle state`);
+        this.hideNPCHealthBar(npc);
+        this.showNPCMesh(npc);
+        
+        // Reset emissive properties to normal
+        const npcMesh = npc.mesh.children[0] as THREE.Mesh;
+        if (npcMesh && npcMesh.material) {
+          const material = npcMesh.material as THREE.MeshStandardMaterial;
+          material.emissive.set(0x000000);
+          material.emissiveIntensity = 0;
+        }
+      }
+    }
+    
+    // Update health if provided
+    if (data.health !== undefined) {
+      // Save old health for damage animation
+      const oldHealth = npc.health;
+      npc.health = data.health;
+      console.log(`NPC ${npc.name} health changed: ${oldHealth} -> ${data.health}`);
+      
+      // If in combat, ensure health bar is visible
+      if (npc.combatState === 'engaged') {
+        this.showNPCHealthBar(npc);
+        
+        // Add damage flash effect if health decreased
+        if (data.health < oldHealth) {
+          console.log(`NPC ${npc.name} took damage!`);
+          const healthBar = this.findHealthBar(npc.mesh);
+          if (healthBar) {
+            const material = healthBar.material as THREE.MeshBasicMaterial;
+            // Save original color
+            const originalColor = material.color.clone();
+            
+            // Flash red
+            material.color.set(0xff0000);
+            
+            // Restore original color
+            setTimeout(() => {
+              material.color.copy(originalColor);
+            }, 300);
+          }
+          
+          // Also make the NPC mesh flash
+          const npcMesh = npc.mesh.children[0] as THREE.Mesh;
+          if (npcMesh && npcMesh.material) {
+            const material = npcMesh.material as THREE.MeshStandardMaterial;
+            const originalColor = material.color.clone();
+            const originalEmissive = material.emissive.clone();
+            const originalIntensity = material.emissiveIntensity;
+            
+            // Flash white
+            material.emissive.set(0xffffff);
+            material.emissiveIntensity = 0.5;
+            
+            // Restore original colors
+            setTimeout(() => {
+              material.emissive.copy(originalEmissive);
+              material.emissiveIntensity = originalIntensity;
+            }, 200);
+          }
+        }
+      }
+      
+      // Update health bar
+      this.updateNPCHealthBar(npc);
+    }
+    
+    // Update max health if provided
+    if (data.maxHealth !== undefined) {
+      npc.maxHealth = data.maxHealth;
+      this.updateNPCHealthBar(npc);
+      console.log(`NPC ${npc.name} max health updated to ${data.maxHealth}`);
+    }
+  }
+  
+  // Show NPC health bar
+  private showNPCHealthBar(npc: CombatNPC) {
+    const healthBar = this.findHealthBar(npc.mesh);
+    if (healthBar) {
+      healthBar.visible = true;
+    }
+  }
+  
+  // Hide NPC health bar
+  private hideNPCHealthBar(npc: CombatNPC) {
+    const healthBar = this.findHealthBar(npc.mesh);
+    if (healthBar) {
+      healthBar.visible = false;
+    }
+  }
+  
+  // Update NPC health bar based on current health
+  private updateNPCHealthBar(npc: CombatNPC) {
+    const healthBar = this.findHealthBar(npc.mesh);
+    if (!healthBar) return;
+    
+    // Calculate health percentage
+    const healthPercent = npc.health / npc.maxHealth;
+    
+    // Update health bar scale
+    const originalWidth = 0.6; // Same as when created
+    healthBar.scale.x = healthPercent;
+    
+    // Center the bar based on scale change
+    const offset = (originalWidth - (originalWidth * healthPercent)) / 2;
+    healthBar.position.x = offset;
+    
+    // Update color based on health percentage
+    const material = healthBar.material as THREE.MeshBasicMaterial;
+    if (healthPercent > 0.6) {
+      material.color.set(0x00FF00); // Green
+    } else if (healthPercent > 0.3) {
+      material.color.set(0xFFFF00); // Yellow
+    } else {
+      material.color.set(0xFF0000); // Red
+    }
+  }
+  
+  // Hide NPC mesh when dead
+  private hideNPCMesh(npc: CombatNPC) {
+    if (npc.mesh instanceof THREE.Group) {
+      // Hide the body mesh (first child) but keep the level indicator visible
+      const body = npc.mesh.children.find(child => 
+        child instanceof THREE.Mesh && 
+        !(child.userData.isHealthBar)
+      );
+      if (body) {
+        body.visible = false;
+      }
+    }
+  }
+  
+  // Show NPC mesh when respawned
+  private showNPCMesh(npc: CombatNPC) {
+    if (npc.mesh instanceof THREE.Group) {
+      // Show all meshes
+      npc.mesh.children.forEach(child => {
+        child.visible = true;
+      });
+    }
+  }
+  
+  // Helper to find the health bar mesh in an NPC group
+  private findHealthBar(mesh: THREE.Object3D): THREE.Mesh | null {
+    if (mesh instanceof THREE.Group) {
+      for (const child of mesh.children) {
+        if (child instanceof THREE.Mesh && child.userData.isHealthBar) {
+          return child;
+        }
+      }
+    }
+    return null;
+  }
+  
+  // Get all combat NPCs
+  public getCombatNPCs(): CombatNPC[] {
+    return this.npcs.filter(npc => 'health' in npc) as CombatNPC[];
   }
 }
 

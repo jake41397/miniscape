@@ -32,6 +32,9 @@ interface Player {
   z: number;
   inventory: InventoryItem[];
   equippedItem?: InventoryItem; // Currently equipped item
+  health?: number; // Player's current health
+  maxHealth?: number; // Player's maximum health
+  inCombat?: boolean; // Whether player is in combat
 }
 
 interface InventoryItem {
@@ -107,6 +110,29 @@ let worldItemHandler: WorldItemHandler;
 let chatHandler: ChatHandler;
 let resourceHandler: ResourceHandler;
 let smithingHandler: SmithingHandler;
+
+// Define NPC interface
+interface NPC {
+  id: string;
+  type: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  level: number;
+  health: number;
+  maxHealth: number;
+  isAggressive: boolean;
+  isAttackable: boolean;
+  respawnTime: number; // ms
+  experienceReward: number;
+  lastAttackTime?: number; // Used internally for combat cooldown
+  lastAttacker?: string; // Socket ID of last attacker
+  combatState: 'idle' | 'engaged' | 'dead';
+}
+
+// Store for NPCs
+let npcs: {[npcId: string]: NPC} = {};
 
 // Initialize handlers with IO instance
 const initializeHandlers = (io: Server) => {
@@ -198,9 +224,65 @@ const initializeGameState = async (): Promise<void> => {
     // Load resource nodes
     resourceNodes = await loadResourceNodes();
     console.log(`Loaded ${resourceNodes.length} resource nodes from database`);
+    
+    // Initialize NPCs
+    initializeNPCs();
+    
+    console.log('Game state initialized successfully');
   } catch (error) {
     console.error('Failed to initialize game state:', error instanceof Error ? error : new Error(String(error)));
   }
+};
+
+// Initialize the NPCs
+const initializeNPCs = (): void => {
+  console.log('Initializing NPCs...');
+  
+  // Create 3 rat NPCs - make them all attackable and slightly aggressive
+  const rat1 = createNPC('rat', 'Rat', 15, 0, 15, 1, true, true);
+  const rat2 = createNPC('rat', 'Rat', 25, 0, 25, 1, true, true);
+  const rat3 = createNPC('rat', 'Rat', 35, 0, 35, 1, true, true);
+  
+  // Add to NPCs store
+  npcs[rat1.id] = rat1;
+  npcs[rat2.id] = rat2;
+  npcs[rat3.id] = rat3;
+  
+  console.log(`Created ${Object.keys(npcs).length} NPCs:`);
+  Object.values(npcs).forEach(npc => {
+    console.log(`- ${npc.name}: lvl ${npc.level}, hp ${npc.health}/${npc.maxHealth}, aggressive: ${npc.isAggressive}, attackable: ${npc.isAttackable}`);
+  });
+};
+
+// Create a new NPC
+const createNPC = (
+  type: string,
+  name: string,
+  x: number,
+  y: number,
+  z: number,
+  level: number = 1,
+  isAggressive: boolean = false,
+  isAttackable: boolean = true
+): NPC => {
+  const id = `${type}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  
+  return {
+    id,
+    type,
+    name,
+    x,
+    y,
+    z,
+    level,
+    health: level * 10, // Simple formula: level * 10 health
+    maxHealth: level * 10,
+    isAggressive,
+    isAttackable,
+    respawnTime: 10000, // 10 seconds respawn time
+    experienceReward: level * 20, // Simple formula: level * 20 XP
+    combatState: 'idle'
+  };
 };
 
 // Setup all socket handlers
@@ -468,6 +550,19 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     
     // Also broadcast to all clients to ensure consistency
     broadcastPlayerCount(io);
+
+    // Set default player health values
+    if (newPlayer) {
+      newPlayer.health = 100;
+      newPlayer.maxHealth = 100;
+      newPlayer.inCombat = false;
+      
+      // Send initial health to client
+      socket.emit('updatePlayerHealth', {
+        current: newPlayer.health,
+        max: newPlayer.maxHealth
+      });
+    }
 
     // Handle player movement
     socket.on('playerMove', async (position: PlayerPosition) => {
@@ -1240,6 +1335,124 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       console.log(`Player ${socket.id} stopped gathering`);
       resourceHandler.stopGathering(socket.id);
     });
+
+    // Setup NPC handlers
+    setupNPCHandlers(io, socket);
+
+    // Handle player health updates
+    socket.on('updateHealth', (data: { amount: number }) => {
+      try {
+        const player = players[socket.id];
+        if (!player) {
+          console.warn(`[${socket.id}] Health update failed: player not found`);
+          return;
+        }
+        
+        // Ensure player has health properties
+        if (player.health === undefined) player.health = 100;
+        if (player.maxHealth === undefined) player.maxHealth = 100;
+        
+        // Update health (negative amount = damage, positive = healing)
+        const oldHealth = player.health;
+        player.health = Math.max(0, Math.min(player.maxHealth, player.health + data.amount));
+        
+        // Check if player took damage
+        if (data.amount < 0) {
+          player.inCombat = true;
+          
+          // Send combat message to player
+          socket.emit('chatMessage', {
+            content: `You take ${Math.abs(data.amount)} damage.`, 
+            type: 'combat',
+            timestamp: Date.now()
+          });
+          
+          // Check if player died
+          if (player.health <= 0) {
+            handlePlayerDeath(io, socket, player);
+          }
+        } else if (data.amount > 0) {
+          // Healing message
+          socket.emit('chatMessage', {
+            content: `You heal for ${data.amount} health.`, 
+            type: 'system',
+            timestamp: Date.now()
+          });
+        }
+        
+        // Send updated health to client - send both event types for compatibility
+        socket.emit('updateHealth', {
+          amount: data.amount
+        });
+        
+        // Send complete health update with current and max values
+        socket.emit('updatePlayerHealth', {
+          current: player.health,
+          max: player.maxHealth
+        });
+        
+        console.log(`[${socket.id}] Player ${player.name} health ${oldHealth} -> ${player.health} (${data.amount < 0 ? 'damage' : 'heal'}: ${Math.abs(data.amount)})`);
+      } catch (error) {
+        console.error(`[${socket.id}] Error processing health update:`, error);
+      }
+    });
+
+    // Handle player dealing damage to an NPC
+    socket.on('damageNPC', (data: { npcId: string, damage: number }) => {
+      try {
+        console.log(`[COMBAT] Player ${socket.id} attempting to damage NPC ${data.npcId} for ${data.damage} damage`);
+        
+        const { npcId, damage } = data;
+        const npc = npcs[npcId];
+        const player = players[socket.id];
+        
+        if (!npc || !player) {
+          console.warn(`[${socket.id}] Damage attempt on non-existent NPC or player not found.`);
+          return;
+        }
+        
+        // Check if NPC is in combat state
+        if (npc.combatState !== 'engaged') {
+          console.log(`[${socket.id}] NPC ${npcId} is not in combat.`);
+          return;
+        }
+        
+        // Check if the attacker is the same player
+        if (npc.lastAttacker !== socket.id) {
+          console.log(`[${socket.id}] Player is not the attacker of NPC ${npcId}.`);
+          return;
+        }
+        
+        // Apply damage
+        const oldHealth = npc.health;
+        npc.health = Math.max(0, npc.health - damage);
+        
+        console.log(`[COMBAT] NPC ${npc.name} health reduced from ${oldHealth} to ${npc.health} (damage: ${damage})`);
+        
+        // Broadcast updated health
+        io.emit('npcStateUpdate', { 
+          id: npc.id, 
+          health: npc.health, 
+          maxHealth: npc.maxHealth 
+        });
+        
+        // Send combat message to player
+        socket.emit('chatMessage', {
+          content: `You hit ${npc.name} for ${damage} damage.`, 
+          type: 'combat',
+          timestamp: Date.now()
+        });
+        
+        console.log(`[${socket.id}] Player ${player.name} dealt ${damage} damage to NPC ${npc.name} (${npcId}). Health: ${npc.health}/${npc.maxHealth}`);
+        
+        // Check if NPC is defeated
+        if (npc.health <= 0) {
+          handleNPCDefeat(io, socket, npc, player);
+        }
+      } catch (error) {
+        console.error(`[${socket.id}] Error processing NPC damage:`, error);
+      }
+    });
   } catch (error) {
     console.error(`Error in handleSingleConnection for ${socket.id}:`, error);
     socket.disconnect();
@@ -1533,6 +1746,306 @@ const handleCleanupCommand = async (io: Server, socket: ExtendedSocket, player: 
     // Update the in-memory worldItems array reference in case of error
     worldItems = [];
   }
+};
+
+// Setup handlers for NPC interactions
+const setupNPCHandlers = (io: Server, socket: ExtendedSocket): void => {
+  // Send all NPCs to the newly connected player
+  socket.emit('updateNPCs', Object.values(npcs));
+  
+  // Handle player attacking an NPC
+  socket.on('attackNPC', (data: { npcId: string }) => {
+    try {
+      const { npcId } = data;
+      const npc = npcs[npcId];
+      const player = players[socket.id];
+      
+      if (!npc || !player) {
+        console.warn(`[${socket.id}] Attack attempt on non-existent NPC or player not found.`);
+        return;
+      }
+      
+      // Check if NPC is attackable and not dead
+      if (!npc.isAttackable || npc.combatState === 'dead') {
+        console.log(`[${socket.id}] NPC ${npcId} is not attackable or is already dead.`);
+        return;
+      }
+      
+      // Check if player is in range
+      const distance = Math.sqrt(
+        Math.pow(player.x - npc.x, 2) +
+        Math.pow(player.z - npc.z, 2)
+      );
+      
+      if (distance > 5) { // 5 unit attack range
+        console.log(`[${socket.id}] Player too far from NPC ${npcId} to attack.`);
+        return;
+      }
+      
+      // Mark NPC as engaged in combat
+      npc.combatState = 'engaged';
+      npc.lastAttacker = socket.id;
+      
+      // Broadcast NPC state update
+      io.emit('npcStateUpdate', { 
+        id: npc.id, 
+        combatState: npc.combatState,
+        health: npc.health,
+        maxHealth: npc.maxHealth,
+        attacker: socket.id
+      });
+      
+      console.log(`[${socket.id}] Player ${player.name} attacked NPC ${npc.name} (${npcId})`);
+      
+      // If NPC is aggressive, it will counter-attack the player
+      if (npc.isAggressive) {
+        console.log(`[${socket.id}] Aggressive NPC ${npc.name} will counter-attack`);
+        
+        // Start NPC attack loop - make it attack faster (every 2 seconds)
+        const attackInterval = setInterval(() => {
+          const player = players[socket.id];
+          if (!player || !socket.connected || npc.combatState !== 'engaged') {
+            // Stop attacking if player disconnected or NPC is dead/idle
+            clearInterval(attackInterval);
+            console.log(`[COMBAT] Stopping NPC ${npc.name} attacks - combat ended`);
+            return;
+          }
+          
+          // NPC deals higher damage to player for better visibility
+          const damage = Math.max(2, Math.floor(npc.level * 1.5)); // More damage based on level
+          
+          console.log(`[COMBAT] NPC ${npc.name} attacking player ${player.name} for ${damage} damage`);
+          
+          // Send damage to player
+          socket.emit('updateHealth', {
+            amount: -damage // Negative for damage
+          });
+          
+          // Send attack message to player
+          socket.emit('chatMessage', {
+            content: `${npc.name} hits you for ${damage} damage!`, 
+            type: 'combat',
+            timestamp: Date.now()
+          });
+          
+          console.log(`[${socket.id}] NPC ${npc.name} deals ${damage} damage to player ${player.name}`);
+        }, 2000); // Attack every 2 seconds instead of 3
+        
+        // Clean up the interval if NPC dies or combat ends
+        const clearAttackInterval = () => {
+          clearInterval(attackInterval);
+          console.log(`[COMBAT] Cleared attack interval for NPC ${npc.name}`);
+        };
+        
+        // Setup one-time listeners for combat end
+        socket.once('disconnect', clearAttackInterval);
+        
+        // Remove attack interval when NPC dies or changes state
+        const npcStateListener = (data: { id: string, combatState?: string }) => {
+          if (data.id === npc.id && data.combatState && data.combatState !== 'engaged') {
+            clearAttackInterval();
+            socket.off('npcStateUpdate', npcStateListener);
+          }
+        };
+        
+        socket.on('npcStateUpdate', npcStateListener);
+      }
+    } catch (error) {
+      console.error(`[${socket.id}] Error processing NPC attack:`, error);
+    }
+  });
+  
+  // Handle player dealing damage to an NPC
+  socket.on('damageNPC', (data: { npcId: string, damage: number }) => {
+    try {
+      console.log(`[COMBAT] Player ${socket.id} attempting to damage NPC ${data.npcId} for ${data.damage} damage`);
+      
+      const { npcId, damage } = data;
+      const npc = npcs[npcId];
+      const player = players[socket.id];
+      
+      if (!npc || !player) {
+        console.warn(`[${socket.id}] Damage attempt on non-existent NPC or player not found.`);
+        return;
+      }
+      
+      // Check if NPC is in combat state
+      if (npc.combatState !== 'engaged') {
+        console.log(`[${socket.id}] NPC ${npcId} is not in combat.`);
+        return;
+      }
+      
+      // Check if the attacker is the same player
+      if (npc.lastAttacker !== socket.id) {
+        console.log(`[${socket.id}] Player is not the attacker of NPC ${npcId}.`);
+        return;
+      }
+      
+      // Apply damage
+      const oldHealth = npc.health;
+      npc.health = Math.max(0, npc.health - damage);
+      
+      console.log(`[COMBAT] NPC ${npc.name} health reduced from ${oldHealth} to ${npc.health} (damage: ${damage})`);
+      
+      // Broadcast updated health
+      io.emit('npcStateUpdate', { 
+        id: npc.id, 
+        health: npc.health, 
+        maxHealth: npc.maxHealth 
+      });
+      
+      // Send combat message to player
+      socket.emit('chatMessage', {
+        content: `You hit ${npc.name} for ${damage} damage.`, 
+        type: 'combat',
+        timestamp: Date.now()
+      });
+      
+      console.log(`[${socket.id}] Player ${player.name} dealt ${damage} damage to NPC ${npc.name} (${npcId}). Health: ${npc.health}/${npc.maxHealth}`);
+      
+      // Check if NPC is defeated
+      if (npc.health <= 0) {
+        handleNPCDefeat(io, socket, npc, player);
+      }
+    } catch (error) {
+      console.error(`[${socket.id}] Error processing NPC damage:`, error);
+    }
+  });
+};
+
+// Handle NPC defeat
+const handleNPCDefeat = (io: Server, socket: ExtendedSocket, npc: NPC, player: Player): void => {
+  // Mark NPC as dead
+  npc.combatState = 'dead';
+  
+  // Broadcast NPC death
+  io.emit('npcStateUpdate', { 
+    id: npc.id, 
+    combatState: npc.combatState 
+  });
+  
+  console.log(`[${socket.id}] NPC ${npc.name} (${npc.id}) was defeated by player ${player.name}`);
+  
+  // Send victory message to player
+  socket.emit('chatMessage', {
+    content: `You have defeated ${npc.name}!`, 
+    type: 'combat',
+    timestamp: Date.now()
+  });
+  
+  // Award experience to player
+  if (socket.user) {
+    const skillType = "attack"; // Default to attack skill for now
+    const xpAmount = npc.experienceReward;
+    
+    socket.emit('updatePlayerSkill', {
+      skillType,
+      xpAmount
+    });
+    
+    // Send XP reward message
+    socket.emit('chatMessage', {
+      content: `You gained ${xpAmount} ${skillType} XP.`, 
+      type: 'experience',
+      timestamp: Date.now()
+    });
+    
+    console.log(`[${socket.id}] Awarded ${xpAmount} ${skillType} XP to player for defeating ${npc.name}`);
+  }
+  
+  // Set respawn timer
+  setTimeout(() => {
+    respawnNPC(io, npc);
+  }, npc.respawnTime);
+};
+
+// Respawn a defeated NPC
+const respawnNPC = (io: Server, npc: NPC): void => {
+  // Reset NPC state
+  npc.health = npc.maxHealth;
+  npc.combatState = 'idle';
+  npc.lastAttacker = undefined;
+  
+  // Broadcast NPC respawn
+  io.emit('npcStateUpdate', { 
+    id: npc.id, 
+    combatState: npc.combatState,
+    health: npc.health,
+    maxHealth: npc.maxHealth
+  });
+  
+  // Notify nearby players that NPC has respawned
+  // Find players within a certain range
+  const nearbyPlayers = Object.entries(players).filter(([socketId, player]) => {
+    const distance = Math.sqrt(
+      Math.pow(player.x - npc.x, 2) + 
+      Math.pow(player.z - npc.z, 2)
+    );
+    return distance < 20; // 20 units is a reasonable "nearby" distance
+  });
+  
+  // Send notification to nearby players
+  nearbyPlayers.forEach(([socketId, player]) => {
+    io.to(socketId).emit('chatMessage', {
+      content: `A ${npc.name} has appeared nearby.`,
+      type: 'system',
+      timestamp: Date.now()
+    });
+  });
+  
+  console.log(`NPC ${npc.name} (${npc.id}) has respawned`);
+};
+
+// Handle player death
+const handlePlayerDeath = (io: Server, socket: ExtendedSocket, player: Player): void => {
+  console.log(`[${socket.id}] Player ${player.name} has died`);
+  
+  // Reset combat state
+  player.inCombat = false;
+  
+  // Send death message
+  socket.emit('chatMessage', {
+    content: `You have died! Respawning at Lumbridge...`, 
+    type: 'system',
+    timestamp: Date.now()
+  });
+  
+  // Teleport player to spawn
+  player.x = 0;
+  player.y = 0;
+  player.z = 0;
+  
+  // Reset health
+  player.health = player.maxHealth;
+  
+  // Notify client of death and teleport
+  socket.emit('playerDeath', {
+    respawnPosition: { x: player.x, y: player.y, z: player.z }
+  });
+  
+  // Send updated position to all clients
+  io.emit('playerMove', {
+    id: socket.id,
+    x: player.x,
+    y: player.y,
+    z: player.z,
+    timestamp: Date.now()
+  });
+  
+  // Update player health
+  socket.emit('updatePlayerHealth', {
+    current: player.health,
+    max: player.maxHealth
+  });
+  
+  // Send respawn message after a short delay
+  setTimeout(() => {
+    socket.emit('chatMessage', {
+      content: `You have respawned in Lumbridge with full health.`, 
+      type: 'system',
+      timestamp: Date.now()
+    });
+  }, 1000);
 };
 
 // Export functions as ES modules
