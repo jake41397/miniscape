@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 import { loadResourceNodes, savePlayerInventory, savePlayerSkills } from '../../models/gameModel';
 import { ExtendedSocket, PlayersStore } from '../types';
+import { ExperienceHandler, SkillType } from './ExperienceHandler';
 
 interface ResourceNode {
   id: string;
@@ -21,10 +22,12 @@ export class ResourceHandler {
   private resourceNodes: ResourceNode[] = [];
   private unavailableResources: Map<string, number> = new Map();
   private gatheringPlayers: Map<string, { resourceId: string, intervalId: NodeJS.Timeout }> = new Map();
+  private experienceHandler: ExperienceHandler;
   
-  constructor(io: Server, players: PlayersStore) {
+  constructor(io: Server, players: PlayersStore, experienceHandler: ExperienceHandler) {
     this.io = io;
     this.players = players;
+    this.experienceHandler = experienceHandler;
   }
   
   /**
@@ -465,87 +468,180 @@ export class ResourceHandler {
   }
   
   /**
-   * Handle tree gathering (get logs)
+   * Handle tree gathering (chopping trees)
    */
   private async handleTreeGathering(socket: ExtendedSocket, resourceNode: ResourceNode): Promise<void> {
     const player = this.players[socket.id];
     
-    // Generate logs (1 log per gathering)
-    const logs = {
+    // Get tree type from metadata
+    const treeType = resourceNode.metadata?.treeType || 'normal_tree';
+    
+    // Determine log type based on tree type
+    const logType = treeType.includes('normal') ? 'logs' : 
+                    treeType.includes('oak') ? 'oak_logs' :
+                    treeType.includes('willow') ? 'willow_logs' :
+                    treeType.includes('maple') ? 'maple_logs' :
+                    treeType.includes('yew') ? 'yew_logs' : 'logs';
+    
+    // Add to player inventory
+    player.inventory.push({
       id: uuidv4(),
-      type: 'log',
+      type: logType,
       quantity: 1
-    };
+    });
     
-    // Add to player's inventory
-    player.inventory.push(logs);
+    // Determine XP gain based on tree type
+    let xpGained = 0;
+    const xpBase = treeType.includes('normal') ? 'normal' :
+                   treeType.includes('oak') ? 'oak' :
+                   treeType.includes('willow') ? 'willow' :
+                   treeType.includes('maple') ? 'maple' :
+                   treeType.includes('yew') ? 'yew' : 'normal';
     
-    // Send inventory update to client
-    socket.emit('inventoryUpdate', player.inventory);
+    // Get XP reward from ExperienceHandler
+    xpGained = this.experienceHandler.getXpReward(SkillType.WOODCUTTING, xpBase);
     
-    // Emit resource gathered event
+    // Use ExperienceHandler to add experience
+    if (xpGained > 0) {
+      const xpResult = this.experienceHandler.addExperience(player, SkillType.WOODCUTTING, xpGained);
+      
+      if (xpResult && xpResult.leveledUp) {
+        console.log(`Player ${socket.id} leveled up Woodcutting to level ${xpResult.newLevel}!`);
+        socket.emit('levelUp', {
+          skill: SkillType.WOODCUTTING,
+          level: xpResult.newLevel
+        });
+        socket.emit('chatMessage', {
+          content: `Congratulations! You've reached Woodcutting level ${xpResult.newLevel}!`,
+          type: 'system',
+          timestamp: Date.now()
+        });
+      }
+      
+      // Emit experience gained event
+      socket.emit('experienceGained', {
+        skill: SkillType.WOODCUTTING,
+        experience: xpGained,
+        totalExperience: xpResult?.newExperience,
+        level: xpResult?.newLevel
+      });
+      
+      // Save updated skills
+      if (socket.user && socket.user.id) {
+        await savePlayerSkills(socket.user.id, player.skills);
+      }
+    }
+    
+    // Send resource gathered event to client
     socket.emit('resourceGathered', {
       resourceId: resourceNode.id,
-      resourceType: resourceNode.type,
-      item: logs,
+      resourceType: 'tree',
+      item: { type: logType, quantity: 1 },
       remainingResources: resourceNode.remainingResources
     });
     
-    // Send success message to chat
+    // Send inventory update
+    socket.emit('inventoryUpdate', player.inventory);
+    
+    // Send chat message about getting logs
     socket.emit('chatMessage', { 
-      content: `You get some logs. (${resourceNode.remainingResources} left)`, 
+      content: `You get some ${logType.replace('_', ' ')}. (${resourceNode.remainingResources} left)`, 
       type: 'action', 
       timestamp: Date.now() 
     });
     
-    console.log(`Player ${socket.id} gathered logs from ${resourceNode.id}`);
-    
-    // Save inventory update to database if user is authenticated
+    // Save inventory
     if (socket.user && socket.user.id) {
       await savePlayerInventory(socket.user.id, player.inventory);
     }
   }
   
   /**
-   * Handle rock gathering (get coal/ore)
+   * Handle rock gathering (mining ores)
    */
   private async handleRockGathering(socket: ExtendedSocket, resourceNode: ResourceNode): Promise<void> {
     const player = this.players[socket.id];
     
-    // Determine the correct ore type based on the resource metadata
-    const oreType = this.getItemTypeFromResource(resourceNode);
+    // Get rock type from metadata
+    const rockType = resourceNode.metadata?.rockType || 'stone_rock';
     
-    // Generate ore (1 ore per gathering)
-    const ore = {
+    // Determine ore type based on rock type
+    const oreType = rockType.includes('copper') ? 'copper_ore' : 
+                    rockType.includes('tin') ? 'tin_ore' :
+                    rockType.includes('iron') ? 'iron_ore' :
+                    rockType.includes('coal') ? 'coal' :
+                    rockType.includes('gold') ? 'gold_ore' :
+                    rockType.includes('mithril') ? 'mithril_ore' : 'stone';
+    
+    // Add to player inventory
+    player.inventory.push({
       id: uuidv4(),
       type: oreType,
       quantity: 1
-    };
+    });
     
-    // Add to player's inventory
-    player.inventory.push(ore);
+    // Determine XP gain based on ore type
+    let xpGained = 0;
+    const xpBase = oreType.includes('copper') ? 'copper' :
+                   oreType.includes('tin') ? 'tin' :
+                   oreType.includes('iron') ? 'iron' :
+                   oreType.includes('coal') ? 'coal' :
+                   oreType.includes('gold') ? 'gold' :
+                   oreType.includes('mithril') ? 'mithril' : 'copper';
     
-    // Send inventory update to client
-    socket.emit('inventoryUpdate', player.inventory);
+    // Get XP reward from ExperienceHandler
+    xpGained = this.experienceHandler.getXpReward(SkillType.MINING, xpBase);
     
-    // Emit resource gathered event
+    // Use ExperienceHandler to add experience
+    if (xpGained > 0) {
+      const xpResult = this.experienceHandler.addExperience(player, SkillType.MINING, xpGained);
+      
+      if (xpResult && xpResult.leveledUp) {
+        console.log(`Player ${socket.id} leveled up Mining to level ${xpResult.newLevel}!`);
+        socket.emit('levelUp', {
+          skill: SkillType.MINING,
+          level: xpResult.newLevel
+        });
+        socket.emit('chatMessage', {
+          content: `Congratulations! You've reached Mining level ${xpResult.newLevel}!`,
+          type: 'system',
+          timestamp: Date.now()
+        });
+      }
+      
+      // Emit experience gained event
+      socket.emit('experienceGained', {
+        skill: SkillType.MINING,
+        experience: xpGained,
+        totalExperience: xpResult?.newExperience,
+        level: xpResult?.newLevel
+      });
+      
+      // Save updated skills
+      if (socket.user && socket.user.id) {
+        await savePlayerSkills(socket.user.id, player.skills);
+      }
+    }
+    
+    // Send resource gathered event to client
     socket.emit('resourceGathered', {
       resourceId: resourceNode.id,
-      resourceType: resourceNode.type,
-      item: ore,
+      resourceType: 'rock',
+      item: { type: oreType, quantity: 1 },
       remainingResources: resourceNode.remainingResources
     });
     
-    // Send success message to chat
+    // Send inventory update
+    socket.emit('inventoryUpdate', player.inventory);
+    
+    // Send chat message about getting ore
     socket.emit('chatMessage', { 
       content: `You get some ${oreType.replace('_', ' ')}. (${resourceNode.remainingResources} left)`, 
       type: 'action', 
       timestamp: Date.now() 
     });
     
-    console.log(`Player ${socket.id} gathered ${oreType} from ${resourceNode.id}`);
-    
-    // Save inventory update to database if user is authenticated
+    // Save inventory
     if (socket.user && socket.user.id) {
       await savePlayerInventory(socket.user.id, player.inventory);
     }

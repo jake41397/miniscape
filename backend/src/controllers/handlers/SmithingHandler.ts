@@ -1,28 +1,8 @@
 import { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 import { savePlayerInventory, savePlayerSkills } from '../../models/gameModel';
-
-// Define the types needed
-interface Player {
-  id: string;
-  x: number;
-  y: number;
-  z: number;
-  inventory: {
-    id: string;
-    type: string;
-    quantity?: number;
-    count?: number;
-  }[];
-  skills?: {
-    [key: string]: {
-      level: number;
-      experience: number;
-      xp?: number;
-    };
-  };
-  userId?: string;
-}
+import { Player } from '../types';
+import { ExperienceHandler, SkillType } from './ExperienceHandler';
 
 // Define item types
 enum ItemType {
@@ -54,7 +34,7 @@ export enum SmithingMode {
   SMITHING = 'smithing'
 }
 
-// Define smelting recipes
+// Define smithing recipe interface
 interface SmithingRecipe {
   resultItem: ItemType;
   requiredLevel: number;
@@ -187,12 +167,14 @@ const SMITHING_RECIPES: { [key: string]: SmithingRecipe } = {
 
 export class SmithingHandler {
   private io: Server;
-  private players: Record<string, any>;
+  private players: Record<string, Player>;
   private playerSmithing: Record<string, NodeJS.Timeout> = {};
+  private experienceHandler: ExperienceHandler;
 
-  constructor(io: Server, players: Record<string, any>) {
+  constructor(io: Server, players: Record<string, Player>, experienceHandler: ExperienceHandler) {
     this.io = io;
     this.players = players;
+    this.experienceHandler = experienceHandler;
   }
 
   /**
@@ -203,6 +185,7 @@ export class SmithingHandler {
     
     // Remove any existing listeners
     socket.removeAllListeners('smeltBronzeBar');
+    socket.removeAllListeners('startSmithing');
     
     // Add handler for bronze bar smelting
     socket.on('smeltBronzeBar', (data: { inventory: any[], skills: any, recipe?: string }, callback: Function) => {
@@ -295,53 +278,71 @@ export class SmithingHandler {
           }
         });
 
-        // Add bronze bar to inventory
-        const existingBarIndex = player.inventory.findIndex((item: any) => 
-          item.type.toLowerCase() === recipe.resultItem.toLowerCase()
-        );
+        // Add resulting bar to inventory, ensuring correct format
+        const existingBarIndex = player.inventory.findIndex((item) => item.type === recipe.resultItem);
         if (existingBarIndex !== -1) {
           const existingBar = player.inventory[existingBarIndex];
-          if (existingBar.count !== undefined) {
-            existingBar.count += 1;
-          } else if (existingBar.quantity !== undefined) {
-            existingBar.quantity += 1;
-          }
+          existingBar.quantity = (existingBar.quantity || 0) + 1; 
         } else {
           player.inventory.push({
+            id: uuidv4(),
             type: recipe.resultItem,
-            count: 1
+            quantity: 1
           });
         }
 
-        // Add experience
-        if (!player.skills) {
-          player.skills = {};
-        }
-        if (!player.skills.smithing) {
-          player.skills.smithing = { level: 1, xp: 0 };
-        }
+        // --- START REFACTORED XP LOGIC ---
+        const experienceToAdd = recipe.experienceReward;
+        let xpGained = 0;
 
-        // Add experience and check for level up
-        if (player.skills.smithing.xp !== undefined) {
-          player.skills.smithing.xp += recipe.experienceReward;
-          const newLevel = Math.floor(1 + Math.sqrt(player.skills.smithing.xp / 100));
-          if (newLevel > player.skills.smithing.level) {
-            player.skills.smithing.level = newLevel;
-            socket.emit('levelUp', {
-              skill: 'smithing',
-              level: newLevel
+        if (experienceToAdd > 0) {
+          // Use the centralized ExperienceHandler
+          const xpResult = this.experienceHandler.addExperience(player, SkillType.SMITHING, experienceToAdd);
+
+          if (xpResult) {
+            xpGained = experienceToAdd;
+
+            // Check for level up using the result
+            if (xpResult.leveledUp) {
+              console.log(`[SMITHING] Player ${socket.id} leveled up Smithing to level ${xpResult.newLevel}!`);
+              socket.emit('levelUp', {
+                skill: SkillType.SMITHING,
+                level: xpResult.newLevel
+              });
+              socket.emit('chatMessage', { 
+                content: `Congratulations! You've reached Smithing level ${xpResult.newLevel}!`, 
+                type: 'system', 
+                timestamp: Date.now() 
+              });
+            }
+
+            // Emit experience gained event
+            socket.emit('experienceGained', {
+              skill: SkillType.SMITHING,
+              experience: experienceToAdd,
+              totalExperience: xpResult.newExperience,
+              level: xpResult.newLevel
             });
+
+            // Save skills (ExperienceHandler modified player object directly)
+            if (player.userId) {
+              savePlayerSkills(player.userId, player.skills)
+                .catch((error: Error) => console.error('[SMITHING] Error saving player skills:', error));
+            } else {
+               console.warn(`[SMITHING] Player ${socket.id} not authenticated, skills not saved.`);
+            }
+          } else {
+             console.warn(`[SMITHING] addExperience returned null for player ${socket.id}. XP not added.`);
           }
         }
+        // --- END REFACTORED XP LOGIC ---
 
-        console.log(`[SMITHING] Successfully smelted bronze bar for player ${socket.id}`);
+        console.log(`[SMITHING] Successfully smelted bronze bar for player ${socket.id}, gained ${xpGained} XP.`);
 
-        // Save player data
+        // Save player inventory
         if (player.userId) {
           savePlayerInventory(player.userId, player.inventory)
             .catch((error: Error) => console.error('[SMITHING] Error saving player inventory:', error));
-          savePlayerSkills(player.userId, player.skills)
-            .catch((error: Error) => console.error('[SMITHING] Error saving player skills:', error));
         }
 
         // Send success response with updated inventory
@@ -361,5 +362,8 @@ export class SmithingHandler {
         });
       }
     });
+
+    // Add handler for smithing items from bars
+    // ... implement startSmithing handler if needed ...
   }
 } 

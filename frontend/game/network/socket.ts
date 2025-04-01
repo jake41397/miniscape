@@ -26,6 +26,8 @@ export interface ServerToClientEvents {
   checkPlayersSync: (playerIds: string[], callback: (missingPlayerIds: string[]) => void) => void;
   skillUpdate: (skillData: { skillType: string, level: number, experience: number }) => void;
   playerData: (playerData: Player) => void;
+  experienceGained: (data: { skill: string, experience: number, totalExperience: number, level: number }) => void;
+  levelUp: (data: { skill: string, level: number }) => void;
 }
 
 export interface ClientToServerEvents {

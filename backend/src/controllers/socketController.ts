@@ -14,6 +14,7 @@ import { InventoryHandler } from './handlers/InventoryHandler';
 import { WorldItemHandler } from './handlers/WorldItemHandler';
 import { ChatHandler } from './handlers/ChatHandler';
 import { SmithingHandler } from './handlers/SmithingHandler';
+import { ExperienceHandler } from './handlers/ExperienceHandler';
 
 // Define interfaces for type safety
 interface WorldBounds {
@@ -110,6 +111,7 @@ let worldItemHandler: WorldItemHandler;
 let chatHandler: ChatHandler;
 let resourceHandler: ResourceHandler;
 let smithingHandler: SmithingHandler;
+let experienceHandler: ExperienceHandler;
 
 // Define NPC interface
 interface NPC {
@@ -138,13 +140,16 @@ let npcs: {[npcId: string]: NPC} = {};
 const initializeHandlers = (io: Server) => {
   console.log('[SOCKET INIT] Initializing handlers');
   
+  // Create the ExperienceHandler first, as others depend on it
+  experienceHandler = new ExperienceHandler();
+  
   inventoryHandler = new InventoryHandler(io, players);
   worldItemHandler = new WorldItemHandler(io, players);
   chatHandler = new ChatHandler(io, players);
-  resourceHandler = new ResourceHandler(io, players);
-  smithingHandler = new SmithingHandler(io, players);
+  resourceHandler = new ResourceHandler(io, players, experienceHandler);
+  smithingHandler = new SmithingHandler(io, players, experienceHandler);
   
-  console.log('[SOCKET INIT] Handlers initialized successfully, smithingHandler created');
+  console.log('[SOCKET INIT] Handlers initialized successfully');
 };
 
 // Add a global listener for testing
@@ -331,10 +336,22 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       socket.removeAllListeners();
     });
     
+    // Ensure experienceHandler exists
+    if (!experienceHandler) {
+      console.error('[SOCKET CONNECT] ExperienceHandler not initialized, creating it now');
+      experienceHandler = new ExperienceHandler();
+    }
+    
     // Ensure smithingHandler exists
     if (!smithingHandler) {
       console.error('[SOCKET CONNECT] SmithingHandler not initialized, creating it now');
-      smithingHandler = new SmithingHandler(io, players);
+      smithingHandler = new SmithingHandler(io, players, experienceHandler);
+    }
+    
+    // Ensure resourceHandler exists
+    if (!resourceHandler) {
+      console.error('[SOCKET CONNECT] ResourceHandler not initialized, creating it now');
+      resourceHandler = new ResourceHandler(io, players, experienceHandler);
     }
     
     // Setup other handlers with the correct method names

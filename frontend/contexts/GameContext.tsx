@@ -186,6 +186,45 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         updatePlayerSkill(skillData.skillType, skillData.level, skillData.experience);
       });
 
+      // Handle experience gained events from server
+      socket.on('experienceGained', (data: { 
+        skill: string, 
+        experience: number, 
+        totalExperience: number, 
+        level: number 
+      }) => {
+        console.log(`Experience gained: ${data.experience} in ${data.skill}`);
+        updatePlayerSkill(data.skill, data.level, data.totalExperience);
+      });
+
+      // Handle level up events from server
+      socket.on('levelUp', (data: { skill: string, level: number }) => {
+        console.log(`Level up: ${data.skill} to level ${data.level}`);
+        
+        // Update the skill level
+        setGameState(prevState => {
+          if (!prevState.player || !prevState.player.skills) return prevState;
+
+          const currentSkill = prevState.player.skills[data.skill] || { level: 1, experience: 0 };
+          
+          const updatedSkills = {
+            ...prevState.player.skills,
+            [data.skill]: { 
+              level: data.level,
+              experience: currentSkill.experience  // Keep the current experience value
+            }
+          };
+
+          return {
+            ...prevState,
+            player: {
+              ...prevState.player,
+              skills: updatedSkills
+            }
+          };
+        });
+      });
+
       socket.on('playerData', (playerData: Player) => {
         setGameState(prev => ({
           ...prev,
@@ -213,6 +252,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           socket.off('playerCount');
           socket.off('inventoryUpdate');
           socket.off('skillUpdate');
+          socket.off('experienceGained');
+          socket.off('levelUp');
           socket.off('playerData');
         }
         document.removeEventListener('inventory-updated', handleCustomInventoryUpdate as EventListener);
