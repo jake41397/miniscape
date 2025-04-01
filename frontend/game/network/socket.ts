@@ -31,7 +31,14 @@ export interface ServerToClientEvents {
 export interface ClientToServerEvents {
   playerMove: (position: { x: number, y: number, z: number }) => void;
   chat: (text: string) => void;
-  dropItem: (item: { itemId: string, itemType: string }) => void;
+  dropItem: (item: { 
+    itemId: string, 
+    itemType: string, 
+    x: number, 
+    y: number, 
+    z: number,
+    clientDropId: string // Added clientDropId for tracking
+  }) => void;
   pickup: (dropId: string) => void;
   gather: (resourceId: string) => void;
   getPlayerData: (playerId: string, callback: (player: Player | null) => void) => void;
