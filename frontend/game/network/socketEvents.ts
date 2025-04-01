@@ -41,7 +41,8 @@ interface ServerToClientEvents {
   error: (error: { message: string }) => void;
   playerData: (data: any) => void;
   zoneInfo: (data: any) => void;
-  playerCount: (count: number) => void;
+  playerCount: (data: { count: number }) => void;
+  skillUpdate: (data: { skillType: string, level: number, experience: number }) => void;
   ping: (startTime: number, callback: (startTime: number) => void) => void;
   initPlayers: (players: any[]) => void;
 }

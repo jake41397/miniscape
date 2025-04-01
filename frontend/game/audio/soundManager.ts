@@ -219,6 +219,11 @@ const setEnabled = (enabled: boolean): void => {
   }
 };
 
+// Get the current sound enabled state
+const isEnabled = (): boolean => {
+  return soundEnabled;
+};
+
 // Export the sound manager API
 const soundManager = {
   initialize,
@@ -226,7 +231,8 @@ const soundManager = {
   stop,
   setMasterVolume,
   setCategoryVolume,
-  setEnabled
+  setEnabled,
+  isEnabled
 };
 
 // Initialize on load

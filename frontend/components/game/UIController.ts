@@ -1,10 +1,12 @@
+import React from 'react';
 import { Socket } from 'socket.io-client';
 import { ChatRefHandle } from '../chat/Chat';
 import { SocketController } from './SocketController';
 import soundManager from '../../game/audio/soundManager';
+import { SoundCategory } from '../../game/audio/soundManager';
 
 interface ChatMessage {
-  type: 'self' | 'other' | 'system';
+  type: 'self' | 'other' | 'system' | 'player';
   text: string;
   sender?: string;
 }
@@ -32,6 +34,7 @@ export class UIController {
   
   // Keep local message history
   private chatMessages: ChatMessage[] = [];
+  private soundEnabled: boolean = true;
   
   constructor(options: UIControllerOptions) {
     this.chatRef = options.chatRef;
@@ -66,9 +69,8 @@ export class UIController {
   }
   
   public toggleSound(): void {
-    const enabled = soundManager.isEnabled();
-    soundManager.setEnabled(!enabled);
-    this.setSoundEnabled(!enabled);
+    this.soundEnabled = !this.soundEnabled;
+    soundManager.setEnabled(this.soundEnabled);
   }
   
   public toggleCameraInversion(): void {
@@ -133,7 +135,11 @@ export class UIController {
     
     // Play sound for new messages, but not for self messages
     if (chatMessageType !== 'self') {
-      soundManager.play('chatMessage', 0.3); // Quieter volume
+      // Set UI category volume temporarily for this sound
+      soundManager.setCategoryVolume(SoundCategory.UI, 0.3);
+      soundManager.play('chatMessage');
+      // Reset UI category volume
+      soundManager.setCategoryVolume(SoundCategory.UI, 0.8);
     }
   }
   
@@ -207,8 +213,10 @@ export class UIController {
       content: `${playerName} has joined the game.`
     });
     
-    // Play player join sound
-    soundManager.play('playerJoin', 0.3); // Lower volume for this effect
+    // Play player join sound with lower volume
+    soundManager.setCategoryVolume(SoundCategory.UI, 0.3);
+    soundManager.play('playerJoin');
+    soundManager.setCategoryVolume(SoundCategory.UI, 0.8);
   }
   
   public showPlayerLeaveNotification(playerName: string): void {

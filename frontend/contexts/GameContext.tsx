@@ -174,8 +174,8 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setGameState(prev => ({ ...prev, isConnected: false }));
       });
 
-      socket.on('playerCount', (count: number) => {
-        setGameState(prev => ({ ...prev, playerCount: count }));
+      socket.on('playerCount', (data: { count: number }) => {
+        setGameState(prev => ({ ...prev, playerCount: data.count }));
       });
 
       socket.on('inventoryUpdate', (inventory: Item[]) => {

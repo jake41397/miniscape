@@ -226,18 +226,21 @@ export class ResourceController {
     if (data.available !== undefined) {
       // If the mesh exists, update its appearance
       if (node.mesh) {
-        // Get all materials (could be a single material or an array)
-        const materials = Array.isArray(node.mesh.material) 
-          ? node.mesh.material 
-          : [node.mesh.material as THREE.Material];
-        
-        // Update each material
-        materials.forEach(material => {
-          if (material) {
-            material.opacity = data.available ? 1.0 : 0.5;
-            material.transparent = !data.available;
-          }
-        });
+        // Check if the mesh is a Mesh or has materials
+        if (node.mesh instanceof THREE.Mesh) {
+          // Get all materials (could be a single material or an array)
+          const materials = Array.isArray(node.mesh.material) 
+            ? node.mesh.material 
+            : [node.mesh.material as THREE.Material];
+          
+          // Update each material
+          materials.forEach(material => {
+            if (material) {
+              material.opacity = data.available ? 1.0 : 0.5;
+              material.transparent = !data.available;
+            }
+          });
+        }
         
         // Also apply to any children
         node.mesh.traverse((child) => {
@@ -267,15 +270,17 @@ export class ResourceController {
       this.scene.remove(node.mesh);
       
       // Dispose of geometry and materials
-      if (node.mesh.geometry) {
-        node.mesh.geometry.dispose();
-      }
-      
-      if (node.mesh.material) {
-        if (Array.isArray(node.mesh.material)) {
-          node.mesh.material.forEach(m => m.dispose());
-        } else {
-          node.mesh.material.dispose();
+      if (node.mesh instanceof THREE.Mesh) {
+        if (node.mesh.geometry) {
+          node.mesh.geometry.dispose();
+        }
+        
+        if (node.mesh.material) {
+          if (Array.isArray(node.mesh.material)) {
+            node.mesh.material.forEach(m => m.dispose());
+          } else {
+            node.mesh.material.dispose();
+          }
         }
       }
       
@@ -497,15 +502,17 @@ export class ResourceController {
       if (node.mesh) {
         this.scene.remove(node.mesh);
         
-        if (node.mesh.geometry) {
-          node.mesh.geometry.dispose();
-        }
-        
-        if (node.mesh.material) {
-          if (Array.isArray(node.mesh.material)) {
-            node.mesh.material.forEach(m => m.dispose());
-          } else {
-            node.mesh.material.dispose();
+        if (node.mesh instanceof THREE.Mesh) {
+          if (node.mesh.geometry) {
+            node.mesh.geometry.dispose();
+          }
+          
+          if (node.mesh.material) {
+            if (Array.isArray(node.mesh.material)) {
+              node.mesh.material.forEach((m: THREE.Material) => m.dispose());
+            } else {
+              node.mesh.material.dispose();
+            }
           }
         }
       }
@@ -521,15 +528,17 @@ export class ResourceController {
       if (item.mesh) {
         this.scene.remove(item.mesh);
         
-        if (item.mesh.geometry) {
-          item.mesh.geometry.dispose();
-        }
-        
-        if (item.mesh.material) {
-          if (Array.isArray(item.mesh.material)) {
-            item.mesh.material.forEach(m => m.dispose());
-          } else {
-            item.mesh.material.dispose();
+        if (item.mesh instanceof THREE.Mesh) {
+          if (item.mesh.geometry) {
+            item.mesh.geometry.dispose();
+          }
+          
+          if (item.mesh.material) {
+            if (Array.isArray(item.mesh.material)) {
+              item.mesh.material.forEach((m: THREE.Material) => m.dispose());
+            } else {
+              item.mesh.material.dispose();
+            }
           }
         }
       }
@@ -554,16 +563,76 @@ export class ResourceController {
     // Define default resource nodes
     const defaultResources: ResourceNode[] = [
       // Trees in Lumbridge area
-      { id: 'tree-1', type: ResourceType.TREE, x: 10, y: 1, z: 10 },
-      { id: 'tree-2', type: ResourceType.TREE, x: 15, y: 1, z: 15 },
-      { id: 'tree-3', type: ResourceType.TREE, x: 20, y: 1, z: 10 },
+      { 
+        id: 'tree-1', 
+        type: ResourceType.TREE, 
+        x: 10, 
+        y: 1, 
+        z: 10,
+        position: new THREE.Vector3(10, 1, 10),
+        depleteTime: null,
+        respawnTime: 30000, // 30 seconds
+        label: null
+      },
+      { 
+        id: 'tree-2', 
+        type: ResourceType.TREE, 
+        x: 15, 
+        y: 1, 
+        z: 15,
+        position: new THREE.Vector3(15, 1, 15),
+        depleteTime: null,
+        respawnTime: 30000,
+        label: null
+      },
+      { 
+        id: 'tree-3', 
+        type: ResourceType.TREE, 
+        x: 20, 
+        y: 1, 
+        z: 10,
+        position: new THREE.Vector3(20, 1, 10),
+        depleteTime: null,
+        respawnTime: 30000,
+        label: null
+      },
       
       // Rocks in Barbarian Village
-      { id: 'rock-1', type: ResourceType.ROCK, x: -20, y: 1, z: -20 },
-      { id: 'rock-2', type: ResourceType.ROCK, x: -25, y: 1, z: -15 },
+      { 
+        id: 'rock-1', 
+        type: ResourceType.ROCK, 
+        x: -20, 
+        y: 1, 
+        z: -20,
+        position: new THREE.Vector3(-20, 1, -20),
+        depleteTime: null,
+        respawnTime: 30000,
+        label: null
+      },
+      { 
+        id: 'rock-2', 
+        type: ResourceType.ROCK, 
+        x: -25, 
+        y: 1, 
+        z: -15,
+        position: new THREE.Vector3(-25, 1, -15),
+        depleteTime: null,
+        respawnTime: 30000,
+        label: null
+      },
       
       // Fishing spots
-      { id: 'fish-1', type: ResourceType.FISH, x: 30, y: 1, z: -30 },
+      { 
+        id: 'fish-1', 
+        type: ResourceType.FISH, 
+        x: 30, 
+        y: 1, 
+        z: -30,
+        position: new THREE.Vector3(30, 1, -30),
+        depleteTime: null,
+        respawnTime: 30000,
+        label: null
+      },
     ];
     
     console.log(`Created ${defaultResources.length} default resources:`, 

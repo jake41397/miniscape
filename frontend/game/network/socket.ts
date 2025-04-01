@@ -24,6 +24,8 @@ export interface ServerToClientEvents {
   getPlayerResponse: (player: Player | null) => void;
   error: (errorMessage: string) => void;
   checkPlayersSync: (playerIds: string[], callback: (missingPlayerIds: string[]) => void) => void;
+  skillUpdate: (skillData: { skillType: string, level: number, experience: number }) => void;
+  playerData: (playerData: Player) => void;
 }
 
 export interface ClientToServerEvents {
@@ -36,6 +38,10 @@ export interface ClientToServerEvents {
   ping: (callback: () => void) => void;
   updateDisplayName: (data: { name: string }) => void;
   smeltBronzeBar: (data: { inventory: any[], skills: any }, callback: (response: { success: boolean, error?: string, updatedInventory?: any[] }) => void) => void;
+  updatePlayerSkill: (data: { skillType: string, xpAmount: number }) => void;
+  updateInventory: (data: { type: string, count: number }) => void;
+  updateHealth: (data: { amount: number }) => void;
+  playerAction: (data: { type: string, targetId: string, damage: number, combatMode?: string }) => void;
 }
 
 // Create socket instance with better lifecycle management
