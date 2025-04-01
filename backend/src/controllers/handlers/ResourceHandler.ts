@@ -419,14 +419,14 @@ export class ResourceHandler {
       const treeType = metadata?.treeType || 'normal_tree';
       
       // Different logs based on tree type
-      if (treeType === 'normal_tree') return 'logs';
-      if (treeType === 'oak_tree') return 'oak_logs';
-      if (treeType === 'willow_tree') return 'willow_logs';
-      if (treeType === 'maple_tree') return 'maple_logs';
-      if (treeType === 'yew_tree') return 'yew_logs';
-      if (treeType === 'magic_tree') return 'magic_logs';
+      if (treeType === 'normal_tree') return 'log';
+      if (treeType === 'oak_tree') return 'oak_log';
+      if (treeType === 'willow_tree') return 'willow_log';
+      if (treeType === 'maple_tree') return 'maple_log';
+      if (treeType === 'yew_tree') return 'yew_log';
+      if (treeType === 'magic_tree') return 'magic_log';
       
-      return 'logs';
+      return 'log';
     }
     
     if (type === 'rock') {
@@ -477,11 +477,11 @@ export class ResourceHandler {
     const treeType = resourceNode.metadata?.treeType || 'normal_tree';
     
     // Determine log type based on tree type
-    const logType = treeType.includes('normal') ? 'logs' : 
-                    treeType.includes('oak') ? 'oak_logs' :
-                    treeType.includes('willow') ? 'willow_logs' :
-                    treeType.includes('maple') ? 'maple_logs' :
-                    treeType.includes('yew') ? 'yew_logs' : 'logs';
+    const logType = treeType.includes('normal') ? 'log' : 
+                    treeType.includes('oak') ? 'oak_log' :
+                    treeType.includes('willow') ? 'willow_log' :
+                    treeType.includes('maple') ? 'maple_log' :
+                    treeType.includes('yew') ? 'yew_log' : 'log';
     
     // Add to player inventory
     player.inventory.push({
@@ -664,7 +664,7 @@ export class ResourceHandler {
     const logCount = Math.floor(Math.random() * 2) + 1; // 1-2 logs
     const logs = {
       id: uuidv4(),
-      type: 'log',
+      type: 'log', // Use singular form to match ItemType.LOG
       quantity: logCount
     };
     
