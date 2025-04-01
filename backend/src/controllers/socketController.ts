@@ -431,22 +431,9 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     // Broadcast the updated player count
     broadcastPlayerCount(io);
     
-    // Flag to track if this player has a valid position (to prevent automatic position broadcasts)
-    const hasDefaultPosition = isDefaultPosition(newPlayer.x, newPlayer.y, newPlayer.z);
-    
-    // Only broadcast the new player if they don't have the default position
-    // This prevents unnecessary position updates for new or reconnected players
-    if (!hasDefaultPosition) {
-      // Tell all other clients about the new player
-      socket.broadcast.emit('playerJoined', newPlayer);
-      console.log(`Broadcasting new player ${newPlayer.name} (${socket.id}) to other players`);
-    } else {
-      console.log(`Player ${newPlayer.name} (${socket.id}) has default position (0,1,0), skipping initial broadcast`);
-      // We'll broadcast when they move to a valid position
-      
-      // Don't send playerMove events until the client sends a valid position
-      console.log(`Waiting for client ${socket.id} to send a valid position before broadcasting`);
-    }
+    // Always tell all other clients about the new player
+    socket.broadcast.emit('playerJoined', newPlayer);
+    console.log(`Broadcasting new player ${newPlayer.name} (${socket.id}) to other players`);
     
     // Send the new player the list of existing players
     const existingPlayers = Object.values(players).filter(p => p.id !== socket.id);
@@ -471,20 +458,6 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
 
     // Handle player movement
     socket.on('playerMove', async (position: PlayerPosition) => {
-      // Add even more detailed logging with different style to easily see in console
-      console.log(`\n============= SERVER RECEIVED PLAYER MOVE =============`);
-      console.log(`Player ${socket.id} moved:`, {
-        position,
-        rotation: position.rotation?.toFixed(2) || 'undefined',
-        timestamp: position.timestamp ? new Date(position.timestamp).toLocaleTimeString() : 'undefined',
-        username: players[socket.id]?.name || 'Unknown',
-        totalPlayers: Object.keys(players).length,
-        otherPlayerIds: Object.keys(players).filter(id => id !== socket.id),
-        // Additional debug info
-        keyCount: Object.keys(position).length,
-        positionKeys: Object.keys(position),
-        positionType: typeof position
-      });
       
       // Check if position is an empty object or has undefined values
       if (Object.keys(position).length === 0) {
@@ -526,51 +499,10 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           return;
         }
         
-        console.log(`\n!!!!!!!!!! BROADCASTING PLAYER MOVED EVENT !!!!!!!!!!!!`);
-        console.log(`Broadcasting from ${socket.id} to ${Object.keys(players).filter(id => id !== socket.id).length} players`, {
-          targetPlayers: Object.keys(players).filter(id => id !== socket.id).length,
-          event: moveEvent
-        });
-        
         // Debug this broadcast to ensure it's working
         try {
           // Broadcast to all EXCEPT the current socket
           socket.broadcast.emit('playerMoved', moveEvent);
-          
-          // For debugging purposes, log info about who we're sending it to
-          const otherPlayerIds = Object.keys(players).filter(id => id !== socket.id);
-          if (otherPlayerIds.length > 0) {
-            console.log(`Broadcasting movement to ${otherPlayerIds.length} players:`, otherPlayerIds);
-          } else {
-            console.log('No other players to broadcast movement to');
-          }
-          
-          // Every 10th movement, proactively sync player list to ensure all clients have the same data
-          const movementCount = socket.data.movementCount || 0;
-          socket.data.movementCount = movementCount + 1;
-          
-          if (movementCount % 10 === 0) {
-            console.log('Proactively syncing player list to ensure consistency');
-            
-            // Get all players except the current player
-            const otherPlayers = Object.values(players).filter(p => p.id !== socket.id);
-            
-            // First check if the client even knows about all players
-            socket.emit('checkPlayersSync', otherPlayers.map(p => p.id), (missingPlayerIds: string[]) => {
-              if (missingPlayerIds && missingPlayerIds.length > 0) {
-                console.log(`Client ${socket.id} is missing ${missingPlayerIds.length} players:`, missingPlayerIds);
-                
-                // Send the missing players one by one
-                missingPlayerIds.forEach(playerId => {
-                  const player = players[playerId];
-                  if (player) {
-                    console.log(`Sending missing player ${playerId} to ${socket.id}`);
-                    socket.emit('playerJoined', player);
-                  }
-                });
-              }
-            });
-          }
         } catch (error) {
           console.error('Error broadcasting player movement:', error);
         }
@@ -791,7 +723,6 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     
     // Shared function for pickup item logic
     const handleItemPickup = async (dropId: string) => {
-      console.log(`[DEBUG] handleItemPickup called with dropId: ${dropId} (type: ${typeof dropId})`);
       
       const player = players[socket.id];
       if (!player) {
@@ -799,15 +730,10 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         return;
       }
       
-      console.log(`Player position: (${player.x}, ${player.y}, ${player.z})`);
-      console.log(`Number of world items: ${worldItems.length}`);
-      
       const itemIndex = worldItems.findIndex(item => item.dropId === dropId);
-      console.log(`Item index in world items: ${itemIndex}`);
       
       if (itemIndex !== -1) {
         const worldItem = worldItems[itemIndex];
-        console.log(`Found world item: ${worldItem.itemType} at (${worldItem.x}, ${worldItem.y}, ${worldItem.z})`);
         
         // Calculate distance to item
         const distance = Math.sqrt(
@@ -815,11 +741,9 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           Math.pow(player.y - worldItem.y, 2) +
           Math.pow(player.z - worldItem.z, 2)
         );
-        console.log(`Distance to item: ${distance} (max allowed: 2)`);
         
         // Check if player is close enough to pick up the item
         if (distance <= 2) {
-          console.log(`Player is close enough to pick up the item`);
           
           // Create new inventory item
           const newItem = {
@@ -834,36 +758,29 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           }
           
           player.inventory.push(newItem);
-          console.log(`Added item to player's inventory: ${newItem.id} (${newItem.type})`);
-          
+
           // Remove from world items array
           worldItems.splice(itemIndex, 1);
-          console.log(`Removed item from world items array`);
           
           // Tell all clients about the removed world item
           io.emit('worldItemRemoved', dropId);
-          console.log(`Emitted worldItemRemoved event for all clients with dropId: ${dropId}`);
           
           // Update client's inventory
           socket.emit('inventoryUpdate', player.inventory);
-          console.log(`Emitted inventoryUpdate event for player with ${player.inventory.length} items`);
           
           // Save to database
           try {
             // Save updated inventory
             if (socket.user && socket.user.id) {
               await savePlayerInventory(socket.user.id, player.inventory);
-              console.log(`Saved player inventory to database for user: ${socket.user.id}`);
             }
             
             // Remove the item from the world in database
             await removeWorldItem(dropId);
-            console.log(`Removed item from database: ${dropId}`);
           } catch (error) {
             console.error('Failed to save pickup to database:', error instanceof Error ? error : new Error(String(error)));
           }
         } else {
-          console.log(`Player is too far to pick up the item (${distance} > 2)`);
           socket.emit('error', `Too far to pick up item: ${distance.toFixed(2)} units away (max: 2)`);
         }
       } else {

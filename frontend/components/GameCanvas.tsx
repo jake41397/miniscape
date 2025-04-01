@@ -651,11 +651,6 @@ const GameCanvas: React.FC = () => {
         const rotationDiff = targetRotation - playerMesh.rotation.y;
         const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
         
-        // Only log significant rotation changes to avoid spam
-        if (Math.abs(normalizedDiff) > 0.1) {
-          console.log(`Applying server rotation for ${playerId}: ${targetRotation.toFixed(2)}`);
-        }
-        
         playerMesh.rotation.y += normalizedDiff * 0.3;
       }
 
@@ -826,8 +821,6 @@ const GameCanvas: React.FC = () => {
         return;
       }
       
-      console.log("🎹 Key Down:", e.key);
-      
       // Update the keysPressed ref
       keysPressed.current[e.key] = true;
       
@@ -976,8 +969,6 @@ const GameCanvas: React.FC = () => {
       ) {
         return;
       }
-      
-      console.log("🎹 Key Up:", e.key);
       
       // Update the keysPressed ref
       keysPressed.current[e.key] = false;

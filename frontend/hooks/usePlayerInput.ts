@@ -35,8 +35,6 @@ export const usePlayerInput = () => {
             return;
         }
         
-        console.log('🎮 Key pressed:', e.key);
-        
         // Only handle keys we care about
         if (!MOVEMENT_KEYS.includes(e.key)) return;
         

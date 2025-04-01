@@ -194,11 +194,8 @@ export class PlayerHandler {
           lastBroadcastPosition = { x: validX, y: position.y, z: validZ };
           lastBroadcastTime = now;
           
-          // Debug log about broadcasting
-          console.log(`Broadcasting player ${socket.id} movement: distance=${Math.sqrt(broadcastDistanceSquared)}, lastBroadcast=${timeSinceLastBroadcast}ms ago`);
-        } else {
+          } else {
           // Debug log about skipping broadcast
-          console.log(`Skipping broadcast for player ${socket.id}: distance=${Math.sqrt(broadcastDistanceSquared)}, lastBroadcast=${timeSinceLastBroadcast}ms ago`);
         }
         
         // Save player position to the database occasionally

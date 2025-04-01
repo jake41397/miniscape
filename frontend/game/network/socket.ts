@@ -67,7 +67,7 @@ let connectionState = {
 export const saveLastKnownPosition = (position: {x: number, y: number, z: number}) => {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('last_player_position', JSON.stringify(position));
-    console.log('Saved last known position:', position);
+    //console.log('Saved last known position:', position);
   }
 };
 
@@ -344,12 +344,6 @@ export const initializeSocket = async () => {
 
 // Get the socket instance with additional validation
 export const getSocket = async () => {
-  console.log('getSocket called, current status:', {
-    socketExists: !!socket,
-    connected: socket?.connected,
-    connecting: connectionState.connecting,
-    id: socket?.id
-  });
   
   // If we have a socket and it's connected, just return it
   if (socket && socket.connected) {

@@ -538,25 +538,12 @@ export class SocketController {
       const now = Date.now();
       const socket = await getSocket();
       
-      // EMERGENCY DEBUGGING - Always log position sends
-      console.log("%c 📡 ATTEMPTING POSITION SEND", "background: #ff5722; color: white; font-weight: bold;", {
-        position: { 
-          x: position.x.toFixed(2), 
-          y: position.y.toFixed(2), 
-          z: position.z.toFixed(2) 
-        },
-        rotation: rotationY.toFixed(2),
-        force,
-        socketExists: !!socket,
-        time: new Date().toISOString()
-      });
-      
       // Minimum time between position updates (to limit network traffic)
       const MIN_UPDATE_INTERVAL = 50; // milliseconds
       
       // Don't send position updates too frequently unless forced
       if (!force && now - this.lastSendTime < MIN_UPDATE_INTERVAL) {
-        console.log("Skipping position update - too soon after last update");
+        //console.log("Skipping position update - too soon after last update");
         return;
       }
       
@@ -587,9 +574,6 @@ export class SocketController {
           timestamp: now
         };
         
-        // Send position to server
-        console.log("%c 📤 EMITTING playerMove TO SERVER", "background: green; color: white; font-size: 14px;", positionData);
-        
         socket.emit('playerMove', positionData);
         
         // Cache position for reconnection
@@ -598,10 +582,8 @@ export class SocketController {
           y: position.y,
           z: position.z
         });
-        
-        console.log("%c ✅ Position update sent successfully", "color: green;");
       } else {
-        console.log("Skipping position update - no significant movement");
+        //console.log("Skipping position update - no significant movement");
       }
     } catch (error) {
       console.error("%c ❌ ERROR SENDING POSITION", "background: red; color: white;", error);

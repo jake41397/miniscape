@@ -187,13 +187,6 @@ export class PlayerController {
    * Returns a Promise that resolves when the movement completes or is interrupted.
    */
   moveToPosition(target: THREE.Vector3): Promise<void> {
-    console.log("%c 🚶 moveToPosition CALLED", "background: #ff00ff; color: white; font-size: 16px;", {
-      targetX: target.x.toFixed(2),
-      targetZ: target.z.toFixed(2),
-      playerExists: !!this.playerRef.current,
-      isAutoMoving: this.isAutoMoving,
-      socketControllerExists: !!this.socketController
-    });
     
     // IMPORTANT: Interrupt any previous auto-movement *before* starting a new one.
     this.interruptMovement();
@@ -211,7 +204,6 @@ export class PlayerController {
       this.targetPosition.y = player.position.y; // Maintain current height
       this.autoMovePromiseResolve = resolve; // Store the resolver
 
-      console.log(`✅ Starting auto-move to: (${this.targetPosition.x.toFixed(2)}, ${this.targetPosition.z.toFixed(2)})`);
 
       // Initialize last frame time for delta calculations
       let lastFrameTime = performance.now();
@@ -245,7 +237,6 @@ export class PlayerController {
         // --- Check for arrival ---
         const arrivalThreshold = frameSpeed * 0.5; // Stop slightly before exact point
         if (distanceToTarget < arrivalThreshold) {
-            console.log("Auto-move arrived at target.");
             // Snap to final position for precision
             currentPlayer.position.copy(this.targetPosition);
 
@@ -402,27 +393,12 @@ export class PlayerController {
     if (keys['a'] || keys['ArrowLeft']) {
       // LEFT = SUBTRACT the camera's right vector (never changes)
       moveDirection.sub(cameraRight);
-      console.log("%c 👈 LEFT VECTOR APPLIED", "color: #E91E63;", {
-        rightVector: { x: cameraRight.x.toFixed(2), z: cameraRight.z.toFixed(2) },
-        resultDir: { 
-          x: (-cameraRight.x).toFixed(2), 
-          z: (-cameraRight.z).toFixed(2) 
-        },
-        currentAngle: currentCameraAngle.toFixed(1) + "°"
-      });
+
       manualMovementInput = true;
     }
     if (keys['d'] || keys['ArrowRight']) {
       // RIGHT = ADD the camera's right vector (never changes)
       moveDirection.add(cameraRight);
-      console.log("%c 👉 RIGHT VECTOR APPLIED", "color: #2196F3;", {
-        rightVector: { x: cameraRight.x.toFixed(2), z: cameraRight.z.toFixed(2) },
-        resultDir: { 
-          x: cameraRight.x.toFixed(2), 
-          z: cameraRight.z.toFixed(2) 
-        },
-        currentAngle: currentCameraAngle.toFixed(1) + "°"
-      });
       manualMovementInput = true;
     }
 

@@ -88,6 +88,17 @@ const soundEffectDefinitions: { [key: string]: SoundEffect } = {
     category: SoundCategory.PLAYER,
     volume: 0.9,
   },
+  // Add definitions for required sounds
+  'playerJoin': {
+    url: '/sounds/player/join.mp3',
+    category: SoundCategory.PLAYER,
+    volume: 0.7,
+  },
+  'itemDrop': {
+    url: '/sounds/items/drop.mp3',
+    category: SoundCategory.PLAYER,
+    volume: 0.6,
+  },
   
   // Environment
   'ambient_forest': {
@@ -152,7 +163,7 @@ const updateAllVolumes = (): void => {
 
 // Play a sound effect
 const play = (key: string): HTMLAudioElement | undefined => {
-  if (!soundEnabled) return undefined;
+  if (!soundEnabled || true) return undefined; // Disable sound effects during development
   
   const audio = soundEffects[key];
   if (!audio) {

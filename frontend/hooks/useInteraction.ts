@@ -491,7 +491,6 @@ export const useInteraction = ({
                         console.log("%c ✓ moveToPosition promise created successfully", "color: #4CAF50;");
                         currentInteractionPromise.current.then(() => {
                             // Movement finished naturally
-                            console.log("%c ✓ Movement completed", "color: #4CAF50;");
                             movementCompletedRef.current = true;
                             removeClickIndicator(); // Clean up indicator on arrival
                         }).catch(err => {

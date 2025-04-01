@@ -74,7 +74,6 @@ export const useGameLoop = ({
             
             // Only send position updates if movement actually occurred
             if (movementOccurred && sendPositionUpdate) {
-                console.log("%c 📡 Movement occurred - sending position update", "color: #E91E63;");
                 sendPositionUpdate(false);
             }
         } else {

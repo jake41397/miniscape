@@ -495,7 +495,7 @@ export const setupSocketListeners = async ({
     // Skip if this is our own player ID - we shouldn't move ourselves based on server events
     // This is a fallback in case we broadcast to all instead of socket.broadcast
     if (data.id === socket.id || data.id === 'TEST-' + socket.id) {
-      console.log("%c ⚠️ Ignoring movement for local player", "color: orange; font-weight: bold;");
+      // console.log("%c ⚠️ Ignoring movement for local player", "color: orange; font-weight: bold;");
       return;
     }
     
@@ -555,7 +555,6 @@ export const setupSocketListeners = async ({
       // CRITICAL FIX: Store rotation data from the server
       if (data.rotation !== undefined) {
         playerMesh.userData.targetRotation = data.rotation;
-        console.log(`Received rotation for player ${data.id}: ${data.rotation.toFixed(2)}`);
       }
       
       playerMesh.userData.lastUpdateTime = Date.now();
@@ -858,6 +857,7 @@ export const setupSocketListeners = async ({
 
   // Return cleanup function
   return () => {
+    console.warn("HANDLER: Cleaning up socket listeners attached by gameSocketHandler...");
     // Remove socket event listeners
     socket.off('initPlayers');
     socket.off('playerJoined');

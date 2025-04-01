@@ -115,7 +115,7 @@ export const useNetworkSync = ({
                 }
                 
                 // All critical refs are available, proceed with setup
-                console.log("All refs available, setting up game socket listeners...");
+                console.warn("HOOK: Attempting to set up Game Socket Listeners...");
                 
                 const setupOptions = {
                     scene: sceneRef.current,
@@ -334,24 +334,6 @@ export const useNetworkSync = ({
                 if (socket.connected) {
                     onConnect(); // Trigger initial setup if already connected
                 }
-
-                // Monitor connection status periodically as a fallback
-                connectionMonitor = setInterval(() => {
-                    if (!isMounted) return;
-                    const status = getSocketStatus();
-                    if (status.connected !== isConnected) {
-                        console.warn(`Connection status mismatch detected. Forcing update to: ${status.connected}`);
-                        setIsConnected(status.connected);
-                        // If newly connected, attempt to run onConnect flow
-                        if (status.connected && !isConnected) {
-                            console.log("Connection detected via monitor, triggering connect flow");
-                            onConnect();
-                        } else if (!status.connected && isConnected) {
-                            console.log("Disconnection detected via monitor, triggering disconnect flow");
-                            onDisconnect('monitor_update' as any);
-                        }
-                    }
-                }, 5000);
             } catch (error) {
                 console.error("Error in connectAndSetup:", error);
             }
@@ -362,10 +344,10 @@ export const useNetworkSync = ({
         // --- Cleanup ---
         return () => {
             isMounted = false;
-            console.log("Cleaning up network sync...");
-            if (connectionMonitor) clearInterval(connectionMonitor);
+            console.warn("HOOK: Cleaning up network sync hook...");
             if (setupRetryTimer) clearTimeout(setupRetryTimer);
 
+            console.warn("HOOK: Calling specific socket listener cleanup function...");
             // Execute the cleanup function returned by setupSocketListeners
             socketCleanupRef.current?.();
             socketCleanupRef.current = null;
@@ -434,10 +416,10 @@ export const useNetworkSync = ({
                      const positionData: PlayerPosition = { x, y, z, timestamp: now };
                      socket.emit('playerMove', positionData);
 
-                     // Debug log for significant movements
-                     if (distanceMovedSq > 0.5) {
-                         console.log(`Sent position update, moved: ${Math.sqrt(distanceMovedSq).toFixed(2)} units`);
-                     }
+                     // Remove debug log for significant movements
+                     // if (distanceMovedSq > 0.5) {
+                     //     console.log(`Sent position update, moved: ${Math.sqrt(distanceMovedSq).toFixed(2)} units`);
+                     // }
 
                      // Cache position frequently when moving
                      if (now - lastPositionCacheTime.current > 1000) { // Cache every second during movement
