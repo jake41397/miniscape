@@ -299,33 +299,6 @@ export const initializeSocket = async () => {
       connectionState.error = new Error(errorMsg);
     });
     
-    // ---> ADDED PONG LISTENER (with type assertion) <--- 
-    (socket as any).on('pong', () => {
-      lastPong = Date.now();
-      // Optional: Log pong reception for debugging
-      // console.log('Pong received'); 
-    });
-    
-    // Add ping/pong monitoring to detect zombies
-    let lastPong = Date.now();
-    const pingInterval = setInterval(() => {
-      if (!socket || !socket.connected) {
-        clearInterval(pingInterval);
-        return;
-      }
-      
-      // Check if we've missed too many pongs
-      if (Date.now() - lastPong > 120000) {
-        console.warn('No pong received for 120s, socket may be zombie. Reconnecting...');
-        clearInterval(pingInterval);
-        
-        // Force a reconnection
-        socket.disconnect();
-        reconnectAttempts++;
-        initializeSocket();
-      }
-    }, 60000); // Check every 60 seconds
-    
     // Add timeout for connection to prevent hanging
     const connectTimeout = setTimeout(() => {
       if (socket && !socket.connected) {

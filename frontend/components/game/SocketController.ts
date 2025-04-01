@@ -671,32 +671,44 @@ export class SocketController {
     
     // Use item lookup logic to find the correct type
     try {
-      // For now, use a direct socket event with position data
+      // Define position variables with player's current position as default
+      let x = player.position.x;
+      let y = player.position.y;
+      let z = player.position.z;
+
+      // Try to get position from data attribute as an override
       const positionElement = document.querySelector('[data-player-position]');
-      let positionData = {};
-      
       if (positionElement && positionElement.getAttribute('data-position')) {
         try {
-          positionData = JSON.parse(positionElement.getAttribute('data-position') || '{}');
-          console.log('Retrieved player position for drop:', positionData);
+          const positionFromAttr = JSON.parse(positionElement.getAttribute('data-position') || '{}');
+          // Only override if the parsed object has valid x, y, z
+          if (typeof positionFromAttr.x === 'number' && typeof positionFromAttr.y === 'number' && typeof positionFromAttr.z === 'number') {
+            x = positionFromAttr.x;
+            y = positionFromAttr.y;
+            z = positionFromAttr.z;
+            console.log('Retrieved player position for drop from data attribute:', { x, y, z });
+          } else {
+             console.log('Using player mesh position for drop (data attribute invalid).');
+          }
         } catch (e) {
-          console.error('Failed to parse player position:', e);
+          console.error('Failed to parse player position from data attribute, using player mesh position:', e);
         }
       } else {
-        // Use the player's actual position if data attribute is not available
-        positionData = {
-          x: player.position.x,
-          y: player.position.y,
-          z: player.position.z
-        };
+        console.log('Using player mesh position for drop (data attribute not found).');
       }
       
-      // Send the drop with complete data
-      console.log(`Emitting dropItem with itemId: ${itemId}, type: ${itemType}, position:`, positionData);
+      // Generate a unique client-side ID for this drop action
+      const clientDropId = `drop-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+      // Send the drop with complete data, including clientDropId
+      console.log(`Emitting dropItem with itemId: ${itemId}, type: ${itemType}, position: (${x}, ${y}, ${z}), clientDropId: ${clientDropId}`);
       socket.emit('dropItem', {
         itemId,
         itemType,
-        ...positionData
+        x,
+        y,
+        z,
+        clientDropId // Ensure this is included
       });
     } catch (error) {
       console.error('Error in sendDropItem:', error);

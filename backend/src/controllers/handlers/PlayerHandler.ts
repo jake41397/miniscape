@@ -42,11 +42,6 @@ export class PlayerHandler {
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
           socket.emit('ping', Date.now(), (response: number) => {
-            // Response received, player is still connected
-            // Update last ping time
-            if (this.players[socketId]) {
-              this.players[socketId].lastPing = Date.now();
-            }
           });
         } else {
           // Socket not found, likely disconnected but not cleaned up

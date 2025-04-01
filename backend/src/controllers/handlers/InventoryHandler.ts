@@ -206,7 +206,6 @@ export class InventoryHandler {
           console.log(`[${socket.id}] Broadcasting direct drop to ALL clients:`, itemData);
           
           // CRITICAL: Broadcast to ALL clients, including the sender
-          this.io.emit('itemDropped', itemData);
           this.io.emit('worldItemAdded', itemData);
           
           // Handle inventory update separately - this ensures drop works even if inventory processing fails
@@ -275,7 +274,6 @@ export class InventoryHandler {
           console.log(`[${socket.id}] Broadcasting item drop to ALL PLAYERS:`, itemData);
           
           // CRITICAL: Broadcast to ALL clients, including the sender
-          this.io.emit('itemDropped', itemData);
           this.io.emit('worldItemAdded', itemData);
           
           // Update inventory
