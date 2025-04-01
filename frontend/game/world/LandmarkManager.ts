@@ -313,11 +313,15 @@ class LandmarkManager {
                     
                     // Check if player meets level requirement
                     if (smithingLevel < recipe.requiredLevel) {
-                      const notificationEvent = new CustomEvent('show-notification', {
-                        detail: { message: `You need smithing level ${recipe.requiredLevel} to smelt this.`, type: 'error' },
+                      const chatEvent = new CustomEvent('chat-message', {
+                        detail: { 
+                          content: `You need smithing level ${recipe.requiredLevel} to smelt this.`, 
+                          type: 'error',
+                          timestamp: Date.now()
+                        },
                         bubbles: true
                       });
-                      document.dispatchEvent(notificationEvent);
+                      document.dispatchEvent(chatEvent);
                       this.endDialogue();
                       return;
                     }
@@ -364,14 +368,15 @@ class LandmarkManager {
                           document.dispatchEvent(inventoryUpdateEvent);
                           
                           // Show success notification
-                          const notificationEvent = new CustomEvent('show-notification', {
+                          const chatEvent = new CustomEvent('chat-message', {
                             detail: { 
-                              message: `Successfully smelted a ${selectedRecipe.replace(/_/g, ' ').toLowerCase()}!`,
-                              type: 'success'
+                              content: `Successfully smelted a ${selectedRecipe.replace(/_/g, ' ').toLowerCase()}!`,
+                              type: 'success',
+                              timestamp: Date.now()
                             },
                             bubbles: true
                           });
-                          document.dispatchEvent(notificationEvent);
+                          document.dispatchEvent(chatEvent);
                           
                           // Update dialog to smelting_complete
                           if (this.activeNPC) {
@@ -394,14 +399,15 @@ class LandmarkManager {
                           }
                         } else if (response.error) {
                           // Show error notification
-                          const notificationEvent = new CustomEvent('show-notification', {
+                          const chatEvent = new CustomEvent('chat-message', {
                             detail: { 
-                              message: response.error,
-                              type: 'error'
+                              content: response.error,
+                              type: 'error',
+                              timestamp: Date.now()
                             },
                             bubbles: true
                           });
-                          document.dispatchEvent(notificationEvent);
+                          document.dispatchEvent(chatEvent);
                           
                           // Return to dialog options
                           if (this.activeNPC) {
@@ -440,14 +446,15 @@ class LandmarkManager {
                   nextDialogueId: 'smelting_options',
                   action: () => {
                     // Show cancellation message
-                    const notificationEvent = new CustomEvent('show-notification', {
+                    const chatEvent = new CustomEvent('chat-message', {
                       detail: { 
-                        message: 'Smelting operation canceled',
-                        type: 'info'
+                        content: 'Smelting operation canceled',
+                        type: 'info',
+                        timestamp: Date.now()
                       },
                       bubbles: true
                     });
-                    document.dispatchEvent(notificationEvent);
+                    document.dispatchEvent(chatEvent);
                   }
                 }
               ]
@@ -550,14 +557,15 @@ class LandmarkManager {
                   }
                   
                   // Show notification
-                  const notificationEvent = new CustomEvent('show-notification', {
+                  const chatEvent = new CustomEvent('chat-message', {
                     detail: { 
-                      message: data.message || 'Error during smelting',
-                      type: 'error'
+                      content: data.message || 'Error during smelting',
+                      type: 'error',
+                      timestamp: Date.now()
                     },
                     bubbles: true
                   });
-                  document.dispatchEvent(notificationEvent);
+                  document.dispatchEvent(chatEvent);
                   
                   // Reset the dialogue to default
                   setTimeout(() => {
@@ -705,11 +713,15 @@ class LandmarkManager {
                     
                     // Check if player meets level requirement
                     if (smithingLevel < recipe.requiredLevel) {
-                      const notificationEvent = new CustomEvent('show-notification', {
-                        detail: { message: `You need smithing level ${recipe.requiredLevel} to smith this.`, type: 'error' },
+                      const chatEvent = new CustomEvent('chat-message', {
+                        detail: { 
+                          content: `You need smithing level ${recipe.requiredLevel} to smith this.`, 
+                          type: 'error',
+                          timestamp: Date.now()
+                        },
                         bubbles: true
                       });
-                      document.dispatchEvent(notificationEvent);
+                      document.dispatchEvent(chatEvent);
                       this.endDialogue();
                       return;
                     }
@@ -721,11 +733,15 @@ class LandmarkManager {
                     });
                     
                     if (!hasAllIngredients) {
-                      const notificationEvent = new CustomEvent('show-notification', {
-                        detail: { message: 'You don\'t have the required materials.', type: 'error' },
+                      const chatEvent = new CustomEvent('chat-message', {
+                        detail: { 
+                          content: 'You don\'t have the required materials.', 
+                          type: 'error',
+                          timestamp: Date.now()
+                        },
                         bubbles: true
                       });
-                      document.dispatchEvent(notificationEvent);
+                      document.dispatchEvent(chatEvent);
                       this.endDialogue();
                       return;
                     }
@@ -880,14 +896,15 @@ class LandmarkManager {
                   }
                   
                   // Show notification
-                  const notificationEvent = new CustomEvent('show-notification', {
+                  const chatEvent = new CustomEvent('chat-message', {
                     detail: { 
-                      message: data.message || 'Error during smithing',
-                      type: 'error'
+                      content: data.message || 'Error during smithing',
+                      type: 'error',
+                      timestamp: Date.now()
                     },
                     bubbles: true
                   });
-                  document.dispatchEvent(notificationEvent);
+                  document.dispatchEvent(chatEvent);
                   
                   // Reset the dialogue to default
                   setTimeout(() => {

@@ -9,8 +9,17 @@ interface ChatMessage {
   timestamp?: number;
   sender?: string; // For backward compatibility
   isLocal?: boolean;
-  type?: 'player' | 'system' | 'action'; // Message type for styling
+  type?: 'player' | 'system' | 'action' | 'success' | 'error' | 'warning'; // Added notification types
   content?: string; // For newer message format from server
+}
+
+// Interface for our custom chat-message event
+interface CustomChatEvent extends CustomEvent {
+  detail: {
+    content: string;
+    type: string;
+    timestamp: number;
+  }
 }
 
 // Persist messages in localStorage (limited to last 50)
@@ -159,6 +168,33 @@ const ChatPanel: React.FC = () => {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages]);
+  
+  // Add event listener for the custom chat-message event from the notification system
+  useEffect(() => {
+    const handleCustomChatMessage = (event: CustomChatEvent) => {
+      const { content, type, timestamp } = event.detail;
+      
+      // Create a formatted message to add to chat
+      const notificationMessage: ChatMessage = {
+        name: 'System',
+        text: content,
+        timestamp,
+        type: type as any, // Cast to the ChatMessage type
+        playerId: 'system'
+      };
+      
+      // Add to messages state
+      setMessages(prevMessages => [...prevMessages, notificationMessage]);
+    };
+    
+    // Add event listener
+    document.addEventListener('chat-message', handleCustomChatMessage as unknown as EventListener);
+    
+    // Clean up on unmount
+    return () => {
+      document.removeEventListener('chat-message', handleCustomChatMessage as unknown as EventListener);
+    };
+  }, []);
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -514,6 +550,7 @@ const ChatPanel: React.FC = () => {
               let backgroundColor, borderColor, nameColor;
               let displayName = msg.name || msg.sender || 'Unknown';
               
+              // Enhanced message type styling for notification types
               if (messageType === 'system') {
                 backgroundColor = 'rgba(255, 152, 0, 0.3)'; // Orange for system
                 borderColor = '#ff9800';
@@ -524,6 +561,21 @@ const ChatPanel: React.FC = () => {
                 borderColor = '#673ab7';
                 nameColor = '#d1c4e9';
                 displayName = 'Action';
+              } else if (messageType === 'success') {
+                backgroundColor = 'rgba(76, 175, 80, 0.3)'; // Green for success
+                borderColor = '#4caf50';
+                nameColor = '#a5d6a7';
+                displayName = 'Success';
+              } else if (messageType === 'error') {
+                backgroundColor = 'rgba(244, 67, 54, 0.3)'; // Red for error
+                borderColor = '#f44336';
+                nameColor = '#ef9a9a';
+                displayName = 'Error';
+              } else if (messageType === 'warning') {
+                backgroundColor = 'rgba(255, 193, 7, 0.3)'; // Amber for warning
+                borderColor = '#ffc107';
+                nameColor = '#ffe082';
+                displayName = 'Warning';
               } else { // Default player message
                 backgroundColor = isOwnMessage 
                   ? 'rgba(25, 118, 210, 0.5)' // Blue for our messages 
