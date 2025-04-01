@@ -24,6 +24,12 @@ export interface Player {
   z: number;
   rotationY?: number;     // Y-axis rotation in radians
   inventory: InventoryItem[];
+  skills?: {
+    [key: string]: {
+      level: number;
+      experience: number;
+    };
+  };
   equippedItem?: InventoryItem; // Currently equipped item (tool, weapon, etc.)
   lastPing?: number;      // Last time player responded to ping
   lastActive?: number;    // Last time player did something (moved, etc)

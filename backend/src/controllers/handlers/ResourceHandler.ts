@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 import { loadResourceNodes, savePlayerInventory, savePlayerSkills } from '../../models/gameModel';
 import { ExtendedSocket, PlayersStore } from '../types';
+import { ExperienceHandler, SkillType } from './ExperienceHandler';
 
 interface ResourceNode {
   id: string;
@@ -21,10 +22,12 @@ export class ResourceHandler {
   private resourceNodes: ResourceNode[] = [];
   private unavailableResources: Map<string, number> = new Map();
   private gatheringPlayers: Map<string, { resourceId: string, intervalId: NodeJS.Timeout }> = new Map();
+  private experienceHandler: ExperienceHandler;
   
-  constructor(io: Server, players: PlayersStore) {
+  constructor(io: Server, players: PlayersStore, experienceHandler: ExperienceHandler) {
     this.io = io;
     this.players = players;
+    this.experienceHandler = experienceHandler;
   }
   
   /**
@@ -469,40 +472,80 @@ export class ResourceHandler {
    */
   private async handleTreeGathering(socket: ExtendedSocket, resourceNode: ResourceNode): Promise<void> {
     const player = this.players[socket.id];
-    
-    // Generate logs (1 log per gathering)
+    if (!player) return;
+
+    // Determine tree type and log type
+    const treeType = resourceNode.metadata?.treeType || 'normal';
+    const logType = this.getItemTypeFromResource(resourceNode);
+
+    // Generate logs
     const logs = {
       id: uuidv4(),
-      type: 'log',
+      type: logType,
       quantity: 1
     };
-    
-    // Add to player's inventory
+
+    // Add logs to inventory
+    if (!player.inventory) player.inventory = [];
     player.inventory.push(logs);
-    
-    // Send inventory update to client
+
+    // --- XP GAIN LOGIC using ExperienceHandler ---
+    const experienceToAdd = this.experienceHandler.getXpReward(SkillType.WOODCUTTING, treeType);
+    let xpGained = 0;
+
+    if (experienceToAdd > 0) {
+      const xpResult = this.experienceHandler.addExperience(player, SkillType.WOODCUTTING, experienceToAdd);
+
+      if (xpResult) {
+        xpGained = experienceToAdd; // Store actual XP gained
+
+        // Emit level up event if needed
+        if (xpResult.leveledUp) {
+          console.log(`Player ${socket.id} leveled up Woodcutting to level ${xpResult.newLevel}!`);
+          socket.emit('levelUp', {
+            skill: SkillType.WOODCUTTING,
+            level: xpResult.newLevel
+          });
+          socket.emit('chatMessage', {
+            content: `Congratulations! You've reached Woodcutting level ${xpResult.newLevel}!`,
+            type: 'system',
+            timestamp: Date.now()
+          });
+        }
+
+        // Emit experience gained event (client might use this for XP counter UI)
+        socket.emit('experienceGained', {
+          skill: SkillType.WOODCUTTING,
+          experience: experienceToAdd,
+          totalExperience: xpResult.newExperience,
+          level: xpResult.newLevel
+        });
+
+        // Save updated skills
+        if (socket.user && socket.user.id) {
+          await this.savePlayerSkills(socket.user.id, player.skills);
+        } else {
+          console.warn(`Player ${socket.id} is not authenticated, skills not saved.`);
+        }
+      }
+    }
+    // --- END XP GAIN LOGIC ---
+
+    // Send inventory update
     socket.emit('inventoryUpdate', player.inventory);
-    
-    // Emit resource gathered event
-    socket.emit('resourceGathered', {
-      resourceId: resourceNode.id,
-      resourceType: resourceNode.type,
-      item: logs,
-      remainingResources: resourceNode.remainingResources
-    });
-    
-    // Send success message to chat
+
+    // Send chat message about getting logs
     socket.emit('chatMessage', { 
-      content: `You get some logs. (${resourceNode.remainingResources} left)`, 
-      type: 'action', 
+      content: `You get some ${logType.replace('_', ' ')}. (${resourceNode.remainingResources} left)`, 
+      type: 'action',
       timestamp: Date.now() 
     });
-    
-    console.log(`Player ${socket.id} gathered logs from ${resourceNode.id}`);
-    
-    // Save inventory update to database if user is authenticated
+
+    console.log(`Player ${socket.id} gathered ${logType} from ${resourceNode.id} and gained ${xpGained} XP.`);
+
+    // Save inventory (already done earlier implicitly? Let's ensure it's saved)
     if (socket.user && socket.user.id) {
-      await savePlayerInventory(socket.user.id, player.inventory);
+      await this.savePlayerInventory(socket, player.inventory);
     }
   }
   
@@ -511,43 +554,80 @@ export class ResourceHandler {
    */
   private async handleRockGathering(socket: ExtendedSocket, resourceNode: ResourceNode): Promise<void> {
     const player = this.players[socket.id];
-    
-    // Determine the correct ore type based on the resource metadata
+    if (!player) return;
+
+    // Determine ore type
+    const rockType = resourceNode.metadata?.rockType || 'copper'; // Default if not specified
     const oreType = this.getItemTypeFromResource(resourceNode);
-    
-    // Generate ore (1 ore per gathering)
+
+    // Generate ore
     const ore = {
       id: uuidv4(),
       type: oreType,
       quantity: 1
     };
-    
-    // Add to player's inventory
+
+    // Add ore to inventory
+    if (!player.inventory) player.inventory = [];
     player.inventory.push(ore);
-    
-    // Send inventory update to client
+
+    // --- XP GAIN LOGIC using ExperienceHandler ---
+    const experienceToAdd = this.experienceHandler.getXpReward(SkillType.MINING, rockType);
+    let xpGained = 0;
+
+    if (experienceToAdd > 0) {
+      const xpResult = this.experienceHandler.addExperience(player, SkillType.MINING, experienceToAdd);
+
+      if (xpResult) {
+        xpGained = experienceToAdd; // Store actual XP gained
+
+        // Emit level up event if needed
+        if (xpResult.leveledUp) {
+          console.log(`Player ${socket.id} leveled up Mining to level ${xpResult.newLevel}!`);
+          socket.emit('levelUp', {
+            skill: SkillType.MINING,
+            level: xpResult.newLevel
+          });
+          socket.emit('chatMessage', {
+            content: `Congratulations! You've reached Mining level ${xpResult.newLevel}!`,
+            type: 'system',
+            timestamp: Date.now()
+          });
+        }
+
+        // Emit experience gained event
+        socket.emit('experienceGained', {
+          skill: SkillType.MINING,
+          experience: experienceToAdd,
+          totalExperience: xpResult.newExperience,
+          level: xpResult.newLevel
+        });
+
+        // Save updated skills
+        if (socket.user && socket.user.id) {
+          await this.savePlayerSkills(socket.user.id, player.skills);
+        } else {
+          console.warn(`Player ${socket.id} is not authenticated, skills not saved.`);
+        }
+      }
+    }
+    // --- END XP GAIN LOGIC ---
+
+    // Send inventory update
     socket.emit('inventoryUpdate', player.inventory);
-    
-    // Emit resource gathered event
-    socket.emit('resourceGathered', {
-      resourceId: resourceNode.id,
-      resourceType: resourceNode.type,
-      item: ore,
-      remainingResources: resourceNode.remainingResources
-    });
-    
-    // Send success message to chat
+
+    // Send chat message about getting ore
     socket.emit('chatMessage', { 
       content: `You get some ${oreType.replace('_', ' ')}. (${resourceNode.remainingResources} left)`, 
       type: 'action', 
       timestamp: Date.now() 
     });
-    
-    console.log(`Player ${socket.id} gathered ${oreType} from ${resourceNode.id}`);
-    
-    // Save inventory update to database if user is authenticated
+
+    console.log(`Player ${socket.id} gathered ${oreType} from ${resourceNode.id} and gained ${xpGained} XP.`);
+
+    // Save inventory
     if (socket.user && socket.user.id) {
-      await savePlayerInventory(socket.user.id, player.inventory);
+      await this.savePlayerInventory(socket, player.inventory);
     }
   }
   
@@ -1077,6 +1157,11 @@ export class ResourceHandler {
    * Save player skills to database
    */
   private async savePlayerSkills(userId: string, skills: any): Promise<void> {
+    // Check if skills actually exist before trying to save
+    if (!skills || Object.keys(skills).length === 0) {
+      console.log(`[ResourceHandler] No skills data to save for user ${userId}`);
+      return;
+    }
     try {
       await savePlayerSkills(userId, skills);
     } catch (error) {
