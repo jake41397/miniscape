@@ -7,7 +7,9 @@ interface ServerToClientEvents {
   playerJoined: (player: any) => void;
   playerLeft: (playerId: string) => void;
   playerMove: (playerData: any) => void;
+  playerMoved: (data: { id: string, x: number, y: number, z: number, rotation?: number, timestamp?: number }) => void;
   playerList: (players: any[]) => void;
+  checkPlayersSync: (playerIds: string[], callback: (missingPlayerIds: string[]) => void) => void;
   
   // Inventory events
   inventoryUpdate: (inventory: Item[]) => void;
@@ -16,6 +18,7 @@ interface ServerToClientEvents {
   // World item events
   itemDropped: (item: WorldItem) => void;
   itemPickedUp: (data: { dropId: string }) => void;
+  itemRemoved: (dropId: string) => void;
   worldItems: (items: WorldItem[]) => void;
   
   // Resource events
@@ -79,10 +82,13 @@ interface ClientToServerEvents {
   // Player events
   playerMove: (positionData: { x: number, y: number, z: number }) => void;
   requestPlayers: () => void;
+  updateDisplayName: (data: { name: string }) => void;
+  playerAction: (data: { type: string, targetId: string, damage: number, combatMode?: string }) => void;
   
   // Inventory events
   requestInventory: () => void;
   equipItem: (data: { itemId: string }) => void;
+  updateInventory: (data: { type: string, count: number }) => void;
   
   // Item events
   dropItem: (data: { 
@@ -90,7 +96,8 @@ interface ClientToServerEvents {
     itemType: string,
     x?: number,
     y?: number,
-    z?: number
+    z?: number,
+    clientDropId?: string
   }) => void;
   pickup: (dropId: string) => void;
   pickupItem: (dropId: string) => void;
@@ -108,11 +115,15 @@ interface ClientToServerEvents {
   chat: (message: string) => void;
   chatCommand: (data: { command: string, params: any }) => void;
   
+  // Skill events
+  updatePlayerSkill: (data: { skillType: string, xpAmount: number }) => void;
+  
   // Request events
   getResourceNodes: () => void;
   getWorldItems: () => void;
   getPlayers: () => void;
   getPlayerCount: () => void;
+  getPlayerData: (playerId: string, callback: (playerData: any) => void) => void;
   requestAllPlayers: () => void;
   syncPlayerList: (playerIds: string[], callback: (serverPlayerIds: string[]) => void) => void;
   
