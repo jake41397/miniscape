@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { NPC, Landmark } from '../../game/world/landmarks';
+import { CombatNPC } from '../../game/world/LandmarkManager';
 import DialogueBox from './DialogueBox';
+import { getSocket } from '../../game/network/socket';
 
 interface NPCInteractionControllerProps {
   worldManager: any; // Ideally this would be properly typed
@@ -14,7 +16,13 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
 }) => {
   const [activeNPC, setActiveNPC] = useState<NPC | null>(null);
   const [interactionNotification, setInteractionNotification] = useState<string | null>(null);
+  const [combatTarget, setCombatTarget] = useState<CombatNPC | null>(null);
+  const [playerHealth, setPlayerHealth] = useState<number>(100);
+  const [playerMaxHealth, setPlayerMaxHealth] = useState<number>(100);
+  const [showHealthBars, setShowHealthBars] = useState<boolean>(false);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const attackIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const damageAmount = useRef<number>(1); // Default damage
   
   // Add ref to track nearby NPCs for debugging
   const nearbyNPCsRef = useRef<NPC[]>([]);
@@ -94,6 +102,96 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
     };
   }, [worldManager]);
   
+  // Register combat handlers with socket
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+    
+    socket.then(socket => {
+      if (socket) {
+        // Listen for player health updates
+        socket.on('updatePlayerHealth' as any, (data: { current: number, max: number }) => {
+          console.log('Health update received:', data);
+          setPlayerHealth(data.current);
+          setPlayerMaxHealth(data.max);
+          
+          // Show health bars when we receive health updates
+          setShowHealthBars(true);
+          
+          // Add damage flash effect for the player health bar
+          const healthBar = document.querySelector('.health-bar-fill');
+          if (healthBar) {
+            healthBar.classList.add('damage-flash');
+            setTimeout(() => {
+              healthBar.classList.remove('damage-flash');
+            }, 500);
+          }
+          
+          // If health is full and we're not in combat, hide health bars after a delay
+          if (data.current === data.max && !combatTarget) {
+            setTimeout(() => {
+              setShowHealthBars(false);
+            }, 3000);
+          }
+        });
+        
+        // Listen for combat messages
+        socket.on('chatMessage' as any, (msg: any) => {
+          // Check if it's a combat message and we should display health bars
+          if (msg.type === 'combat') {
+            setShowHealthBars(true);
+          }
+        });
+      }
+    });
+    
+    return () => {
+      // Clean up listeners
+      socket.then(socket => {
+        if (socket) {
+          socket.off('updatePlayerHealth' as any);
+          socket.off('chatMessage' as any);
+        }
+      });
+    };
+  }, [combatTarget]);
+  
+  // Handle combat logic - periodically deal damage to the target
+  useEffect(() => {
+    if (combatTarget && combatTarget.combatState === 'engaged') {
+      // Start auto-attack
+      if (attackIntervalRef.current) {
+        clearInterval(attackIntervalRef.current);
+      }
+      
+      // Attack every 2 seconds with higher damage
+      attackIntervalRef.current = setInterval(() => {
+        const socket = getSocket();
+        socket.then(socket => {
+          if (socket) {
+            // Increase damage for better visibility of health changes (3-5 damage)
+            const damage = Math.floor(Math.random() * 3) + 3;
+            
+            console.log(`Sending damageNPC event with ${damage} damage to ${combatTarget.id}`);
+            
+            // Send damage to server
+            socket.emit('damageNPC' as any, {
+              npcId: combatTarget.id,
+              damage: damage
+            });
+          }
+        });
+      }, 2000);
+      
+      return () => {
+        if (attackIntervalRef.current) {
+          clearInterval(attackIntervalRef.current);
+          attackIntervalRef.current = null;
+        }
+      };
+    }
+  }, [combatTarget]);
+  
   useEffect(() => {
     // Set up right-click interaction using the 'contextmenu' event
     const handleContextMenu = (event: MouseEvent) => {
@@ -121,6 +219,22 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
       // Check if player is near any interactable NPC or landmark
       const interactionFound = landmarkManager.checkInteractions(player.position, (target: NPC | Landmark) => {
         console.log("ContextMenu: Interaction target found:", target);
+        
+        // Check if it's an attackable NPC (combat NPC)
+        if ('health' in target) {
+          const combatNPC = target as CombatNPC;
+          if (combatNPC.isAttackable) {
+            console.log(`ContextMenu: Found attackable NPC: ${target.name}`);
+            
+            // Show attack dialog - use proper type assertion
+            setActiveNPC(combatNPC as unknown as NPC);
+            
+            // Prevent default context menu
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        }
         
         if ('dialogues' in target) { // It's an NPC
           console.log(`ContextMenu: Starting dialogue with NPC: ${target.name}`);
@@ -180,6 +294,9 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
       if (notificationTimeoutRef.current) {
         clearTimeout(notificationTimeoutRef.current);
       }
+      if (attackIntervalRef.current) {
+        clearInterval(attackIntervalRef.current);
+      }
     };
   }, [worldManager, playerRef]);
   
@@ -196,6 +313,20 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
   };
   
   const handleDialogueResponse = (responseIndex: number) => {
+    // Check if this is an attack dialogue
+    if (activeNPC && 'health' in activeNPC) {
+      const combatNPC = activeNPC as CombatNPC;
+      if (combatNPC.isAttackable && responseIndex === 0) {
+        // Attack option was selected
+        handleAttackNPC(combatNPC);
+        
+        // Close dialogue
+        handleDialogueClose();
+        return;
+      }
+    }
+    
+    // Standard dialogue handling
     const landmarkManager = worldManager?.getLandmarkManager();
     if (landmarkManager) {
       landmarkManager.continueDialogue(responseIndex);
@@ -208,6 +339,28 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
       landmarkManager.endDialogue();
       setActiveNPC(null);
     }
+  };
+  
+  // Handle attacking an NPC
+  const handleAttackNPC = (npc: CombatNPC) => {
+    console.log(`Attacking NPC: ${npc.name}`);
+    
+    // Set as combat target for auto-attacks
+    setCombatTarget(npc);
+    
+    // Show health bars
+    setShowHealthBars(true);
+    
+    // Get socket and emit attackNPC event
+    const socket = getSocket();
+    socket.then(socket => {
+      if (socket) {
+        socket.emit('attackNPC' as any, { npcId: npc.id });
+        
+        // Show notification
+        showNotification(`Attacking ${npc.name}`);
+      }
+    });
   };
   
   return (
@@ -237,6 +390,91 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
               z-index: 1000;
               font-size: 16px;
               border: 1px solid #FFD700;
+            }
+          `}</style>
+        </div>
+      )}
+      
+      {showHealthBars && (
+        <div className="health-bar-container">
+          <div className="health-bar-label">Player Health: {playerHealth}/{playerMaxHealth}</div>
+          <div className="health-bar-background">
+            <div 
+              className="health-bar-fill" 
+              style={{ width: `${(playerHealth / playerMaxHealth) * 100}%` }}
+            />
+          </div>
+          
+          {combatTarget && (
+            <>
+              <div className="health-bar-label enemy">{combatTarget.name} (Level {combatTarget.level}): {combatTarget.health}/{combatTarget.maxHealth}</div>
+              <div className="health-bar-background enemy">
+                <div 
+                  className="health-bar-fill enemy" 
+                  style={{ width: `${(combatTarget.health / combatTarget.maxHealth) * 100}%` }}
+                />
+              </div>
+            </>
+          )}
+          
+          <style jsx>{`
+            .health-bar-container {
+              position: fixed;
+              top: 60px;
+              left: 50%;
+              transform: translateX(-50%);
+              background-color: rgba(0, 0, 0, 0.7);
+              padding: 10px;
+              border-radius: 5px;
+              z-index: 1000;
+              border: 1px solid #FFD700;
+              width: 300px;
+            }
+            
+            .health-bar-label {
+              color: white;
+              font-size: 14px;
+              margin-bottom: 5px;
+            }
+            
+            .health-bar-label.enemy {
+              color: #FF6666;
+              margin-top: 10px;
+            }
+            
+            .health-bar-background {
+              background-color: #333;
+              height: 20px;
+              border-radius: 3px;
+              overflow: hidden;
+            }
+            
+            .health-bar-background.enemy {
+              background-color: #331111;
+            }
+            
+            .health-bar-fill {
+              background-color: #2ECC71;
+              height: 100%;
+              transition: width 0.3s ease;
+            }
+            
+            .health-bar-fill.enemy {
+              background-color: #E74C3C;
+            }
+            
+            .health-bar-fill.damage-flash {
+              background-color: #FF0000;
+            }
+            
+            @keyframes damagePulse {
+              0% { background-color: #2ECC71; }
+              50% { background-color: #FF0000; }
+              100% { background-color: #2ECC71; }
+            }
+            
+            .damage-flash {
+              animation: damagePulse 0.5s;
             }
           `}</style>
         </div>
