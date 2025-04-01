@@ -1265,33 +1265,73 @@ class LandmarkManager {
   private createCombatNPCs() {
     console.log('Creating combat NPCs (rats)...');
     
-    // Socket will provide NPC data from the server
-    const socket = getSocket();
-    if (!socket) {
-      console.error('Failed to get socket for NPCs');
-      return;
-    }
+    // Socket initialization handling with retry mechanism
+    const setupSocketListeners = (socket: any) => {
+      // Remove any existing listeners to prevent duplicates
+      socket.off('updateNPCs');
+      socket.off('npcStateUpdate');
+      
+      // Handle initial NPC data
+      socket.on('updateNPCs', (npcs: any[]) => {
+        console.log('Received NPC data from server:', npcs);
+        this.handleNPCsFromServer(npcs);
+      });
+      
+      // Handle NPC state updates (combat, health, etc.)
+      socket.on('npcStateUpdate', (data: {
+        id: string;
+        health?: number;
+        maxHealth?: number;
+        combatState?: 'idle' | 'engaged' | 'dead';
+        attacker?: string;
+      }) => {
+        this.updateNPCState(data);
+      });
+      
+      // Request NPCs from server to ensure we get the data
+      console.log('Requesting NPC data from server...');
+      socket.emit('requestNPCs');
+    };
     
-    // Listen for NPC updates from server
-    socket.then(socket => {
-      if (socket) {
-        // Handle initial NPC data
-        socket.on('updateNPCs', (npcs: any[]) => {
-          console.log('Received NPC data from server:', npcs);
-          this.handleNPCsFromServer(npcs);
-        });
-        
-        // Handle NPC state updates (combat, health, etc.)
-        socket.on('npcStateUpdate', (data) => {
-          this.updateNPCState(data);
-        });
+    // Try to get socket with retry mechanism
+    const initSocket = async () => {
+      try {
+        const socket = await getSocket();
+        if (socket && socket.connected) {
+          console.log('Socket connected, setting up NPC listeners');
+          setupSocketListeners(socket);
+        } else {
+          console.log('Socket not connected yet, retrying in 1 second...');
+          setTimeout(initSocket, 1000); // Retry after 1 second
+        }
+      } catch (error) {
+        console.error('Error getting socket for NPCs:', error);
+        setTimeout(initSocket, 2000); // Retry after 2 seconds on error
       }
-    });
+    };
+    
+    // Start initialization process
+    initSocket();
   }
   
   // Create NPCs from server data
   private handleNPCsFromServer(npcData: any[]) {
-    npcData.forEach(data => {
+    console.log(`Processing ${npcData.length} NPCs from server`);
+    
+    npcData.forEach((data: {
+      id: string;
+      type: string;
+      name: string;
+      x: number;
+      y: number;
+      z: number;
+      level: number;
+      health: number;
+      maxHealth: number;
+      isAttackable: boolean;
+      isAggressive: boolean;
+      combatState?: 'idle' | 'engaged' | 'dead';
+    }) => {
       // Check if NPC already exists
       const existingNpc = this.npcs.find(npc => npc.id === data.id);
       if (existingNpc) {
@@ -1447,7 +1487,13 @@ class LandmarkManager {
   }
   
   // Update NPC state (health, combat state, etc.)
-  public updateNPCState(data: any) {
+  public updateNPCState(data: {
+    id: string;
+    health?: number;
+    maxHealth?: number;
+    combatState?: 'idle' | 'engaged' | 'dead';
+    attacker?: string;
+  }) {
     const npc = this.npcs.find(npc => npc.id === data.id) as CombatNPC | undefined;
     if (!npc) {
       console.warn(`NPC not found for state update: ${data.id}`);

@@ -1769,6 +1769,12 @@ const setupNPCHandlers = (io: Server, socket: ExtendedSocket): void => {
   // Send all NPCs to the newly connected player
   socket.emit('updateNPCs', Object.values(npcs));
   
+  // Handle request for NPCs (helps with reconnection and ensuring client has data)
+  socket.on('requestNPCs', () => {
+    console.log(`[${socket.id}] Client requested NPC data`);
+    socket.emit('updateNPCs', Object.values(npcs));
+  });
+  
   // Handle player attacking an NPC
   socket.on('attackNPC', (data: { npcId: string }) => {
     try {
