@@ -50,6 +50,32 @@ const loadMessages = (): ChatMessage[] => {
   return [];
 };
 
+// Get saved position or use default
+const getSavedPosition = (): { left: number; bottom: number } => {
+  try {
+    const savedPosition = localStorage.getItem('chat_panel_position');
+    if (savedPosition) {
+      return JSON.parse(savedPosition);
+    }
+  } catch (error) {
+    console.error('Error loading chat panel position:', error);
+  }
+  return { left: 20, bottom: 20 };
+};
+
+// Get saved size or use default
+const getSavedSize = (): { width: number; height: number } => {
+  try {
+    const savedSize = localStorage.getItem('chat_panel_size');
+    if (savedSize) {
+      return JSON.parse(savedSize);
+    }
+  } catch (error) {
+    console.error('Error loading chat panel size:', error);
+  }
+  return { width: 350, height: 300 }; // Slightly larger default size
+};
+
 const ChatPanel: React.FC = () => {
   
   // Initialize messages from localStorage
@@ -60,7 +86,26 @@ const ChatPanel: React.FC = () => {
   });
   const [inputValue, setInputValue] = useState('');
   const [minimized, setMinimized] = useState(false);
+  const [locked, setLocked] = useState(true); // Default to locked
+  
+  // Position and size state
+  const [position, setPosition] = useState(getSavedPosition());
+  const [size, setSize] = useState(getSavedSize());
+  
+  // Refs for drag functionality
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef({
+    isDragging: false,
+    isResizing: false,
+    startX: 0,
+    startY: 0,
+    startLeft: 0,
+    startBottom: 0,
+    startWidth: 0,
+    startHeight: 0
+  });
+  
   // Keep track of our own socket ID for message comparison
   const mySocketIdRef = useRef<string | undefined>(undefined);
   
@@ -69,6 +114,15 @@ const ChatPanel: React.FC = () => {
     console.log('Messages changed, saving to localStorage:', messages.length, 'messages');
     saveMessages(messages);
   }, [messages]);
+  
+  // Save position and size when they change
+  useEffect(() => {
+    localStorage.setItem('chat_panel_position', JSON.stringify(position));
+  }, [position]);
+  
+  useEffect(() => {
+    localStorage.setItem('chat_panel_size', JSON.stringify(size));
+  }, [size]);
   
   // Create a chat message handler that can access latest messages
   const handleChatMessage = useCallback((message: ChatMessage) => {
@@ -126,6 +180,88 @@ const ChatPanel: React.FC = () => {
       soundManager.play('chatMessage');
     }
   }, [messages]);
+  
+  // Set up mouse event handlers for dragging and resizing
+  useEffect(() => {
+    if (!locked) {
+      const handleMouseMove = (e: MouseEvent) => {
+        if (dragRef.current.isDragging) {
+          // Calculate new position based on mouse movement
+          const deltaX = e.clientX - dragRef.current.startX;
+          const deltaY = e.clientY - dragRef.current.startY;
+          
+          // Update position (accounting for bottom-based positioning)
+          setPosition({
+            left: dragRef.current.startLeft + deltaX,
+            bottom: dragRef.current.startBottom - deltaY
+          });
+        } else if (dragRef.current.isResizing) {
+          // Calculate new size based on mouse position
+          const newWidth = dragRef.current.startWidth + (e.clientX - dragRef.current.startX);
+          const newHeight = dragRef.current.startHeight + (e.clientY - dragRef.current.startY);
+          
+          // Apply minimum size constraints
+          setSize({
+            width: Math.max(250, newWidth),
+            height: Math.max(200, newHeight)
+          });
+        }
+      };
+      
+      const handleMouseUp = () => {
+        dragRef.current.isDragging = false;
+        dragRef.current.isResizing = false;
+        document.body.style.cursor = 'default';
+      };
+      
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [locked]);
+  
+  const startDragging = (e: React.MouseEvent) => {
+    if (!locked && e.button === 0) { // Left mouse button only
+      e.preventDefault();
+      
+      dragRef.current = {
+        ...dragRef.current,
+        isDragging: true,
+        startX: e.clientX,
+        startY: e.clientY,
+        startLeft: position.left,
+        startBottom: position.bottom,
+        startWidth: size.width,
+        startHeight: size.height
+      };
+      
+      document.body.style.cursor = 'move';
+    }
+  };
+  
+  const startResizing = (e: React.MouseEvent) => {
+    if (!locked && e.button === 0) { // Left mouse button only
+      e.preventDefault();
+      e.stopPropagation();
+      
+      dragRef.current = {
+        ...dragRef.current,
+        isResizing: true,
+        startX: e.clientX,
+        startY: e.clientY,
+        startLeft: position.left,
+        startBottom: position.bottom,
+        startWidth: size.width,
+        startHeight: size.height
+      };
+      
+      document.body.style.cursor = 'nwse-resize';
+    }
+  };
   
   useEffect(() => {
     let socketInstance: any = null;
@@ -407,33 +543,42 @@ const ChatPanel: React.FC = () => {
   
   return (
     <div 
+      ref={panelRef}
       style={{
         position: 'absolute',
-        bottom: '20px',
-        left: '20px',
-        width: '300px',
-        height: minimized ? '40px' : '250px',
+        bottom: `${position.bottom}px`,
+        left: `${position.left}px`,
+        width: `${minimized ? size.width : size.width}px`,
+        height: minimized ? '40px' : `${size.height}px`,
         backgroundColor: 'rgba(0, 0, 0, 0.7)',
         borderRadius: '5px',
         display: 'flex',
         flexDirection: 'column',
-        transition: 'height 0.3s ease',
+        transition: minimized ? 'height 0.3s ease' : 'none',
         overflow: 'hidden',
-        zIndex: 100
+        zIndex: 100,
+        cursor: locked ? 'default' : 'move',
+        boxShadow: '0px 0px 10px rgba(0, 0, 0, 0.5)',
+        border: locked ? 'none' : '1px dashed rgba(255, 255, 255, 0.3)'
+      }}
+      onMouseDown={(e) => {
+        // Stop propagation of mousedown events (including right clicks)
+        e.stopPropagation();
+        
+        // Start dragging if unlocked and clicked on the header
+        if (!locked && 
+            e.target instanceof HTMLElement && 
+            e.target.closest('.chat-header')) {
+          startDragging(e);
+        }
       }}
       onClick={(e) => {
         // Stop propagation of clicks inside the chat panel
-        // This prevents document-level handlers from closing it
         e.stopPropagation();
-      }}
-      onMouseDown={(e) => {
-        // Also stop propagation of mousedown events (including right clicks)
-        // This prevents document-level handlers from closing it
-        e.stopPropagation();
-        // Don't mark as "handled" to allow specific mousedown behaviors within the panel
       }}
     >
       <div 
+        className="chat-header"
         style={{
           padding: '8px 12px',
           backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -441,13 +586,30 @@ const ChatPanel: React.FC = () => {
           justifyContent: 'space-between',
           alignItems: 'center',
           borderBottom: '1px solid rgba(255, 255, 255, 0.2)',
-          cursor: 'pointer'
+          cursor: locked ? 'default' : 'move'
         }}
       >
         <span style={{ color: 'white', fontWeight: 'bold' }}>
           Chat {messages.length > 0 && `(${messages.length})`}
         </span>
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              setLocked(!locked);
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: locked ? '#ff9800' : '#4caf50',
+              cursor: 'pointer',
+              marginRight: '8px',
+              fontSize: '14px'
+            }}
+            title={locked ? "Unlock to move and resize" : "Lock position and size"}
+          >
+            {locked ? '🔒' : '🔓'}
+          </button>
           <button 
             onClick={(e) => {
               e.stopPropagation(); // Prevent triggering minimize
@@ -665,6 +827,38 @@ const ChatPanel: React.FC = () => {
             </button>
           </form>
         </>
+      )}
+      
+      {/* Resize handle - only visible when unlocked */}
+      {!locked && !minimized && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            right: 0,
+            width: '16px',
+            height: '16px',
+            cursor: 'nwse-resize',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          onMouseDown={startResizing}
+        >
+          <div
+            style={{
+              width: '10px',
+              height: '10px',
+              border: '2px solid rgba(255, 255, 255, 0.6)',
+              borderLeft: 'none',
+              borderTop: 'none',
+              transform: 'rotate(45deg)',
+              transformOrigin: 'center',
+              marginRight: '2px',
+              marginBottom: '2px'
+            }}
+          />
+        </div>
       )}
     </div>
   );
