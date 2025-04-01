@@ -396,6 +396,19 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       });
     }
     
+    // Check if this guest player is an admin
+    if (tempData.isAdmin) {
+      console.log(`Player ${tempData.username} (${sessionId}) has admin privileges`);
+      // Create the user object if it doesn't exist yet
+      if (!socket.user) {
+        socket.user = {
+          id: sessionId // Required property
+        };
+      }
+      // Set admin flag on socket.user
+      socket.user!.isAdmin = true;
+    }
+    
     // Convert temp data to player data format
     playerData = {
       user_id: sessionId,
@@ -1260,6 +1273,10 @@ const setupChatCommandHandler = (io: Server, socket: ExtendedSocket) => {
           handleGiveCommand(io, socket, player, data.params);
           break;
           
+        case 'cleanup':
+          handleCleanupCommand(io, socket, player);
+          break;
+          
         default:
           socket.emit('chatMessage', { 
             content: `Unknown command: ${data.command}`, 
@@ -1431,6 +1448,90 @@ const handleGiveCommand = async (io: Server, socket: ExtendedSocket, player: Pla
     }
   } catch (error) {
     console.error(`[${socket.id}] Failed to save inventory:`, error);
+  }
+};
+
+// Add handler for the /cleanup command
+const handleCleanupCommand = async (io: Server, socket: ExtendedSocket, player: Player) => {
+  console.log(`[${socket.id}] Processing cleanup command from player ${player.name}`);
+  
+  // Check if the player has admin privileges
+  if (!socket.user?.isAdmin) {
+    console.log(`[${socket.id}] Cleanup command rejected - user is not an admin`);
+    socket.emit('chatMessage', { 
+      content: 'Error: You do not have permission to use this command.', 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  // Send initial feedback that we're processing the command
+  socket.emit('chatMessage', { 
+    content: 'Processing cleanup command, please wait...', 
+    type: 'system', 
+    timestamp: Date.now() 
+  });
+  
+  try {
+    // Log the cleanup start time for performance tracking
+    const startTime = Date.now();
+    console.log(`[${socket.id}] Starting cleanup operation at ${new Date(startTime).toISOString()}`);
+    
+    // Execute the cleanup - await the operation to ensure it completes
+    const cleanupResult = await worldItemHandler.removeAllItems();
+    
+    // Calculate execution time
+    const executionTime = Date.now() - startTime;
+    console.log(`[${socket.id}] Cleanup operation completed in ${executionTime}ms`);
+    
+    if (cleanupResult) {
+      // Broadcast success message to all players
+      io.emit('chatMessage', { 
+        content: `${player.name} has removed all items from the game world. The ground is now clean.`, 
+        type: 'system', 
+        timestamp: Date.now() 
+      });
+      
+      // Send a private confirmation to the admin
+      socket.emit('chatMessage', { 
+        content: `Cleanup completed successfully in ${executionTime/1000} seconds.`, 
+        type: 'system', 
+        timestamp: Date.now() 
+      });
+      
+      console.log(`[${socket.id}] Successfully executed cleanup command (including database cleanup)`);
+    } else {
+      // Database cleanup had an issue, inform the admin
+      socket.emit('chatMessage', { 
+        content: 'Warning: Items were removed from the game world, but there were issues with database cleanup. Some items may still exist in the database.', 
+        type: 'system', 
+        timestamp: Date.now() 
+      });
+      
+      // General announcement to all players
+      io.emit('chatMessage', { 
+        content: `${player.name} has cleared all items from the ground, but some database issues were encountered.`, 
+        type: 'system', 
+        timestamp: Date.now() 
+      });
+      
+      console.log(`[${socket.id}] Executed cleanup command with database issues`);
+    }
+    
+    // Update the in-memory worldItems array reference (just to be sure)
+    worldItems = [];
+  } catch (error) {
+    console.error(`[${socket.id}] Error executing cleanup command:`, error);
+    
+    socket.emit('chatMessage', { 
+      content: `Error removing items: ${error instanceof Error ? error.message : 'Unknown error'}. The game world may have been cleaned, but the database may still contain items.`, 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    
+    // Update the in-memory worldItems array reference in case of error
+    worldItems = [];
   }
 };
 

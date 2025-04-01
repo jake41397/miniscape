@@ -227,6 +227,11 @@ const ChatPanel: React.FC = () => {
           type: 'system'
         }, {
           name: 'System',
+          text: '/cleanup - Removes all items from the ground (admin only)',
+          timestamp: Date.now(),
+          type: 'system'
+        }, {
+          name: 'System',
           text: '/help - Shows this help message',
           timestamp: Date.now(),
           type: 'system'
@@ -271,6 +276,76 @@ const ChatPanel: React.FC = () => {
         setMessages(prev => [...prev, {
           name: 'System',
           text: `Attempting to drop: ${itemName}`,
+          timestamp: Date.now(),
+          type: 'system'
+        }]);
+        break;
+        
+      case '/give':
+        const giveSocket = await getSocket();
+        if (!giveSocket) {
+          console.error('Cannot execute command - socket not connected');
+          setMessages(prev => [...prev, {
+            name: 'System',
+            text: 'Error: Not connected to server',
+            timestamp: Date.now(),
+            type: 'system'
+          }]);
+          return;
+        }
+        
+        if (parts.length < 2) {
+          // Add error message to chat
+          setMessages(prev => [...prev, {
+            name: 'System',
+            text: 'Usage: /give [item_name] - Gives you the specified item',
+            timestamp: Date.now(),
+            type: 'system'
+          }]);
+          return;
+        }
+        
+        // Get the item name (combine all words after /give)
+        const giveItemName = parts.slice(1).join(' ');
+        
+        // Send give command to server
+        (giveSocket as any).emit('chatCommand', { 
+          command: 'give', 
+          params: { itemName: giveItemName } 
+        });
+        
+        // Add feedback message
+        setMessages(prev => [...prev, {
+          name: 'System',
+          text: `Attempting to give you: ${giveItemName}`,
+          timestamp: Date.now(),
+          type: 'system'
+        }]);
+        break;
+        
+      case '/cleanup':
+        const cleanupSocket = await getSocket();
+        if (!cleanupSocket) {
+          console.error('Cannot execute command - socket not connected');
+          setMessages(prev => [...prev, {
+            name: 'System',
+            text: 'Error: Not connected to server',
+            timestamp: Date.now(),
+            type: 'system'
+          }]);
+          return;
+        }
+        
+        // Send cleanup command to server
+        (cleanupSocket as any).emit('chatCommand', { 
+          command: 'cleanup', 
+          params: {} 
+        });
+        
+        // Add feedback message
+        setMessages(prev => [...prev, {
+          name: 'System',
+          text: 'Attempting to remove all items from the ground...',
           timestamp: Date.now(),
           type: 'system'
         }]);

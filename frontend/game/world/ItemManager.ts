@@ -184,6 +184,12 @@ class ItemManager {
     }
   };
 
+  // Handle clearing all items event
+  private handleClearAllItems = (data: any) => {
+    console.log(`%c 🧹 Received clearAllItems event, removing ${data?.count || 'all'} items`, "background: #F44336; color: white; font-size: 14px;");
+    this.clearAllItems();
+  };
+
   // --- Listener Registration ---
 
   private registerGameListeners = () => {
@@ -200,6 +206,7 @@ class ItemManager {
     (this.socket as any).off('itemPickedUp', this.handleItemPickedUp);
     (this.socket as any).off('worldItemRemoved', this.handleWorldItemRemoved);
     (this.socket as any).off('worldItems', this.handleWorldItemsSync);
+    (this.socket as any).off('clearAllItems', this.handleClearAllItems);
 
     // Attach fresh listeners
     (this.socket as any).on('itemDropped', this.handleItemDropped);
@@ -207,6 +214,7 @@ class ItemManager {
     (this.socket as any).on('itemPickedUp', this.handleItemPickedUp);
     (this.socket as any).on('worldItemRemoved', this.handleWorldItemRemoved);
     (this.socket as any).on('worldItems', this.handleWorldItemsSync);
+    (this.socket as any).on('clearAllItems', this.handleClearAllItems);
 
     console.log('✅ Game item listeners registered.');
 

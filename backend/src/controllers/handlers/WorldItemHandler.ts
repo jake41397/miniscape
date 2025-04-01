@@ -1,5 +1,6 @@
 import { Server } from 'socket.io';
 import { loadWorldItems, removeWorldItem, savePlayerInventory } from '../../models/gameModel';
+import { removeAllWorldItems } from '../../db/worldItemsDB';
 import { ExtendedSocket, InventoryItem, PlayersStore, WorldItem } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -143,6 +144,69 @@ export class WorldItemHandler {
       this.removeWorldItem(item.dropId);
       console.log(`Removed old world item ${item.dropId} (${item.itemType})`);
     });
+  }
+  
+  /**
+   * Remove all items from the world
+   */
+  public async removeAllItems(): Promise<boolean> {
+    console.log('Starting world items cleanup process');
+    
+    // Get count of items for logging
+    const itemCount = this.worldItems.length;
+    console.log(`Removing ${itemCount} world items from in-memory array`);
+    
+    // Create a copy of all item IDs before we start modifying the array
+    const allItemIds = this.worldItems.map(item => item.dropId);
+    
+    // Clear the local array
+    this.worldItems = [];
+    
+    try {
+      console.log('Calling removeAllWorldItems to delete items from database');
+      // Remove all items from database - wait for this to complete
+      const dbResult = await removeAllWorldItems();
+      
+      if (!dbResult) {
+        console.error('⚠️ Database cleanup returned false - items may still remain in database');
+      } else {
+        console.log('✅ Database cleanup completed successfully');
+      }
+      
+      // Broadcast a special message to tell all clients to clear their items
+      console.log('Broadcasting clearAllItems event to all clients');
+      this.io.emit('clearAllItems', { count: itemCount });
+      
+      // Also emit individual removal events for each item for backwards compatibility
+      console.log(`Emitting ${allItemIds.length} individual itemRemoved events for backward compatibility`);
+      allItemIds.forEach(dropId => {
+        this.io.emit('itemRemoved', { dropId });
+      });
+      
+      // Double check our internal state is cleared
+      if (this.worldItems.length > 0) {
+        console.warn(`Internal state inconsistency: worldItems array still has ${this.worldItems.length} items after cleanup`);
+        this.worldItems = []; // Force clear it again
+      }
+      
+      console.log(`World items cleanup process completed`);
+      return dbResult;
+    } catch (err: unknown) {
+      const error = err as Error;
+      console.error('Error removing all world items from database:', error.message, error.stack);
+      
+      // Still notify clients even if DB operation failed
+      console.log('Still sending clearAllItems event despite database error');
+      this.io.emit('clearAllItems', { count: itemCount });
+      
+      // Double check our internal state is cleared regardless of error
+      if (this.worldItems.length > 0) {
+        console.warn(`Clearing ${this.worldItems.length} remaining items from internal array after error`);
+        this.worldItems = []; // Force clear it again
+      }
+      
+      return false;
+    }
   }
   
   /**
