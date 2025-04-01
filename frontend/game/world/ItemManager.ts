@@ -19,6 +19,7 @@ class ItemManager {
   private worldItems: WorldItem[] = [];
   private playerRef: React.MutableRefObject<THREE.Mesh | null>;
   private onWorldItemsUpdated?: (items: WorldItem[]) => void;
+  private socket: any = null; // Store the socket instance
 
   constructor(options: ItemManagerOptions) {
     this.scene = options.scene;
@@ -26,183 +27,214 @@ class ItemManager {
     this.onWorldItemsUpdated = options.onWorldItemsUpdated;
   }
 
+  // --- Private Event Handlers ---
+
+  private handleItemDropped = (item: any) => {
+    try {
+      console.log(`%c 📦 SOCKET EVENT: Received itemDropped event:`, "background: #FF9800; color: white; font-size: 14px;", item);
+      if (!item || !item.dropId || !item.itemType) {
+        console.error('Invalid item data received in itemDropped event:', item);
+        return;
+      }
+
+      // CRITICAL: Check BEFORE any processing if this mesh already exists in the scene
+      const existingMesh = Array.from(this.scene.children).find(
+        child => child.userData && child.userData.dropId === item.dropId
+      );
+      
+      if (existingMesh) {
+        console.log(`%c 🚫 Mesh for drop ID ${item.dropId} already exists in scene - SKIPPING (itemDropped)`, "background: #FF0000; color: white;");
+        return;
+      }
+
+      // Lock this specific itemDropId to prevent race conditions
+      if ((window as any).processedItemDropIds[item.dropId]) {
+        console.log(`%c 🔒 Drop ID ${item.dropId} already being processed - SKIPPING (itemDropped)`, "background: #FF9800; color: white;");
+        return;
+      }
+      
+      // Mark this item as processed IMMEDIATELY to prevent race conditions
+      console.log(`%c 🔐 Locking drop ID ${item.dropId} for processing (itemDropped)`, "color: #FF5722;");
+      (window as any).processedItemDropIds[item.dropId] = Date.now();
+      
+      // Play a sound for item dropping
+      soundManager.play('itemDrop' as any);
+      
+      console.log(`%c 🌎 Received itemDropped event, but letting worldItemAdded handle mesh creation: ${item.itemType} at (${item.x}, ${item.y}, ${item.z})`, "background: #FF9800; color: white;");
+      
+      // REMOVED call to addWorldItem to prevent duplicates. Relying on worldItemAdded.
+      // this.addWorldItem({
+      //   dropId: item.dropId,
+      //   itemType: item.type || item.itemType, // Try both formats - important
+      //   x: item.x,
+      //   y: item.y,
+      //   z: item.z
+      // });
+    } catch (error) {
+      console.error('Error handling itemDropped event:', error);
+    }
+  };
+
+  private handleWorldItemAdded = (item: any) => {
+    console.log(`%c DEBUG: worldItemAdded listener fired for ${item?.dropId}`, "color: orange;"); 
+    try {
+      console.log(`%c 📦 SOCKET EVENT: Received worldItemAdded event:`, "background: #2196F3; color: white; font-size: 14px;", item);
+      if (!item || !item.dropId || !item.itemType) {
+        console.error('Invalid item data received in worldItemAdded event:', item);
+        return;
+      }
+      
+      // CRITICAL: Check FIRST if mesh already exists in scene
+      const existingMesh = Array.from(this.scene.children).find(
+        child => child.userData && child.userData.dropId === item.dropId
+      );
+      
+      if (existingMesh) {
+        console.log(`%c 🚫 Mesh for drop ID ${item.dropId} already exists in scene - SKIPPING (worldItemAdded)`, "background: #FF0000; color: white;");
+        
+        // Even if we skip creating a new mesh, ensure the existing one has animation
+        existingMesh.userData.animateY = true;
+        existingMesh.userData.baseY = existingMesh.position.y || 0.25;
+        existingMesh.userData.phase = Math.random() * Math.PI * 2;
+        existingMesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
+        return;
+      }
+      
+      // Check if we've already processed or are currently processing this drop ID
+      // Commenting out this check as addWorldItem handles duplicates robustly
+      /*
+      if ((window as any).processedItemDropIds[item.dropId]) {
+        console.log(`%c 🔒 Drop ID ${item.dropId} already being processed - SKIPPING (worldItemAdded)`, "background: #2196F3; color: white;");
+        return;
+      }
+      */
+      
+      // Mark this item as processed IMMEDIATELY (Keep this line)
+      console.log(`%c 🔐 Locking drop ID ${item.dropId} for processing (worldItemAdded)`, "color: #2196F3;");
+      (window as any).processedItemDropIds[item.dropId] = Date.now();
+      
+      // Check if it's our own drop or another player's - just for logging
+      const isOurDrop = item.droppedBy === this.socket?.id; // Use stored socket instance
+      console.log(`%c Item dropped by ${isOurDrop ? 'us' : 'another player'}: ${item.itemType}`, isOurDrop ? "color: #FF5722;" : "color: #00BCD4;");
+      
+      console.log(`%c 🌎 Creating world item from worldItemAdded event: ${item.itemType} at (${item.x}, ${item.y}, ${item.z})`, "background: #4CAF50; color: white;");
+      
+      // Play sound only for other players' drops
+      if (!isOurDrop) {
+        soundManager.play('itemDrop' as any);
+      }
+      
+      // Add to world items - this will create the mesh with animation properties
+      this.addWorldItem({
+        dropId: item.dropId,
+        itemType: item.type || item.itemType,
+        x: item.x,
+        y: item.y,
+        z: item.z
+      });
+    } catch (error) {
+      console.error('Error handling worldItemAdded event:', error);
+    }
+  };
+
+  private handleItemPickedUp = (data: any) => {
+    console.log(`Received itemPickedUp event:`, data);
+    // When an item is picked up, we need to:
+    // 1. Remove the item from the scene
+    this.removeWorldItem(data.dropId);
+    // 2. Remove it from our tracking to allow it to be recreated if dropped again
+    if ((window as any).processedItemDropIds) {
+      delete (window as any).processedItemDropIds[data.dropId];
+    }
+  };
+
+  private handleWorldItemRemoved = (dropId: string) => {
+    console.log(`Received worldItemRemoved event: ${dropId}`);
+    // When an item is removed, we need to:
+    // 1. Remove the item from the scene
+    this.removeWorldItem(dropId);
+    // 2. Remove it from our tracking to allow it to be recreated if dropped again
+    if ((window as any).processedItemDropIds) {
+      delete (window as any).processedItemDropIds[dropId];
+    }
+  };
+
+  private handleWorldItemsSync = (items: any[]) => {
+    console.log(`Received ${items.length} world items from server:`, items);
+    
+    // Only clear if we get a valid response
+    if (Array.isArray(items)) {
+      // Clear existing items first
+      this.clearAllItems();
+      
+      // Add all items from server
+      if (items.length > 0) {
+        items.forEach(item => {
+          if (item && item.dropId && item.itemType) {
+            this.addWorldItem(item);
+          } else {
+            console.error('Invalid item in worldItems array:', item);
+          }
+        });
+      } else {
+        console.log("Server returned zero world items. The area is empty.");
+      }
+    } else {
+      console.error('worldItems event received non-array data:', items);
+    }
+  };
+
+  // --- Listener Registration ---
+
+  private registerGameListeners = () => {
+    if (!this.socket) {
+        console.error("Cannot register listeners, socket not available.");
+        return;
+    }
+
+    console.log('%c 🔗 Registering game item listeners on socket:', 'color: teal; font-weight: bold;', this.socket.id);
+
+    // Remove potentially old listeners first to prevent duplicates
+    (this.socket as any).off('itemDropped', this.handleItemDropped);
+    (this.socket as any).off('worldItemAdded', this.handleWorldItemAdded);
+    (this.socket as any).off('itemPickedUp', this.handleItemPickedUp);
+    (this.socket as any).off('worldItemRemoved', this.handleWorldItemRemoved);
+    (this.socket as any).off('worldItems', this.handleWorldItemsSync);
+
+    // Attach fresh listeners
+    (this.socket as any).on('itemDropped', this.handleItemDropped);
+    (this.socket as any).on('worldItemAdded', this.handleWorldItemAdded);
+    (this.socket as any).on('itemPickedUp', this.handleItemPickedUp);
+    (this.socket as any).on('worldItemRemoved', this.handleWorldItemRemoved);
+    (this.socket as any).on('worldItems', this.handleWorldItemsSync);
+
+    console.log('✅ Game item listeners registered.');
+
+    // Request initial state now that listeners are attached
+    this.requestWorldItems();
+  };
+
   // Initialize socket listeners for item-related events
   public initSocketListeners = async () => {
-    const socket = await getSocket();
-    if (!socket) {
+    this.socket = await getSocket(); // Store the socket instance
+    if (!this.socket) {
       console.error('Failed to initialize item socket listeners - no socket available');
       return;
     }
 
-    console.log('%c 🎮 SETTING UP ITEM SOCKET LISTENERS', 'background: #4CAF50; color: white; font-size: 14px;');
-    console.log('Socket ID:', (socket as any).id);
+    console.log('%c 🎮 INITIALIZING ITEM SOCKET LISTENERS', 'background: #4CAF50; color: white; font-size: 14px;');
+    console.log('Initial Socket ID:', this.socket.id);
 
-    // Create a single global tracking object for all drops across events
+    // Create a single global tracking object if it doesn\'t exist
     if (!(window as any).processedItemDropIds) {
       (window as any).processedItemDropIds = {};
     }
 
-    // Listen for new dropped items
-    (socket as any).on('itemDropped', (item: any) => {
-      try {
-        console.log(`%c 📦 SOCKET EVENT: Received itemDropped event:`, "background: #FF9800; color: white; font-size: 14px;", item);
-        if (!item || !item.dropId || !item.itemType) {
-          console.error('Invalid item data received in itemDropped event:', item);
-          return;
-        }
+    // ---> Register listeners directly <---
+    console.log('Registering listeners immediately.');
+    this.registerGameListeners(); 
 
-        // CRITICAL: Check BEFORE any processing if this mesh already exists in the scene
-        const existingMesh = Array.from(this.scene.children).find(
-          child => child.userData && child.userData.dropId === item.dropId
-        );
-        
-        if (existingMesh) {
-          console.log(`%c 🚫 Mesh for drop ID ${item.dropId} already exists in scene - SKIPPING (itemDropped)`, "background: #FF0000; color: white;");
-          return;
-        }
-
-        // Lock this specific itemDropId to prevent race conditions
-        if ((window as any).processedItemDropIds[item.dropId]) {
-          console.log(`%c 🔒 Drop ID ${item.dropId} already being processed - SKIPPING (itemDropped)`, "background: #FF9800; color: white;");
-          return;
-        }
-        
-        // Mark this item as processed IMMEDIATELY to prevent race conditions
-        console.log(`%c 🔐 Locking drop ID ${item.dropId} for processing (itemDropped)`, "color: #FF5722;");
-        (window as any).processedItemDropIds[item.dropId] = Date.now();
-        
-        // Play a sound for item dropping
-        soundManager.play('itemDrop' as any);
-        
-        console.log(`%c 🌎 Creating world item from itemDropped event: ${item.itemType} at (${item.x}, ${item.y}, ${item.z})`, "background: #4CAF50; color: white;");
-        
-        // Add to world items - this creates the animated mesh
-        this.addWorldItem({
-          dropId: item.dropId,
-          itemType: item.type || item.itemType, // Try both formats - important
-          x: item.x,
-          y: item.y,
-          z: item.z
-        });
-      } catch (error) {
-        console.error('Error handling itemDropped event:', error);
-      }
-    });
-
-    // Handle worldItemAdded events - only create mesh if not already processed
-    (socket as any).on('worldItemAdded', (item: any) => {
-      try {
-        console.log(`%c 📦 SOCKET EVENT: Received worldItemAdded event:`, "background: #2196F3; color: white; font-size: 14px;", item);
-        if (!item || !item.dropId || !item.itemType) {
-          console.error('Invalid item data received in worldItemAdded event:', item);
-          return;
-        }
-        
-        // CRITICAL: Check FIRST if mesh already exists in scene
-        const existingMesh = Array.from(this.scene.children).find(
-          child => child.userData && child.userData.dropId === item.dropId
-        );
-        
-        if (existingMesh) {
-          console.log(`%c 🚫 Mesh for drop ID ${item.dropId} already exists in scene - SKIPPING (worldItemAdded)`, "background: #FF0000; color: white;");
-          
-          // Even if we skip creating a new mesh, ensure the existing one has animation
-          existingMesh.userData.animateY = true;
-          existingMesh.userData.baseY = existingMesh.position.y || 0.25;
-          existingMesh.userData.phase = Math.random() * Math.PI * 2;
-          existingMesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
-          return;
-        }
-        
-        // Check if we've already processed or are currently processing this drop ID
-        if ((window as any).processedItemDropIds[item.dropId]) {
-          console.log(`%c 🔒 Drop ID ${item.dropId} already being processed - SKIPPING (worldItemAdded)`, "background: #2196F3; color: white;");
-          return;
-        }
-        
-        // Mark this item as processed IMMEDIATELY
-        console.log(`%c 🔐 Locking drop ID ${item.dropId} for processing (worldItemAdded)`, "color: #2196F3;");
-        (window as any).processedItemDropIds[item.dropId] = Date.now();
-        
-        // Check if it's our own drop or another player's - just for logging
-        const isOurDrop = item.droppedBy === (socket as any).id;
-        console.log(`%c Item dropped by ${isOurDrop ? 'us' : 'another player'}: ${item.itemType}`, isOurDrop ? "color: #FF5722;" : "color: #00BCD4;");
-        
-        console.log(`%c 🌎 Creating world item from worldItemAdded event: ${item.itemType} at (${item.x}, ${item.y}, ${item.z})`, "background: #4CAF50; color: white;");
-        
-        // Play sound only for other players' drops
-        if (!isOurDrop) {
-          soundManager.play('itemDrop' as any);
-        }
-        
-        // Add to world items - this will create the mesh with animation properties
-        this.addWorldItem({
-          dropId: item.dropId,
-          itemType: item.type || item.itemType,
-          x: item.x,
-          y: item.y,
-          z: item.z
-        });
-      } catch (error) {
-        console.error('Error handling worldItemAdded event:', error);
-      }
-    });
-
-    // Listen for item pickup events
-    (socket as any).on('itemPickedUp', (data: any) => {
-      console.log(`Received itemPickedUp event:`, data);
-      // When an item is picked up, we need to:
-      // 1. Remove the item from the scene
-      this.removeWorldItem(data.dropId);
-      // 2. Remove it from our tracking to allow it to be recreated if dropped again
-      if ((window as any).processedItemDropIds) {
-        delete (window as any).processedItemDropIds[data.dropId];
-      }
-    });
-
-    // Also listen for the alternative worldItemRemoved event
-    (socket as any).on('worldItemRemoved', (dropId: string) => {
-      console.log(`Received worldItemRemoved event: ${dropId}`);
-      // When an item is removed, we need to:
-      // 1. Remove the item from the scene
-      this.removeWorldItem(dropId);
-      // 2. Remove it from our tracking to allow it to be recreated if dropped again
-      if ((window as any).processedItemDropIds) {
-        delete (window as any).processedItemDropIds[dropId];
-      }
-    });
-
-    // Check for existing world items
-    console.log('Requesting initial world items');
-    this.requestWorldItems();
-
-    // Listen for all world items (initial sync)
-    (socket as any).on('worldItems', (items: any[]) => {
-      console.log(`Received ${items.length} world items from server:`, items);
-      
-      // Only clear if we get a valid response
-      if (Array.isArray(items)) {
-        // Clear existing items first
-        this.clearAllItems();
-        
-        // Add all items from server
-        if (items.length > 0) {
-          items.forEach(item => {
-            if (item && item.dropId && item.itemType) {
-              this.addWorldItem(item);
-            } else {
-              console.error('Invalid item in worldItems array:', item);
-            }
-          });
-        } else {
-          console.log("Server returned zero world items. The area is empty.");
-        }
-      } else {
-        console.error('worldItems event received non-array data:', items);
-      }
-    });
-    
-    console.log('Item socket listeners set up successfully');
+    console.log('Item socket listener initialization complete.');
   };
 
   // Request world items from server - can be called anytime to refresh
@@ -219,13 +251,20 @@ class ItemManager {
 
   // Cleanup socket listeners
   public cleanupSocketListeners = async () => {
-    const socket = await getSocket();
-    if (!socket) return;
+    // const socket = await getSocket(); // Use this.socket
+    if (!this.socket) return;
 
-    // Use type assertion to avoid type errors with socket events
-    (socket as any).off('itemDropped');
-    (socket as any).off('itemPickedUp');
-    (socket as any).off('worldItems');
+    console.log('%c 🧹 Cleaning up item listeners for socket:', 'color: orange; font-weight: bold;', this.socket.id);
+    // Use type assertion and method references to remove listeners
+    (this.socket as any).off('connect', this.registerGameListeners); // Important to remove the connect listener too!
+    (this.socket as any).off('itemDropped', this.handleItemDropped);
+    (this.socket as any).off('worldItemAdded', this.handleWorldItemAdded);
+    (this.socket as any).off('itemPickedUp', this.handleItemPickedUp);
+    (this.socket as any).off('worldItemRemoved', this.handleWorldItemRemoved);
+    (this.socket as any).off('worldItems', this.handleWorldItemsSync);
+
+    this.socket = null; // Clear the stored socket
+    console.log('✅ Item listeners cleaned up.');
   };
 
   // Drop an item from inventory
@@ -253,42 +292,6 @@ class ItemManager {
         startTime: Date.now()
       };
       
-      // Set up one-time listeners for this specific drop
-      const dropSuccessTimeout = setTimeout(() => {
-        console.log(`%c ⚠️ Drop request timed out for ${item.type}`, "color: #FF9800;");
-        delete (window as any).pendingItemDrops[clientDropId];
-      }, 5000); // 5 second timeout
-      
-      // Listen for worldItemAdded events that might correspond to our drop
-      const worldItemHandler = (worldItem: any) => {
-        // Check if this is our item by matching type and approximate drop time
-        const now = Date.now();
-        const isPotentialMatch = 
-          worldItem.itemType === item.type && 
-          Math.abs(now - (window as any).pendingItemDrops[clientDropId]?.startTime) < 3000;
-        
-        if (isPotentialMatch) {
-          console.log(`%c ✅ Received confirmation of dropped item: ${worldItem.dropId}`, "color: #4CAF50; font-weight: bold;");
-          
-          // Clean up
-          clearTimeout(dropSuccessTimeout);
-          delete (window as any).pendingItemDrops[clientDropId];
-          (socket as any).off('worldItemAdded', worldItemHandler);
-          
-          // Important: Force animation to be enabled for this item if we have it in our world items
-          const existingItem = this.worldItems.find(i => i.dropId === worldItem.dropId);
-          if (existingItem && existingItem.mesh) {
-            existingItem.mesh.userData.animateY = true;
-            existingItem.mesh.userData.baseY = existingItem.mesh.position.y || 0.25;
-            existingItem.mesh.userData.phase = Math.random() * Math.PI * 2;
-            existingItem.mesh.userData.rotationSpeed = (Math.random() * 0.3) + 0.2;
-          }
-        }
-      };
-      
-      // Set up the one-time listener
-      (socket as any).on('worldItemAdded', worldItemHandler);
-      
       // Prepare the drop data with all necessary information
       const dropData = {
         itemId: item.id,          // Item ID for inventory management
@@ -303,11 +306,6 @@ class ItemManager {
       
       // Send the drop request
       (socket as any).emit('dropItem', dropData);
-      
-      // Schedule cleanup for the listener in case we don't get a match
-      setTimeout(() => {
-        (socket as any).off('worldItemAdded', worldItemHandler);
-      }, 5000);
       
       console.log(`%c 🎯 Drop request sent for ${item.type} at position: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`, "color: #4CAF50;");
       return true;

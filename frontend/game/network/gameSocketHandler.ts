@@ -5,17 +5,6 @@ import { Player } from '../../types/player';
 import soundManager from '../audio/soundManager';
 import WorldManager, { WORLD_BOUNDS } from '../world/WorldManager';
 
-// ██████╗ ███████╗██████╗ ██╗   ██╗ ██████╗  ██████╗ ██╗███╗   ██╗ ██████╗ 
-// ██╔══██╗██╔════╝██╔══██╗██║   ██║██╔════╝ ██╔════╝ ██║████╗  ██║██╔════╝ 
-// ██║  ██║█████╗  ██████╔╝██║   ██║██║  ███╗██║  ███╗██║██╔██╗ ██║██║  ███╗
-// ██║  ██║██╔══╝  ██╔══██╗██║   ██║██║   ██║██║   ██║██║██║╚██╗██║██║   ██║
-// ██████╔╝███████╗██████╔╝╚██████╔╝╚██████╔╝╚██████╔╝██║██║ ╚████║╚██████╔╝
-// ╚═════╝ ╚══════╝╚═════╝  ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝ ╚═════╝ 
-console.log("%c MULTIPLAYER DEBUG ENABLED ", "background: #ff0000; color: white; font-size: 24px; font-weight: bold;");
-console.log("%c This file has been loaded and will log multiplayer events ", "background: #0000ff; color: white; font-size: 18px;");
-// Add startup time to help identify fresh logs
-console.log(`🕒 Debug startup time: ${new Date().toISOString()}`);
-
 // Add type definition for player move data
 interface PlayerMoveData {
   id: string;
@@ -502,18 +491,6 @@ export const setupSocketListeners = async ({
   socket.on('playerMoved', (data: PlayerMoveData) => {
     // First get the player for logging
     const playerMesh = playersRef.current.get(data.id);
-    
-    // 🔴 CRITICAL DEBUG LOGGING 🔴
-    console.log("%c 🔵 PLAYER MOVED EVENT RECEIVED 🔵 ", "background: #ff00ff; color: white; font-size: 18px; font-weight: bold;");
-    console.log('🎮 Player Movement Data:', {
-      playerId: data.id,
-      position: { x: data.x.toFixed(2), y: data.y.toFixed(2), z: data.z.toFixed(2) },
-      rotation: data.rotation?.toFixed(2) || 'undefined',
-      timestamp: data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : 'undefined',
-      playerExists: playersRef.current.has(data.id),
-      totalPlayers: playersRef.current.size,
-      timeSinceLast: playerMesh ? Date.now() - (playerMesh.userData?.lastUpdateTime || 0) : 'N/A'
-    });
     
     // Skip if this is our own player ID - we shouldn't move ourselves based on server events
     // This is a fallback in case we broadcast to all instead of socket.broadcast
