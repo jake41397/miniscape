@@ -26,14 +26,15 @@ const SmithingController: React.FC<SmithingControllerProps> = ({
     // Add the openSmithingPanel function to the window object to allow global access
     window.openSmithingPanel = (mode: string) => {
       if (!externalConnectionStatus) {
-        const notificationEvent = new CustomEvent('show-notification', {
+        const chatEvent = new CustomEvent('chat-message', {
           detail: { 
-            message: 'Cannot connect to server. Please try again later.',
-            type: 'error'
+            content: 'Cannot connect to server. Please try again later.',
+            type: 'error',
+            timestamp: Date.now()
           },
           bubbles: true
         });
-        document.dispatchEvent(notificationEvent);
+        document.dispatchEvent(chatEvent);
         return;
       }
 

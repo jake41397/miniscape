@@ -254,26 +254,28 @@ export class SmithingSystem {
           });
           document.dispatchEvent(inventoryUpdateEvent);
           
-          // Show success notification
-          const notificationEvent = new CustomEvent('show-notification', {
+          // Show success notification as chat message
+          const chatEvent = new CustomEvent('chat-message', {
             detail: { 
-              message: 'Successfully smelted a bronze bar!',
-              type: 'success'
+              content: 'Successfully smelted a bronze bar!',
+              type: 'success',
+              timestamp: Date.now()
             },
             bubbles: true
           });
-          document.dispatchEvent(notificationEvent);
+          document.dispatchEvent(chatEvent);
         } else {
           console.error('[SMELTING] Server returned error:', response.error);
-          // Show error notification
-          const notificationEvent = new CustomEvent('show-notification', {
+          // Show error notification as chat message
+          const chatEvent = new CustomEvent('chat-message', {
             detail: { 
-              message: response.error || 'Failed to smelt bronze bar',
-              type: 'error'
+              content: response.error || 'Failed to smelt bronze bar',
+              type: 'error',
+              timestamp: Date.now()
             },
             bubbles: true
           });
-          document.dispatchEvent(notificationEvent);
+          document.dispatchEvent(chatEvent);
         }
       });
 

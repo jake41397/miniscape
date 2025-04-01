@@ -138,22 +138,45 @@ function getDefaultResourceCount(specificType: string): number {
  */
 export const savePlayerPosition = async (userId: string, x: number, y: number, z: number): Promise<void> => {
   try {
-    const { error } = await supabase
-      .from('player_data')
-      .update({ 
-        x: x, 
-        y: y, 
-        z: z,
-        updated_at: new Date().toISOString()
-      })
-      .eq('user_id', userId);
+    // Check if this is a temporary user
+    const isTemporaryUser = userId.startsWith('temp-');
     
-    if (error) {
-      throw error;
+    if (isTemporaryUser) {
+      // For temporary users, update the temp_player_data table
+      const { error } = await supabase
+        .from('temp_player_data')
+        .update({ 
+          x: x,
+          y: y,
+          z: z,
+          last_active: new Date().toISOString()
+        })
+        .eq('session_id', userId);
+      
+      if (error) {
+        logger.warn(`Error updating position for temp user ${userId}`, { error: String(error) });
+        // Continue execution - don't throw, as this is non-critical for temp users
+      }
+    } else {
+      // For authenticated users, update the player_data table
+      const { error } = await supabase
+        .from('player_data')
+        .update({ 
+          x: x, 
+          y: y, 
+          z: z,
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', userId);
+      
+      if (error) {
+        logger.error(`Error updating position in player_data for user ${userId}`, null, { error: String(error) });
+      }
     }
-  } catch (error) {
-    logger.error(`Error saving position for player ${userId}`, error instanceof Error ? error : new Error('Unknown error'));
-    throw error;
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    logger.error(`Error saving position for player ${userId}`, error);
+    // Don't rethrow the error - this prevents crashes but logs the issue
   }
 };
 
@@ -162,20 +185,41 @@ export const savePlayerPosition = async (userId: string, x: number, y: number, z
  */
 export const savePlayerInventory = async (userId: string, inventory: any[]): Promise<void> => {
   try {
-    const { error } = await supabase
-      .from('player_data')
-      .update({ 
-        inventory: JSON.stringify(inventory),
-        updated_at: new Date().toISOString()
-      })
-      .eq('user_id', userId);
+    // Check if this is a temporary user
+    const isTemporaryUser = userId.startsWith('temp-');
     
-    if (error) {
-      throw error;
+    if (isTemporaryUser) {
+      // For temporary users, update the temp_player_data table
+      const { error } = await supabase
+        .from('temp_player_data')
+        .update({ 
+          inventory: JSON.stringify(inventory),
+          last_active: new Date().toISOString()
+        })
+        .eq('session_id', userId);
+      
+      if (error) {
+        logger.warn(`Error updating inventory for temp user ${userId}`, { error: String(error) });
+        // Continue execution - don't throw, as this is non-critical for temp users
+      }
+    } else {
+      // For authenticated users, update the player_data table
+      const { error } = await supabase
+        .from('player_data')
+        .update({ 
+          inventory: JSON.stringify(inventory),
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', userId);
+      
+      if (error) {
+        logger.error(`Error updating inventory in player_data for user ${userId}`, null, { error: String(error) });
+      }
     }
-  } catch (error) {
-    logger.error(`Error saving inventory for player ${userId}`, error instanceof Error ? error : new Error('Unknown error'));
-    throw error;
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    logger.error(`Error saving inventory for player ${userId}`, error);
+    // Don't rethrow the error - this prevents crashes but logs the issue
   }
 };
 
@@ -227,22 +271,110 @@ export const removeWorldItem = async (dropId: string): Promise<void> => {
  */
 export const savePlayerSkills = async (userId: string, skills: any): Promise<void> => {
   try {
-    const { error } = await supabase
-      .from('player_data')
-      .update({ 
-        skills: skills,
-        updated_at: new Date().toISOString()
-      })
-      .eq('user_id', userId);
+    // Check if this is a temporary user
+    const isTemporaryUser = userId.startsWith('temp-');
     
-    if (error) {
-      throw error;
+    if (isTemporaryUser) {
+      // For temporary users, we'll use the metadata field to store skills
+      // First check if we need to add the metadata column if it doesn't exist
+      try {
+        // Store skills in metadata column 
+        const { error } = await supabase
+          .from('temp_player_data')
+          .update({ 
+            // Store skills in metadata JSON field - use rpc execute_query if needed
+            // This handles the case where metadata might not exist yet
+            metadata: { skills: skills },
+            last_active: new Date().toISOString()
+          })
+          .eq('session_id', userId);
+        
+        if (error) {
+          logger.warn(`Error updating skills metadata for temp user ${userId}`, { error: JSON.stringify(error) });
+          
+          // Try alternative approach - store in the inventory as a special item
+          await storeSkillsInInventory(userId, skills);
+        }
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        logger.warn(`Exception saving skills for temp user ${userId}, trying inventory fallback`, { error: error.message });
+        
+        // Fallback: store in inventory as a special item
+        await storeSkillsInInventory(userId, skills);
+      }
+    } else {
+      // For authenticated users, update the player_data table
+      const { error } = await supabase
+        .from('player_data')
+        .update({ 
+          skills: skills,
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', userId);
+      
+      if (error) {
+        logger.error(`Error in player_data update for user ${userId}`, null, { error: JSON.stringify(error) });
+      }
     }
-  } catch (error) {
-    logger.error(`Error saving skills for player ${userId}:`, error instanceof Error ? error : new Error('Unknown error'));
-    throw error;
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    logger.error(`Error saving skills for player ${userId}:`, error);
+    // Don't rethrow the error - this prevents crashes but logs the issue
   }
 };
+
+/**
+ * Helper function to store skills in the inventory for temporary users
+ */
+async function storeSkillsInInventory(userId: string, skills: any): Promise<void> {
+  try {
+    // Get current inventory
+    const { data, error: fetchError } = await supabase
+      .from('temp_player_data')
+      .select('inventory')
+      .eq('session_id', userId)
+      .single();
+    
+    if (fetchError) {
+      logger.warn(`Error fetching inventory for temp user ${userId}`, { error: String(fetchError) });
+      return;
+    }
+    
+    // Parse the inventory
+    let inventory: any[] = [];
+    try {
+      inventory = JSON.parse(data.inventory || '[]');
+    } catch (e) {
+      inventory = [];
+    }
+    
+    // Find and remove any existing skills item
+    inventory = inventory.filter((item: any) => item.type !== '_skills_data');
+    
+    // Add skills as a special inventory item that won't be displayed
+    inventory.push({
+      id: `skills-${Date.now()}`,
+      type: '_skills_data',
+      skills: skills
+    });
+    
+    // Update the inventory
+    const { error } = await supabase
+      .from('temp_player_data')
+      .update({ 
+        inventory: JSON.stringify(inventory),
+        last_active: new Date().toISOString()
+      })
+      .eq('session_id', userId);
+    
+    if (error) {
+      logger.warn(`Error updating inventory with skills for temp user ${userId}`, { error: String(error) });
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    logger.error(`Error in storeSkillsInInventory for user ${userId}:`, error);
+  }
+}
 
 /**
  * Check database connection and attempt to reconnect if needed

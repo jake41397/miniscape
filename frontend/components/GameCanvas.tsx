@@ -1179,9 +1179,6 @@ const GameCanvas: React.FC = () => {
         />
       )}
 
-      {/* Add Notification Controller */}
-      <NotificationController />
-
       {/* World Context Menu */}
       {contextMenuPos && playerRef.current && (
         <WorldContextMenu
