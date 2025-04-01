@@ -1,0 +1,178 @@
+---
+description: Rules to prevent implicit 'any' types in TypeScript code to ensure type safety and better code quality
+globs: ["**/*.{ts,tsx}"]
+alwaysApply: true
+---
+
+# No Implicit Any Types
+
+@context {
+    "type": "guidelines",
+    "purpose": "code_standards",
+    "format_version": "1.0.0",
+    "supported_content_types": [
+        "typescript"
+    ]
+}
+
+@structure {
+    "sections": [
+        "overview",
+        "rules",
+        "examples",
+        "implementation",
+        "configuration"
+    ]
+}
+
+## Overview
+
+TypeScript's primary benefit is static typing, which helps catch errors at compile time rather than runtime. Using implicit `any` types defeats this purpose by allowing variables to have any type without explicit declaration, which can lead to runtime errors and reduced code quality.
+
+## Rules
+
+@rules [
+    {
+        "id": "no_implicit_any",
+        "severity": "error",
+        "description": "Variables, parameters, and return types must have explicit type annotations; implicit 'any' types are not allowed",
+        "rationale": "Prevents type-related bugs and improves code readability and maintainability"
+    },
+    {
+        "id": "explicit_function_return_type",
+        "severity": "error",
+        "description": "All functions must have explicit return type annotations",
+        "rationale": "Ensures function contracts are clear and prevents unintended return type changes"
+    },
+    {
+        "id": "explicit_parameter_types",
+        "severity": "error",
+        "description": "All function parameters must have explicit type annotations",
+        "rationale": "Ensures function inputs are properly typed and documented"
+    },
+    {
+        "id": "no_any_in_generics",
+        "severity": "warning",
+        "description": "Avoid using 'any' type in generic type parameters",
+        "rationale": "Using 'any' in generics defeats the purpose of generics for type safety"
+    }
+]
+
+## Examples
+
+### Incorrect Usage
+
+@examples {
+    "incorrect": [
+        {
+            "description": "Variable without type annotation",
+            "code": "let data = fetchData(); // data is implicitly 'any'"
+        },
+        {
+            "description": "Function without return type",
+            "code": "function processData(input) { // input is implicitly 'any'\n  return input.transform(); // return type is implicitly 'any'\n}"
+        },
+        {
+            "description": "Arrow function without parameter types",
+            "code": "const handleEvent = (event) => { // event is implicitly 'any'\n  console.log(event.target.value);\n};"
+        },
+        {
+            "description": "Using any in generics",
+            "code": "const items: Array<any> = getItems();"
+        }
+    ]
+}
+
+### Correct Usage
+
+@examples {
+    "correct": [
+        {
+            "description": "Variable with type annotation",
+            "code": "let data: ApiResponse = fetchData();"
+        },
+        {
+            "description": "Function with parameter and return types",
+            "code": "function processData(input: InputData): OutputData {\n  return input.transform();\n}"
+        },
+        {
+            "description": "Arrow function with parameter types",
+            "code": "const handleEvent = (event: React.ChangeEvent<HTMLInputElement>): void => {\n  console.log(event.target.value);\n};"
+        },
+        {
+            "description": "Using specific types in generics",
+            "code": "const items: Array<Item> = getItems();"
+        }
+    ]
+}
+
+## Implementation
+
+@implementation {
+    "language": "typescript",
+    "tsconfig_options": {
+        "noImplicitAny": true,
+        "strictNullChecks": true,
+        "strictFunctionTypes": true,
+        "strictBindCallApply": true,
+        "strictPropertyInitialization": true,
+        "noImplicitThis": true,
+        "alwaysStrict": true
+    },
+    "eslint_rules": {
+        "@typescript-eslint/no-explicit-any": "error",
+        "@typescript-eslint/explicit-function-return-type": "error",
+        "@typescript-eslint/explicit-module-boundary-types": "error"
+    }
+}
+
+## Configuration
+
+To enforce these rules, the following configuration should be applied to the project:
+
+### tsconfig.json
+
+```json
+{
+  "compilerOptions": {
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true
+  }
+}
+```
+
+### .eslintrc.js
+
+```javascript
+module.exports = {
+  // ... other ESLint configuration
+  rules: {
+    // ... other rules
+    "@typescript-eslint/no-explicit-any": "error",
+    "@typescript-eslint/explicit-function-return-type": "error",
+    "@typescript-eslint/explicit-module-boundary-types": "error"
+  }
+};
+```
+
+@validation {
+    "required": [
+        "All variables must have explicit type annotations",
+        "All function parameters must have explicit type annotations",
+        "All functions must have explicit return type annotations",
+        "No use of explicit 'any' type except in rare, documented cases"
+    ],
+    "tools": [
+        "TypeScript compiler with noImplicitAny enabled",
+        "ESLint with @typescript-eslint rules",
+        "Code review process"
+    ]
+}
+
+@version "1.0.0"
+@last_updated "2024-06-01" 

@@ -1,0 +1,128 @@
+---
+description: Rules for ensuring package management commands are run from the appropriate subdirectories
+globs: ["**/*.{js,ts,jsx,tsx}"]
+alwaysApply: true
+---
+
+# Package Management Rules
+
+@context {
+    "type": "guidelines",
+    "purpose": "development_workflow",
+    "format_version": "1.0.0",
+    "supported_content_types": [
+        "shell",
+        "bash",
+        "zsh"
+    ]
+}
+
+@structure {
+    "sections": [
+        "overview",
+        "rules",
+        "examples",
+        "implementation"
+    ]
+}
+
+## Overview
+
+To maintain clean separation between frontend and backend dependencies and prevent accidental installation of packages at the root level, all package management commands (npm, npx, pnpm) must be run from the appropriate subdirectory.
+
+## Rules
+
+@rules [
+    {
+        "id": "no_root_package_commands",
+        "severity": "error",
+        "description": "Never run npm, npx, or pnpm commands from the project root directory",
+        "rationale": "Running package commands from the root can lead to dependency conflicts, incorrect installations, and confusion about which part of the application a dependency belongs to"
+    },
+    {
+        "id": "use_correct_subdirectory",
+        "severity": "error",
+        "description": "Always run package commands from the appropriate subdirectory (/backend or /frontend)",
+        "rationale": "Ensures dependencies are installed in the correct location and prevents dependency conflicts between frontend and backend"
+    },
+    {
+        "id": "typescript_checks_in_subdirectories",
+        "severity": "error",
+        "description": "Run TypeScript checks (tsc) only from the appropriate subdirectory",
+        "rationale": "Each part of the application has its own tsconfig.json with specific settings"
+    }
+]
+
+## Examples
+
+### Incorrect Usage
+
+@examples {
+    "incorrect": [
+        {
+            "description": "Installing packages from root directory",
+            "code": "# From /home/cap/Projects/CategorizeApp/v2\nnpm install express"
+        },
+        {
+            "description": "Running TypeScript checks from root",
+            "code": "# From /home/cap/Projects/CategorizeApp/v2\nnpx tsc --noEmit"
+        },
+        {
+            "description": "Running scripts from root",
+            "code": "# From /home/cap/Projects/CategorizeApp/v2\nnpm run build"
+        }
+    ]
+}
+
+### Correct Usage
+
+@examples {
+    "correct": [
+        {
+            "description": "Installing backend packages",
+            "code": "# First change to backend directory\ncd /home/cap/Projects/CategorizeApp/v2/backend\nnpm install express"
+        },
+        {
+            "description": "Installing frontend packages",
+            "code": "# First change to frontend directory\ncd /home/cap/Projects/CategorizeApp/v2/frontend\nnpm install react"
+        },
+        {
+            "description": "Running TypeScript checks for backend",
+            "code": "cd /home/cap/Projects/CategorizeApp/v2/backend\nnpx tsc --noEmit"
+        },
+        {
+            "description": "Running TypeScript checks for frontend",
+            "code": "cd /home/cap/Projects/CategorizeApp/v2/frontend\nnpx tsc --noEmit"
+        }
+    ]
+}
+
+## Implementation
+
+To enforce these rules:
+
+1. Always check your current directory before running package management commands
+2. Use separate terminal windows/tabs for frontend and backend development
+3. Consider adding the following aliases to your shell configuration:
+
+```bash
+# Add to .bashrc or .zshrc
+alias be="cd /home/cap/Projects/CategorizeApp/v2/backend"
+alias fe="cd /home/cap/Projects/CategorizeApp/v2/frontend"
+```
+
+@validation {
+    "required": [
+        "All npm/npx/pnpm commands must be run from either /backend or /frontend directories",
+        "No package.json should exist in the root directory",
+        "TypeScript checks must be run from the appropriate subdirectory"
+    ],
+    "tools": [
+        "Code review process",
+        "Developer discipline",
+        "Project setup without root package.json"
+    ]
+}
+
+@version "1.0.0"
+@last_updated "2024-06-01" 

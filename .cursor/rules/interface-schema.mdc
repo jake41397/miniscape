@@ -1,0 +1,6 @@
+---
+description: 
+globs: backend/src/**/*.ts
+alwaysApply: false
+---
+ 
