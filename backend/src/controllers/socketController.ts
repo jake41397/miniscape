@@ -1010,7 +1010,7 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         
         // Broadcast to all clients - IMPORTANT: Only send ONE event type to prevent duplicates
         console.log(`[${socket.id}] Broadcasting item to all clients:`, worldItem);
-        io.emit('worldItemAdded', worldItem); // Broadcast to all clients including sender
+        io.emit('itemDropped', worldItem);
         
         // Update client's inventory
         socket.emit('inventoryUpdate', player.inventory);
