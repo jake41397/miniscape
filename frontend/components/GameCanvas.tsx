@@ -520,6 +520,10 @@ const GameCanvas: React.FC = () => {
       onResourceNodesCreated: handleResourceNodesCreated,
       onWorldItemsCreated: handleWorldItemsCreated
     });
+    
+    // Make it globally accessible for context menu
+    (window as any).worldManager = worldManager;
+    
     worldManagerRef.current = worldManager;
     console.log("WorldManager initialized.");
 
@@ -543,6 +547,9 @@ const GameCanvas: React.FC = () => {
       itemManagerRef.current = null;
       resourceNodesRef.current = [];
       worldItemsRef.current = [];
+      
+      // Clean up global reference
+      (window as any).worldManager = null;
     };
   }, [scene]);
 
@@ -559,14 +566,56 @@ const GameCanvas: React.FC = () => {
       console.log("Creating local player mesh...");
       const mesh = createPlayerMesh();
 
-      // Try to restore position immediately if available
-      const cachedPosition = getLastKnownPosition();
-      if (cachedPosition) {
-        const distSq = (cachedPosition.x - mesh.position.x)**2 + (cachedPosition.z - mesh.position.z)**2;
-        if(distSq > 0.1) {
-          console.log("Applying cached position on player creation:", cachedPosition);
-          mesh.position.set(cachedPosition.x, cachedPosition.y, cachedPosition.z);
+      // Check if player comes from a portal (URL parameter 'portal=true')
+      const urlParams = new URLSearchParams(window.location.search);
+      const comingFromPortal = urlParams.get('portal') === 'true';
+      const refSite = urlParams.get('ref') || '';
+      
+      if (comingFromPortal) {
+        console.log("Player coming from a portal!", { refSite });
+        
+        // Set the player's position at the portal spawn point
+        // This would ideally be a designated area in your world
+        // For now, we'll use a fixed position
+        const portalSpawnPoint = new THREE.Vector3(45, 1, 45); // Near the portal but not inside it
+        mesh.position.copy(portalSpawnPoint);
+        
+        // We'll create a return portal later after the world is fully initialized
+        // Store the reference URL for later use
+        (window as any).returnPortalDestination = refSite;
+        
+        // Store the fact that we need to create a return portal
+        (window as any).shouldCreateReturnPortal = true;
+      } else {
+        // Try to restore position from last session if not coming from a portal
+        const cachedPosition = getLastKnownPosition();
+        if (cachedPosition) {
+          const distSq = (cachedPosition.x - mesh.position.x)**2 + (cachedPosition.z - mesh.position.z)**2;
+          if(distSq > 0.1) {
+            console.log("Applying cached position on player creation:", cachedPosition);
+            mesh.position.set(cachedPosition.x, cachedPosition.y, cachedPosition.z);
+          }
         }
+      }
+
+      // Extract and save player info from URL parameters if present
+      if (urlParams.has('username')) {
+        const username = urlParams.get('username') || '';
+        (window as any).playerName = username;
+        setPlayerName(username);
+        console.log("Player name set from URL:", username);
+      }
+      
+      if (urlParams.has('color')) {
+        const color = urlParams.get('color') || '';
+        (window as any).playerColor = color;
+        console.log("Player color set from URL:", color);
+      }
+      
+      if (urlParams.has('speed')) {
+        const speed = parseFloat(urlParams.get('speed') || '5');
+        (window as any).playerSpeed = speed;
+        console.log("Player speed set from URL:", speed);
       }
 
       playerRef.current = mesh;
@@ -575,7 +624,7 @@ const GameCanvas: React.FC = () => {
 
       return () => {
         console.log("Cleaning up local player mesh...");
-      if (playerRef.current) {
+        if (playerRef.current) {
           disposeMesh(scene, playerRef.current);
           playerRef.current = null;
         }
@@ -786,9 +835,17 @@ const GameCanvas: React.FC = () => {
   // Find the useEffect that handles player position updates
   // Add this code to update the data attribute with the current player position
   useEffect(() => {
-      if (playerRef.current) {
+    if (playerRef.current) {
       // Create a function to update the position data attribute
       const updatePositionDataAttribute = () => {
+        if (!document.querySelector('[data-player-position]')) {
+          // Create element if it doesn't exist
+          const positionElement = document.createElement('div');
+          positionElement.setAttribute('data-player-position', 'true');
+          positionElement.style.display = 'none';
+          document.body.appendChild(positionElement);
+        }
+        
         const positionElement = document.querySelector('[data-player-position]');
         if (positionElement && playerRef.current) {
           const { x, y, z } = playerRef.current.position;
@@ -801,7 +858,7 @@ const GameCanvas: React.FC = () => {
       updatePositionDataAttribute();
 
       // Set interval to update regularly
-      const updateInterval = setInterval(updatePositionDataAttribute, 500);
+      const updateInterval = setInterval(updatePositionDataAttribute, 100); // Update more frequently
 
       return () => {
         clearInterval(updateInterval);
@@ -1136,6 +1193,51 @@ const GameCanvas: React.FC = () => {
     localStorage.setItem('miniscape_tutorial_completed', 'true');
   };
   
+  // --- Check and create return portal ---
+  useEffect(() => {
+    const worldManager = worldManagerRef.current;
+    if (scene && worldManager && (window as any).shouldCreateReturnPortal) {
+      const refUrl = (window as any).returnPortalDestination;
+      if (refUrl) {
+        console.log("Creating return portal to:", refUrl);
+        
+        // Ensure the URL has a protocol
+        let formattedRefUrl = refUrl;
+        if (!formattedRefUrl.startsWith('http://') && !formattedRefUrl.startsWith('https://')) {
+          console.log('Adding https:// prefix to return portal URL:', formattedRefUrl);
+          formattedRefUrl = 'https://' + formattedRefUrl;
+        }
+        
+        // Give a slight delay to ensure the world is fully loaded
+        setTimeout(() => {
+          // Create a return portal at a position opposite to the main portal
+          const returnPortalPos = new THREE.Vector3(35, 0, 45);
+          
+          // Add the portal using the LandmarkManager
+          const landmarkManager = worldManager.getLandmarkManager();
+          if (landmarkManager) {
+            landmarkManager.addReturnPortal(returnPortalPos, formattedRefUrl);
+            
+            // Reset the flag to avoid creating multiple portals
+            (window as any).shouldCreateReturnPortal = false;
+            
+            // Display a notification to the player
+            const message = "A return portal has been created. Enter it to go back to where you came from.";
+            const chatEvent = new CustomEvent('chat-message', {
+              detail: { 
+                content: message, 
+                type: 'system',
+                timestamp: Date.now()
+              },
+              bubbles: true
+            });
+            document.dispatchEvent(chatEvent);
+          }
+        }, 1000); // 1 second delay to ensure world is ready
+      }
+    }
+  }, [scene, worldManagerRef.current]);
+  
   // --- Render ---
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -1247,6 +1349,103 @@ const GameCanvas: React.FC = () => {
         isConnected={isConnected} 
         playerCount={playerCount}
       />
+
+      {/* Vibe Jam 2025 Link */}
+      <a target="_blank" href="https://jam.pieter.com" style={{
+        fontFamily: 'system-ui, sans-serif', 
+        position: 'fixed', 
+        bottom: '-1px', 
+        right: '-1px', 
+        padding: '7px', 
+        fontSize: '14px', 
+        fontWeight: 'bold', 
+        background: '#fff', 
+        color: '#000', 
+        textDecoration: 'none', 
+        zIndex: 10000, 
+        borderTopLeftRadius: '12px',
+        border: '1px solid #fff'
+      }}>
+        🕹️ Vibe Jam 2025
+      </a>
+
+      {/* X/Twitter Link */}
+      <a target="_blank" href="https://x.com/thejakekay" style={{
+        fontFamily: 'system-ui, sans-serif', 
+        position: 'fixed', 
+        bottom: '155px', 
+        right: '-1px', 
+        padding: '8px 12px', 
+        fontSize: '14px', 
+        fontWeight: 'bold', 
+        background: 'linear-gradient(45deg, #000000, #333333)', 
+        color: '#fff', 
+        textDecoration: 'none', 
+        zIndex: 10000, 
+        borderTopLeftRadius: '20px',
+        borderBottomLeftRadius: '20px',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        transition: 'transform 0.2s, box-shadow 0.2s',
+        transform: 'translateZ(0)',
+      }}>
+        <span style={{ fontSize: '16px' }}>𝕏</span> Add me on X @thejakekay
+      </a>
+
+      {/* WriteZero.ai Link */}
+      <a target="_blank" href="https://writezero.ai" style={{
+        fontFamily: 'system-ui, sans-serif', 
+        position: 'fixed', 
+        bottom: '105px', 
+        right: '-1px', 
+        padding: '8px 12px', 
+        fontSize: '14px', 
+        fontWeight: 'bold', 
+        background: 'linear-gradient(45deg, #3b82f6, #2dd4bf)', 
+        color: '#fff', 
+        textDecoration: 'none', 
+        zIndex: 10000, 
+        borderTopLeftRadius: '20px',
+        borderBottomLeftRadius: '20px',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        transition: 'transform 0.2s, box-shadow 0.2s',
+        transform: 'translateZ(0)',
+      }}>
+        <span style={{ fontSize: '16px' }}>✍️</span> Create Content - WriteZero.ai
+      </a>
+
+      {/* WorkZero.ai Link */}
+      <a target="_blank" href="https://workzero.ai" style={{
+        fontFamily: 'system-ui, sans-serif', 
+        position: 'fixed', 
+        bottom: '55px', 
+        right: '-1px', 
+        padding: '8px 12px', 
+        fontSize: '14px', 
+        fontWeight: 'bold', 
+        background: 'linear-gradient(45deg, #8b5cf6, #ec4899)', 
+        color: '#fff', 
+        textDecoration: 'none', 
+        zIndex: 10000, 
+        borderTopLeftRadius: '20px',
+        borderBottomLeftRadius: '20px',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        transition: 'transform 0.2s, box-shadow 0.2s',
+        transform: 'translateZ(0)',
+      }}>
+        <span style={{ fontSize: '16px' }}>🤖</span> Leverage AI for your business.
+      </a>
     </div>
   );
 };

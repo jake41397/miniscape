@@ -570,54 +570,72 @@ export const useInteraction = ({
         // Update raycaster
         raycasterRef.current.setFromCamera(mouseRef.current, camera);
         
-        // Get all world items
-        const worldItems = worldItemsRef.current || [];
-        // Get all resource nodes
+        // Get resource nodes and world items
         const resourceNodes = resourceNodesRef.current || [];
-
-        // Check if we're clicking on a resource node
+        const worldItems = worldItemsRef.current || [];
+        
+        // Add in check for right-clickable objects like portals
+        // Get all objects in the scene that could be clickable
+        const clickableObjects: THREE.Object3D[] = [];
+        scene.traverse((object) => {
+            if (object.userData && object.userData.isRightClickable) {
+                clickableObjects.push(object);
+            }
+        });
+        
+        // Check for intersections with right-clickable objects
+        const clickableIntersects = clickableObjects.length > 0 ? 
+            raycasterRef.current.intersectObjects(clickableObjects) : [];
+            
+        if (clickableIntersects.length > 0) {
+            const intersectedObject = clickableIntersects[0].object;
+            
+            // Check if it's a portal
+            if (intersectedObject.userData.portalType) {
+                console.log("%c 🌀 Portal clicked:", "background: #9C27B0; color: white;", {
+                    portalId: intersectedObject.userData.portalId,
+                    portalName: intersectedObject.userData.portalName,
+                    portalType: intersectedObject.userData.portalType
+                });
+                
+                e.stopPropagation();
+                
+                // Create a custom menu just for the portal
+                setNearbyItems([]);
+                setNearbyResources([]);
+                
+                // Find all objects in the scene with this portal ID to get the correct portal
+                const portalObjects: THREE.Object3D[] = [];
+                scene.traverse((obj) => {
+                    if (obj.userData && obj.userData.portalId === intersectedObject.userData.portalId) {
+                        portalObjects.push(obj);
+                    }
+                });
+                
+                // Store portal info in a custom object for the context menu
+                (window as any).rightClickedPortal = {
+                    id: intersectedObject.userData.portalId,
+                    name: intersectedObject.userData.portalName,
+                    type: intersectedObject.userData.portalType,
+                    destinationUrl: intersectedObject.userData.destinationUrl
+                };
+                
+                setContextMenuPos({ x: e.clientX, y: e.clientY });
+                return;
+            }
+        }
+        
+        // Check for resource intersections
         const resourceMeshes = resourceNodes
             .filter(node => node && node.mesh)
             .map(node => node.mesh) as THREE.Object3D[];
             
-        console.log(`%c 👁️ Checking ${resourceMeshes.length} resource meshes for intersection`, "color: #673AB7;");
-        console.log(`Resource types:`, resourceNodes.map(node => `${node.id}: ${node.type}`).slice(0, 5));
-        
-        // Set recursive to true to check children of meshes (important for fishing spots)
         const resourceIntersects = resourceMeshes.length > 0 ? 
-            raycasterRef.current.intersectObjects(resourceMeshes, true) : [];
-        
-        console.log(`%c 🎯 Found ${resourceIntersects.length} resource intersections`, 
-            resourceIntersects.length > 0 ? "color: #4CAF50; font-weight: bold;" : "color: #F44336;");
-        
-        // If directly clicking on a resource, find that specific resource
-        if (resourceIntersects.length > 0) {
-            const intersectedObject = resourceIntersects[0].object;
-            console.log(`%c ✓ Hit detected on object:`, "color: #4CAF50;", {
-                name: intersectedObject.name,
-                id: intersectedObject.id,
-                type: intersectedObject.type,
-                userData: intersectedObject.userData,
-                parent: intersectedObject.parent ? intersectedObject.parent.id : 'none'
-            });
+            raycasterRef.current.intersectObjects(resourceMeshes) : [];
             
-            // Find the resource node - this could be the top mesh or a child mesh
-            const resourceNode = resourceNodes.find(node => {
-                // Direct match
-                if (node.mesh === intersectedObject) return true;
-                
-                // Check if it's a child of the resource mesh
-                if (node.mesh && intersectedObject.parent === node.mesh) return true;
-                
-                // For nested hierarchies
-                let parent = intersectedObject.parent;
-                while (parent) {
-                    if (parent === node.mesh) return true;
-                    parent = parent.parent;
-                }
-                
-                return false;
-            });
+        if (resourceIntersects.length > 0) {
+            const intersectedResourceMesh = resourceIntersects[0].object;
+            const resourceNode = resourceNodes.find(node => node.mesh === intersectedResourceMesh);
             
             if (resourceNode) {
                 console.log("%c 🎯 Right-click hit on resource:", "background: #4CAF50; color: white;", {

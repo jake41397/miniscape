@@ -2,11 +2,18 @@ import React, { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { WorldItem, ResourceNode, ResourceType } from '../../game/world/resources';
 import { getSocket } from '../../game/network/socket';
+import { enterVibesversePortal } from '../../game/world/landmarks';
 
 // Add TypeScript declaration for the global openSmithingPanel function
 declare global {
   interface Window {
     openSmithingPanel?: (mode: string) => void;
+    rightClickedPortal?: {
+      id: string;
+      name: string;
+      type: string;
+      destinationUrl?: string;
+    };
   }
 }
 
@@ -33,6 +40,7 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
 }) => {
   const [menuItems, setMenuItems] = useState<{ label: string; action: () => void; disabled: boolean }[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [menuTitle, setMenuTitle] = useState<string>('Actions');
   
   // Setup error listener
   useEffect(() => {
@@ -92,6 +100,62 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
     }
 
     const items: { label: string; action: () => void; disabled: boolean }[] = [];
+    
+    // Check if we have a portal clicked
+    const portal = window.rightClickedPortal;
+    if (portal) {
+      // Set menu title to the portal name
+      setMenuTitle(portal.name || 'Portal');
+      
+      // Add portal-specific actions
+      if (portal.type === 'vibeverse') {
+        items.push({
+          label: `Enter Vibeverse Portal`,
+          action: () => {
+            console.log(`Entering Vibeverse Portal`);
+            enterVibesversePortal();
+          },
+          disabled: false
+        });
+      } else if (portal.type === 'return') {
+        // Get the destination URL for display
+        let destinationName = 'previous game';
+        if (portal.destinationUrl) {
+          try {
+            const url = new URL(portal.destinationUrl);
+            destinationName = url.hostname;
+          } catch (e) {
+            console.error("Error parsing return URL:", e);
+          }
+        }
+        
+        items.push({
+          label: `Return to ${destinationName}`,
+          action: () => {
+            console.log(`Returning to ${destinationName}`);
+            // Find the landmark manager and call enterReturnPortal
+            // This is a bit of a hack but should work
+            const landmarkManager = (window as any).worldManager?.getLandmarkManager();
+            if (landmarkManager && portal.destinationUrl) {
+              landmarkManager.enterReturnPortal(portal.destinationUrl);
+            }
+          },
+          disabled: false
+        });
+      }
+      
+      // Reset portal after menu is shown
+      setTimeout(() => {
+        window.rightClickedPortal = undefined;
+      }, 100);
+      
+      // Set the items and return early
+      setMenuItems(items);
+      return;
+    }
+
+    // Default title if not portal
+    setMenuTitle('Actions');
 
     // Add item pickup options
     nearbyItems.forEach(item => {
@@ -193,18 +257,10 @@ const WorldContextMenu: React.FC<WorldContextMenuProps> = ({
     }
 
     setMenuItems(items);
-  }, [nearbyItems, nearbyResources, playerPosition, onPickupItem, onInteractWithResource]);
+  }, [playerPosition, nearbyItems, nearbyResources, onPickupItem, onInteractWithResource]);
 
   if (!position || menuItems.length === 0) {
     return null;
-  }
-
-  // Determine menu title based on what's being displayed
-  let menuTitle = 'Items';
-  if (nearbyItems.length === 0 && nearbyResources.length > 0) {
-    menuTitle = 'Resources';
-  } else if (nearbyItems.length > 0 && nearbyResources.length > 0) {
-    menuTitle = 'Interact';
   }
 
   return (

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { NPC, Landmark, createTutorialGuideNPC, createSignpost, createLumbridgeCastleMesh, createComingSoonSign, createBarbarianHut, createNPC } from './landmarks';
+import { NPC, Landmark, createTutorialGuideNPC, createSignpost, createLumbridgeCastleMesh, createComingSoonSign, createBarbarianHut, createNPC, createVibesversePortal } from './landmarks';
 import { ZONES } from './zones';
 import { SmithingSystem, SmithingMode, SMELTING_RECIPES, SMITHING_RECIPES } from '../systems/SmithingSystem';
 import { SkillType } from '../../components/ui/SkillsPanel';
@@ -77,6 +77,9 @@ class LandmarkManager {
     
     // Add Barbarian Village huts and NPCs
     this.addBarbarianVillage();
+    
+    // Add Vibeverse Portal
+    this.addVibesversePortal();
     
     // Create combat NPCs
     this.createCombatNPCs();
@@ -1036,6 +1039,123 @@ class LandmarkManager {
     });
   }
 
+  private addVibesversePortal() {
+    // Create a portal near Lumbridge, but a bit to the side
+    const portalPosition = new THREE.Vector3(45, 0, 45);
+    const portal = createVibesversePortal(portalPosition);
+    
+    // Add to scene and landmarks
+    this.scene.add(portal.mesh);
+    this.landmarks.push(portal);
+    
+    // Add animation function for the portal
+    const animatePortal = () => {
+      // Find portal meshes (portalMesh, glow and particles)
+      const portalMeshes: THREE.Mesh[] = [];
+      const particleSystems: THREE.Points[] = [];
+      
+      portal.mesh.traverse((child: THREE.Object3D) => {
+        if (child instanceof THREE.Mesh && 
+            (child.userData.isPortal || child.userData.isGlow)) {
+          portalMeshes.push(child);
+        }
+        if (child instanceof THREE.Points && child.userData.isParticleSystem) {
+          particleSystems.push(child);
+        }
+      });
+      
+      // Animate each mesh
+      portalMeshes.forEach(mesh => {
+        if (mesh.userData.isPortal) {
+          // Rotate the portal
+          mesh.rotation.z += 0.01;
+          
+          // Pulse opacity based on sine wave and random offset
+          const offset = mesh.userData.animationOffset || 0;
+          if (mesh.material instanceof THREE.MeshBasicMaterial) {
+            mesh.material.opacity = 0.5 + 0.3 * Math.sin(Date.now() * 0.001 + offset);
+          }
+        } else if (mesh.userData.isGlow) {
+          // Pulse glow size
+          const pulseRate = mesh.userData.pulseRate || 0.5;
+          const scale = 1 + 0.1 * Math.sin(Date.now() * 0.001 * pulseRate);
+          mesh.scale.set(scale, scale, scale);
+        }
+      });
+      
+      // Animate particle systems
+      particleSystems.forEach(particles => {
+        if (particles.geometry instanceof THREE.BufferGeometry) {
+          const positions = particles.geometry.attributes.position.array;
+          for (let i = 0; i < positions.length; i += 3) {
+            // Make particles float around the portal ring
+            positions[i + 1] += 0.01 * Math.sin(Date.now() * 0.001 + i);
+          }
+          particles.geometry.attributes.position.needsUpdate = true;
+        }
+      });
+      
+      requestAnimationFrame(animatePortal);
+    };
+    
+    // Start animation
+    animatePortal();
+    
+    console.log("Vibeverse Portal added at position:", portalPosition);
+  }
+  
+  // Check if player is near the portal to trigger interaction
+  private checkPlayerPortalProximity(portal: Landmark): void {
+    // This checks distance between player and portal to trigger automatic portal interaction
+    const playerPositionElement = document.querySelector('[data-player-position]');
+    if (!playerPositionElement || !portal.metadata?.collisionBox) return;
+    
+    try {
+      const positionAttr = playerPositionElement.getAttribute('data-position');
+      if (!positionAttr) return;
+      
+      const playerPos = JSON.parse(positionAttr);
+      const playerPosition = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z);
+      
+      // Get the portal's collision box
+      const portalBox = portal.metadata.collisionBox as THREE.Box3;
+      
+      // Calculate distance to portal center
+      const portalCenter = new THREE.Vector3();
+      portalBox.getCenter(portalCenter);
+      const distance = playerPosition.distanceTo(portalCenter);
+      
+      // If player is very close to portal, trigger interaction
+      if (distance < 3) {
+        // Create a player box to test for actual intersection
+        const playerBox = new THREE.Box3(
+          new THREE.Vector3(playerPosition.x - 0.5, playerPosition.y - 1, playerPosition.z - 0.5),
+          new THREE.Vector3(playerPosition.x + 0.5, playerPosition.y + 1, playerPosition.z + 0.5)
+        );
+        
+        // Only trigger if actually intersecting or very close
+        if (playerBox.intersectsBox(portalBox) || distance < 1.5) {
+          // Only interact once every 2 seconds to prevent multiple redirects
+          const now = Date.now();
+          const lastInteraction = portal.metadata.lastInteraction || 0;
+          
+          if (now - lastInteraction > 2000) {
+            // Update last interaction time
+            portal.metadata.lastInteraction = now;
+            
+            if (portal.onInteract) {
+              console.log(`Auto-triggering portal interaction for ${portal.name}`);
+              portal.onInteract();
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Silently handle parsing errors
+      console.debug('Error checking portal proximity:', e);
+    }
+  }
+
   // Get all NPCs
   public getNPCs(): NPC[] {
     return this.npcs as NPC[];
@@ -1043,7 +1163,7 @@ class LandmarkManager {
   
   // Get a specific NPC by ID
   public getNPC(npcId: string): NPC | undefined {
-    return this.npcs.find(npc => npc.id === npcId) as NPC | undefined;
+    return this.npcs.find(n => n.id === npcId) as NPC | undefined;
   }
 
   // Check for interactions with NPCs or landmarks at a given position
@@ -1210,6 +1330,9 @@ class LandmarkManager {
         npc.mesh.position.y = npc.position.y + Math.sin(Date.now() * 0.002) * 0.05;
       }
     });
+    
+    // Check portal proximity for player interaction
+    this.checkAllPortalProximity();
   }
 
   // Cleanup resources when no longer needed
@@ -1700,6 +1823,383 @@ class LandmarkManager {
   // Get all combat NPCs
   public getCombatNPCs(): CombatNPC[] {
     return this.npcs.filter(npc => 'health' in npc) as CombatNPC[];
+  }
+
+  // Add a return portal to a specific location leading back to the referring site
+  public addReturnPortal(position: THREE.Vector3, destinationUrl: string): void {
+    console.log("Adding return portal to:", destinationUrl);
+    
+    // Ensure destinationUrl has a protocol
+    if (!destinationUrl.startsWith('http://') && !destinationUrl.startsWith('https://')) {
+      console.log('Adding https:// prefix to destination URL:', destinationUrl);
+      destinationUrl = 'https://' + destinationUrl;
+    }
+    
+    // Create a special portal that points back to the referring site
+    const portalPosition = new THREE.Vector3(position.x, position.y, position.z);
+    
+    // Create the portal mesh (similar to regular portal but with different color)
+    const portalGroup = new THREE.Group();
+    
+    // Create portal frame with a different color
+    const frameGeometry = new THREE.TorusGeometry(1.5, 0.2, 16, 32);
+    const frameMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0xff0000, // Red
+      emissive: 0xff0000,
+      metalness: 0.7,
+      roughness: 0.3,
+      transparent: true,
+      opacity: 0.8
+    });
+    const frame = new THREE.Mesh(frameGeometry, frameMaterial);
+    portalGroup.add(frame);
+    
+    // Create portal inner effect
+    const portalGeometry = new THREE.CircleGeometry(1.3, 32);
+    const portalMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0xff0000, 
+      transparent: true,
+      opacity: 0.5,
+      side: THREE.DoubleSide
+    });
+    const portalMesh = new THREE.Mesh(portalGeometry, portalMaterial);
+    portalMesh.userData.isPortal = true;
+    portalMesh.userData.animationOffset = Math.random() * Math.PI * 2;
+    portalGroup.add(portalMesh);
+    
+    // Create particle system for portal effect
+    const particleCount = 500;
+    const particles = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    const colors = new Float32Array(particleCount * 3);
+
+    for (let i = 0; i < particleCount * 3; i += 3) {
+      // Create particles in a ring around the portal
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 1.5 + (Math.random() - 0.5) * 0.4;
+      positions[i] = Math.cos(angle) * radius;
+      positions[i + 1] = Math.sin(angle) * radius;
+      positions[i + 2] = (Math.random() - 0.5) * 0.4;
+
+      // Red color with slight variation
+      colors[i] = 0.8 + Math.random() * 0.2;
+      colors[i + 1] = 0;
+      colors[i + 2] = 0;
+    }
+
+    particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    particles.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    const particleMaterial = new THREE.PointsMaterial({
+      size: 0.05,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.6
+    });
+
+    const particleSystem = new THREE.Points(particles, particleMaterial);
+    particleSystem.userData.isParticleSystem = true;
+    portalGroup.add(particleSystem);
+    
+    // Try to extract domain from destination URL for display
+    let portalLabel = 'Return Portal';
+    try {
+      const url = new URL(destinationUrl);
+      portalLabel = `Return to ${url.hostname}`;
+    } catch (e) {
+      console.error("Error parsing return URL:", e);
+    }
+    
+    // Add label above the portal
+    const labelCanvas = document.createElement('canvas');
+    labelCanvas.width = 512;
+    labelCanvas.height = 64;
+    const context = labelCanvas.getContext('2d');
+    
+    if (context) {
+      context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      context.fillRect(0, 0, 512, 64);
+      context.font = 'bold 32px Arial';
+      context.fillStyle = '#FF0000'; // Red text
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(portalLabel, 256, 32);
+    }
+    
+    const labelTexture = new THREE.CanvasTexture(labelCanvas);
+    const labelMaterial = new THREE.SpriteMaterial({ map: labelTexture, transparent: true });
+    const label = new THREE.Sprite(labelMaterial);
+    label.position.set(0, 2.5, 0);
+    label.scale.set(3, 0.5, 1);
+    portalGroup.add(label);
+    
+    // Add a subtle glow effect
+    const glowGeometry = new THREE.CircleGeometry(1.8, 32);
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xff0000,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide
+    });
+    const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+    glow.userData.isGlow = true;
+    glow.userData.pulseRate = 0.5 + Math.random() * 0.5;
+    portalGroup.add(glow);
+    
+    // Set position
+    portalGroup.position.copy(portalPosition);
+    
+    // Create collision box
+    const portalBox = new THREE.Box3().setFromObject(portalGroup);
+    
+    // Mark objects as rightclickable
+    const portalId = `return_portal_${Date.now()}`;
+    portalGroup.traverse((child: THREE.Object3D) => {
+      child.userData.isRightClickable = true;
+      child.userData.portalId = portalId;
+      child.userData.portalName = portalLabel;
+      child.userData.portalType = 'return';
+      child.userData.destinationUrl = destinationUrl;
+    });
+    
+    // Create portal landmark object
+    const returnPortal: Landmark = {
+      id: portalId,
+      name: portalLabel,
+      position: portalPosition,
+      mesh: portalGroup,
+      interactable: true,
+      interactionRadius: 10, // Increased for better right-click detection
+      metadata: { 
+        isPortal: true,
+        isReturnPortal: true,
+        isRightClickable: true,
+        portalType: 'return',
+        destinationUrl,
+        collisionBox: portalBox
+      },
+      onInteract: () => {
+        // This is called when the portal is right-clicked
+        this.enterReturnPortal(destinationUrl);
+      }
+    };
+    
+    // Add to scene and landmarks
+    this.scene.add(returnPortal.mesh);
+    this.landmarks.push(returnPortal);
+    
+    // Add animation function for the portal (same as regular portal)
+    const animatePortal = () => {
+      // Find portal meshes (portalMesh, glow and particles)
+      const portalMeshes: THREE.Mesh[] = [];
+      const particleSystems: THREE.Points[] = [];
+      
+      returnPortal.mesh.traverse((child: THREE.Object3D) => {
+        if (child instanceof THREE.Mesh && 
+            (child.userData.isPortal || child.userData.isGlow)) {
+          portalMeshes.push(child);
+        }
+        if (child instanceof THREE.Points && child.userData.isParticleSystem) {
+          particleSystems.push(child);
+        }
+      });
+      
+      // Animate each mesh
+      portalMeshes.forEach(mesh => {
+        if (mesh.userData.isPortal) {
+          // Rotate the portal
+          mesh.rotation.z += 0.01;
+          
+          // Pulse opacity based on sine wave and random offset
+          const offset = mesh.userData.animationOffset || 0;
+          if (mesh.material instanceof THREE.MeshBasicMaterial) {
+            mesh.material.opacity = 0.5 + 0.3 * Math.sin(Date.now() * 0.001 + offset);
+          }
+        } else if (mesh.userData.isGlow) {
+          // Pulse glow size
+          const pulseRate = mesh.userData.pulseRate || 0.5;
+          const scale = 1 + 0.1 * Math.sin(Date.now() * 0.001 * pulseRate);
+          mesh.scale.set(scale, scale, scale);
+        }
+      });
+      
+      // Animate particle systems
+      particleSystems.forEach(particles => {
+        if (particles.geometry instanceof THREE.BufferGeometry) {
+          const positions = particles.geometry.attributes.position.array;
+          for (let i = 0; i < positions.length; i += 3) {
+            // Make particles float around the portal ring
+            positions[i + 1] += 0.01 * Math.sin(Date.now() * 0.001 + i);
+          }
+          particles.geometry.attributes.position.needsUpdate = true;
+        }
+      });
+      
+      requestAnimationFrame(animatePortal);
+    };
+    
+    // Start animation
+    animatePortal();
+    
+    console.log("Return portal added at position:", portalPosition);
+  }
+  
+  // Handle entering a return portal
+  private enterReturnPortal(destinationUrl: string): void {
+    console.log('Player entered return portal to:', destinationUrl);
+    
+    // Get player info for query parameters
+    const playerName = (window as any).playerName || 'unknown';
+    const playerColor = (window as any).playerColor || 'red';
+    const playerSpeed = (window as any).playerSpeed || 5;
+    
+    // Get the current URL as the referring site
+    const refUrl = window.location.href;
+    
+    // Create a teleport effect
+    const createTeleportEffect = () => {
+      // Create teleport flash effect
+      const flash = document.createElement('div');
+      flash.style.position = 'fixed';
+      flash.style.top = '0';
+      flash.style.left = '0';
+      flash.style.width = '100%';
+      flash.style.height = '100%';
+      flash.style.backgroundColor = '#ff0000'; // Red background
+      flash.style.opacity = '0';
+      flash.style.transition = 'opacity 1s';
+      flash.style.zIndex = '9999';
+      flash.style.pointerEvents = 'none';
+      document.body.appendChild(flash);
+      
+      // Trigger the flash animation
+      setTimeout(() => {
+        flash.style.opacity = '0.7';
+        
+        // Add teleportation message
+        const message = document.createElement('div');
+        message.style.position = 'fixed';
+        message.style.top = '50%';
+        message.style.left = '50%';
+        message.style.transform = 'translate(-50%, -50%)';
+        message.style.color = '#4d0000'; // Darker red text
+        message.style.fontSize = '32px';
+        message.style.fontWeight = 'bold';
+        message.style.textAlign = 'center';
+        message.style.fontFamily = 'Arial, sans-serif';
+        message.innerText = 'Returning...';
+        flash.appendChild(message);
+        
+        // Play teleport sound if available
+        try {
+          const soundManager = (window as any).soundManager;
+          if (soundManager && typeof soundManager.play === 'function') {
+            soundManager.play('teleport');
+          }
+        } catch (e) {
+          console.log('Could not play teleport sound', e);
+        }
+        
+        // Ensure destinationUrl is an absolute URL
+        let redirectUrl = destinationUrl;
+        
+        // If URL doesn't start with http:// or https://, add https://
+        if (!redirectUrl.startsWith('http://') && !redirectUrl.startsWith('https://')) {
+          console.log('Adding https:// prefix to URL:', redirectUrl);
+          redirectUrl = 'https://' + redirectUrl;
+        }
+        
+        // Handle special case for URLs that might have a path after the domain
+        try {
+          // Parse the URL to make sure it's valid
+          const parsedUrl = new URL(redirectUrl);
+          console.log('Parsed destination URL:', {
+            protocol: parsedUrl.protocol,
+            hostname: parsedUrl.hostname,
+            pathname: parsedUrl.pathname,
+            search: parsedUrl.search
+          });
+          
+          // If the URL includes "miniscape.io/" followed by another domain,
+          // it might be a malformed URL
+          if (parsedUrl.hostname === 'miniscape.io' && 
+              parsedUrl.pathname.includes('.com') || 
+              parsedUrl.pathname.includes('.net') || 
+              parsedUrl.pathname.includes('.org')) {
+            
+            // Extract the actual domain from the pathname
+            const domainMatch = parsedUrl.pathname.match(/\/([^\/]+)/);
+            if (domainMatch && domainMatch[1]) {
+              const actualDomain = domainMatch[1];
+              console.log('Detected malformed URL, extracting actual domain:', actualDomain);
+              
+              // Create new redirect URL with the correct domain
+              redirectUrl = `https://${actualDomain}`;
+              console.log('Corrected redirect URL:', redirectUrl);
+            }
+          }
+        } catch (e) {
+          console.error('Error parsing redirect URL:', e);
+          // Continue with the original URL if parsing fails
+        }
+        
+        // Create hidden iframe to preload the destination
+        if (!document.getElementById('preloadFrame')) {
+          const iframe = document.createElement('iframe');
+          iframe.id = 'preloadFrame';
+          iframe.style.display = 'none';
+          
+          // Build the destination URL with query parameters for preloading
+          let finalPreloadUrl = redirectUrl;
+          
+          // Check if the URL already has parameters
+          if (finalPreloadUrl.includes('?')) {
+            finalPreloadUrl += `&portal=true&username=${encodeURIComponent(playerName)}&color=${encodeURIComponent(playerColor)}&speed=${playerSpeed}&ref=${encodeURIComponent(refUrl)}`;
+          } else {
+            finalPreloadUrl += `?portal=true&username=${encodeURIComponent(playerName)}&color=${encodeURIComponent(playerColor)}&speed=${playerSpeed}&ref=${encodeURIComponent(refUrl)}`;
+          }
+          
+          iframe.src = finalPreloadUrl;
+          document.body.appendChild(iframe);
+        }
+        
+        // Build the final destination URL with query parameters
+        let finalRedirectUrl = redirectUrl;
+        
+        // Check if the URL already has parameters
+        if (finalRedirectUrl.includes('?')) {
+          finalRedirectUrl += `&portal=true&username=${encodeURIComponent(playerName)}&color=${encodeURIComponent(playerColor)}&speed=${playerSpeed}&ref=${encodeURIComponent(refUrl)}`;
+        } else {
+          finalRedirectUrl += `?portal=true&username=${encodeURIComponent(playerName)}&color=${encodeURIComponent(playerColor)}&speed=${playerSpeed}&ref=${encodeURIComponent(refUrl)}`;
+        }
+        
+        console.log('Redirecting to:', finalRedirectUrl);
+        
+        // Redirect after the effect completes
+        setTimeout(() => {
+          window.location.href = finalRedirectUrl;
+        }, 1000);
+      }, 10);
+    };
+    
+    // Execute the effect
+    createTeleportEffect();
+  }
+
+  // Check all portals for player proximity
+  private checkAllPortalProximity(): void {
+    // Find all portal landmarks that should use proximity detection
+    // Exclude portals that are marked as right-clickable
+    const portals = this.landmarks.filter(landmark => 
+      landmark.metadata?.isPortal && 
+      landmark.interactable && 
+      !landmark.metadata?.isRightClickable
+    );
+    
+    // Check each portal
+    portals.forEach(portal => {
+      this.checkPlayerPortalProximity(portal);
+    });
   }
 }
 

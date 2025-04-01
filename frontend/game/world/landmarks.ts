@@ -584,4 +584,221 @@ export const createNPC = (
     currentDialogueId: 'default',
     isInteracting: false
   };
+};
+
+// Create a vibeverse portal that players can enter to go to portal.pieter.com
+export const createVibesversePortal = (position: THREE.Vector3): Landmark => {
+  const portal = new THREE.Group();
+  
+  // Create portal frame
+  const frameGeometry = new THREE.TorusGeometry(1.5, 0.2, 16, 32);
+  const frameMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x00ff00, // Green
+    emissive: 0x00ff00,
+    metalness: 0.7,
+    roughness: 0.3,
+    transparent: true,
+    opacity: 0.8
+  });
+  const frame = new THREE.Mesh(frameGeometry, frameMaterial);
+  portal.add(frame);
+  
+  // Create portal inner surface
+  const portalGeometry = new THREE.CircleGeometry(1.3, 32);
+  const portalMaterial = new THREE.MeshBasicMaterial({ 
+    color: 0x00ff00, 
+    transparent: true,
+    opacity: 0.5,
+    side: THREE.DoubleSide
+  });
+  const portalMesh = new THREE.Mesh(portalGeometry, portalMaterial);
+  portalMesh.userData.isPortal = true;
+  portalMesh.userData.animationOffset = Math.random() * Math.PI * 2; // Random start point for animation
+  portal.add(portalMesh);
+  
+  // Create particle system for portal effect
+  const particleCount = 500;
+  const particles = new THREE.BufferGeometry();
+  const positions = new Float32Array(particleCount * 3);
+  const colors = new Float32Array(particleCount * 3);
+
+  for (let i = 0; i < particleCount * 3; i += 3) {
+    // Create particles in a ring around the portal
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 1.5 + (Math.random() - 0.5) * 0.4;
+    positions[i] = Math.cos(angle) * radius;
+    positions[i + 1] = Math.sin(angle) * radius;
+    positions[i + 2] = (Math.random() - 0.5) * 0.4;
+
+    // Green color with slight variation
+    colors[i] = 0;
+    colors[i + 1] = 0.8 + Math.random() * 0.2;
+    colors[i + 2] = 0;
+  }
+
+  particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  particles.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const particleMaterial = new THREE.PointsMaterial({
+    size: 0.05,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.6
+  });
+
+  const particleSystem = new THREE.Points(particles, particleMaterial);
+  particleSystem.userData.isParticleSystem = true;
+  portal.add(particleSystem);
+  
+  // Add label above the portal
+  const labelCanvas = document.createElement('canvas');
+  labelCanvas.width = 512;
+  labelCanvas.height = 64;
+  const context = labelCanvas.getContext('2d');
+  
+  if (context) {
+    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    context.fillRect(0, 0, 512, 64);
+    context.font = 'bold 32px Arial';
+    context.fillStyle = '#00FF00'; // Green text
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText('VIBEVERSE PORTAL', 256, 32);
+  }
+  
+  const labelTexture = new THREE.CanvasTexture(labelCanvas);
+  const labelMaterial = new THREE.SpriteMaterial({ map: labelTexture, transparent: true });
+  const label = new THREE.Sprite(labelMaterial);
+  label.position.set(0, 2.5, 0);
+  label.scale.set(3, 0.5, 1);
+  portal.add(label);
+  
+  // Add a subtle glow effect
+  const glowGeometry = new THREE.CircleGeometry(1.8, 32);
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ff00,
+    transparent: true,
+    opacity: 0.3,
+    side: THREE.DoubleSide
+  });
+  const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+  glow.userData.isGlow = true;
+  glow.userData.pulseRate = 0.5 + Math.random() * 0.5; // Random pulse rate
+  portal.add(glow);
+  
+  // Set portal position
+  portal.position.copy(position);
+  
+  // Create collision box for the portal
+  const portalBox = new THREE.Box3().setFromObject(portal);
+  
+  // Mark objects as rightclickable
+  portal.traverse((child: THREE.Object3D) => {
+    child.userData.isRightClickable = true;
+    child.userData.portalId = `portal_vibeverse_${position.x}_${position.z}`;
+    child.userData.portalName = 'Vibeverse Portal';
+    child.userData.portalType = 'vibeverse';
+  });
+  
+  // Create portal landmark
+  return {
+    id: `portal_vibeverse_${position.x}_${position.z}`,
+    name: 'Vibeverse Portal',
+    position,
+    mesh: portal,
+    interactable: true,
+    interactionRadius: 10, // Increased for better right-click detection range
+    metadata: { 
+      isPortal: true,
+      isRightClickable: true,
+      portalType: 'vibeverse',
+      destinationUrl: 'http://portal.pieter.com',
+      collisionBox: portalBox
+    },
+    onInteract: () => {
+      // This will be called when right-clicked through the context menu
+      enterVibesversePortal();
+    }
+  };
+};
+
+// Separate function to handle portal entry for reuse
+export const enterVibesversePortal = () => {
+  console.log('Player entered Vibeverse Portal');
+  
+  // Get player info for query parameters
+  const playerName = (window as any).playerName || 'unknown';
+  const playerColor = (window as any).playerColor || 'green';
+  const playerSpeed = (window as any).playerSpeed || 5; // Default speed (meters per second)
+  
+  // Get the current URL as the referring site
+  const refUrl = window.location.href;
+  
+  // Create a teleport effect
+  const createTeleportEffect = () => {
+    // Create teleport flash effect
+    const flash = document.createElement('div');
+    flash.style.position = 'fixed';
+    flash.style.top = '0';
+    flash.style.left = '0';
+    flash.style.width = '100%';
+    flash.style.height = '100%';
+    flash.style.backgroundColor = '#00ff00';
+    flash.style.opacity = '0';
+    flash.style.transition = 'opacity 1s';
+    flash.style.zIndex = '9999';
+    flash.style.pointerEvents = 'none';
+    document.body.appendChild(flash);
+    
+    // Trigger the flash animation
+    setTimeout(() => {
+      flash.style.opacity = '0.7';
+      
+      // Add teleportation message
+      const message = document.createElement('div');
+      message.style.position = 'fixed';
+      message.style.top = '50%';
+      message.style.left = '50%';
+      message.style.transform = 'translate(-50%, -50%)';
+      message.style.color = '#004d00';
+      message.style.fontSize = '32px';
+      message.style.fontWeight = 'bold';
+      message.style.textAlign = 'center';
+      message.style.fontFamily = 'Arial, sans-serif';
+      message.innerText = 'Entering Vibeverse...';
+      flash.appendChild(message);
+      
+      // Play teleport sound if available
+      try {
+        const soundManager = (window as any).soundManager;
+        if (soundManager && typeof soundManager.play === 'function') {
+          soundManager.play('teleport');
+        }
+      } catch (e) {
+        console.log('Could not play teleport sound', e);
+      }
+      
+      // Create hidden iframe to preload the destination
+      if (!document.getElementById('preloadFrame')) {
+        const iframe = document.createElement('iframe');
+        iframe.id = 'preloadFrame';
+        iframe.style.display = 'none';
+        // Build the destination URL with query parameters
+        const destinationUrl = `http://portal.pieter.com/?portal=true&username=${encodeURIComponent(playerName)}&color=${encodeURIComponent(playerColor)}&speed=${playerSpeed}&ref=${encodeURIComponent(refUrl)}`;
+        iframe.src = destinationUrl;
+        document.body.appendChild(iframe);
+      }
+      
+      // Build the destination URL with query parameters
+      const destinationUrl = `http://portal.pieter.com/?portal=true&username=${encodeURIComponent(playerName)}&color=${encodeURIComponent(playerColor)}&speed=${playerSpeed}&ref=${encodeURIComponent(refUrl)}`;
+      
+      // Redirect after the effect completes
+      setTimeout(() => {
+        window.location.href = destinationUrl;
+      }, 1000);
+    }, 10);
+  };
+  
+  // Execute the effect
+  createTeleportEffect();
 }; 
