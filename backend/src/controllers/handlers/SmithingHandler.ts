@@ -185,6 +185,7 @@ export class SmithingHandler {
     
     // Remove any existing listeners
     socket.removeAllListeners('smeltBronzeBar');
+    socket.removeAllListeners('startSmithing');
     
     // Add handler for bronze bar smelting
     socket.on('smeltBronzeBar', (data: { inventory: any[], skills: any }, callback: Function) => {
@@ -332,6 +333,175 @@ export class SmithingHandler {
       } catch (error) {
         console.error('[SMITHING] Error in smeltBronzeBar handler:', error);
         callback({ success: false, error: 'Internal server error' });
+      }
+    });
+
+    // Add handler for smithing items from bars
+    socket.on('startSmithing', (data: { itemType: string, mode: SmithingMode }, callback: Function) => {
+      console.log(`[SMITHING] Received startSmithing request from ${socket.id}`, data);
+
+      try {
+        const player = this.players[socket.id];
+        if (!player) {
+          console.log(`[SMITHING] Player ${socket.id} not found`);
+          if (callback) callback({ success: false, error: 'Player not found' });
+          return;
+        }
+
+        console.log(`[SMITHING] Found player ${socket.id}, checking requirements...`);
+
+        // Validate the mode - should be SmithingMode.SMITHING
+        if (data.mode !== SmithingMode.SMITHING) {
+          console.log(`[SMITHING] Invalid mode: ${data.mode}`);
+          if (callback) callback({ success: false, error: 'Invalid smithing mode' });
+          return;
+        }
+
+        // Find the recipe for the requested item
+        const recipeKey = Object.keys(SMITHING_RECIPES).find(key => 
+          SMITHING_RECIPES[key].resultItem.toString() === data.itemType
+        );
+
+        if (!recipeKey) {
+          console.log(`[SMITHING] Recipe not found for item: ${data.itemType}`);
+          if (callback) callback({ success: false, error: 'Recipe not found' });
+          return;
+        }
+
+        const recipe = SMITHING_RECIPES[recipeKey];
+        
+        // Check smithing level
+        const smithingLevel = player.skills?.smithing?.level || 1;
+        console.log(`[SMITHING] Player smithing level: ${smithingLevel}, required: ${recipe.requiredLevel}`);
+
+        if (smithingLevel < recipe.requiredLevel) {
+          console.log(`[SMITHING] Player ${socket.id} lacks required level ${recipe.requiredLevel}, has ${smithingLevel}`);
+          if (callback) callback({ success: false, error: `Requires smithing level ${recipe.requiredLevel}` });
+          return;
+        }
+
+        // Check ingredients (metal bars)
+        console.log(`[SMITHING] Checking ingredients in inventory:`, JSON.stringify(player.inventory));
+        let missingIngredients: string[] = [];
+        
+        const hasIngredients = recipe.ingredients.every(ingredient => {
+          const playerItem = player.inventory.find((item: any) => item.type === ingredient.type);
+          const itemCount = playerItem ? (playerItem.count || playerItem.quantity || 0) : 0;
+          console.log(`[SMITHING] Checking ${ingredient.type}: need ${ingredient.count}, has ${itemCount}`);
+          
+          if (!playerItem || itemCount < ingredient.count) {
+            missingIngredients.push(ingredient.type);
+            return false;
+          }
+          return true;
+        });
+
+        if (!hasIngredients) {
+          console.log(`[SMITHING] Player ${socket.id} missing ingredients: ${missingIngredients.join(', ')}`);
+          if (callback) callback({ success: false, error: `Missing required ingredients: ${missingIngredients.join(', ')}` });
+          return;
+        }
+
+        console.log(`[SMITHING] All requirements met, processing smithing...`);
+
+        // Remove ingredients from inventory
+        recipe.ingredients.forEach(ingredient => {
+          const playerItemIndex = player.inventory.findIndex((item: any) => item.type === ingredient.type);
+          if (playerItemIndex !== -1) {
+            const playerItem = player.inventory[playerItemIndex];
+            if (playerItem.quantity !== undefined) { 
+              playerItem.quantity -= ingredient.count;
+              if (playerItem.quantity <= 0) {
+                player.inventory.splice(playerItemIndex, 1);
+              }
+            } 
+          }
+        });
+
+        // Add the crafted item to inventory
+        const existingItemIndex = player.inventory.findIndex((item) => item.type === recipe.resultItem);
+        if (existingItemIndex !== -1) {
+          const existingItem = player.inventory[existingItemIndex];
+          existingItem.quantity = (existingItem.quantity || 0) + 1;
+        } else {
+          player.inventory.push({
+            id: uuidv4(),
+            type: recipe.resultItem,
+            quantity: 1
+          });
+        }
+
+        // Award experience
+        const experienceToAdd = recipe.experienceReward;
+        let xpGained = 0;
+
+        if (experienceToAdd > 0) {
+          // Use the centralized ExperienceHandler
+          const xpResult = this.experienceHandler.addExperience(player, SkillType.SMITHING, experienceToAdd);
+
+          if (xpResult) {
+            xpGained = experienceToAdd;
+
+            // Check for level up using the result
+            if (xpResult.leveledUp) {
+              console.log(`[SMITHING] Player ${socket.id} leveled up Smithing to level ${xpResult.newLevel}!`);
+              socket.emit('levelUp', {
+                skill: SkillType.SMITHING,
+                level: xpResult.newLevel
+              });
+              socket.emit('chatMessage', { 
+                content: `Congratulations! You've reached Smithing level ${xpResult.newLevel}!`, 
+                type: 'system', 
+                timestamp: Date.now() 
+              });
+            }
+
+            // Emit experience gained event
+            socket.emit('experienceGained', {
+              skill: SkillType.SMITHING,
+              experience: experienceToAdd,
+              totalExperience: xpResult.newExperience,
+              level: xpResult.newLevel
+            });
+
+            // Save skills (ExperienceHandler modified player object directly)
+            if (player.userId) {
+              this.savePlayerSkills(player.userId, player.skills)
+                .catch((error: Error) => console.error('[SMITHING] Error saving player skills:', error));
+            } else {
+               console.warn(`[SMITHING] Player ${socket.id} (${player.id}) not authenticated, skills not saved.`);
+            }
+          }
+        }
+
+        console.log(`[SMITHING] Successfully smithed ${recipe.resultItem} for player ${socket.id}, gained ${xpGained} XP.`);
+
+        // Save player inventory
+        if (player.userId) {
+          savePlayerInventory(player.userId, player.inventory)
+            .catch((error: Error) => console.error('[SMITHING] Error saving player inventory:', error));
+        }
+
+        // Send success response with updated inventory
+        if (callback) {
+          callback({
+            success: true,
+            updatedInventory: player.inventory,
+            itemCreated: recipe.resultItem,
+            experienceGained: xpGained
+          });
+        }
+
+        // Send a notification to the client
+        socket.emit('chatMessage', { 
+          content: `You successfully crafted a ${recipe.resultItem.toString().replace('_', ' ')}!`, 
+          type: 'system', 
+          timestamp: Date.now() 
+        });
+
+      } catch (error) {
+        console.error('[SMITHING] Error in startSmithing handler:', error);
+        if (callback) callback({ success: false, error: 'Internal server error' });
       }
     });
   }

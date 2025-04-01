@@ -165,59 +165,17 @@ export class SmithingSystem {
     this.playerRef = playerRef;
   }
 
-  // Check if player has the required ingredients for smelting
-  public canSmeltBar(barType: string, inventory: { type: ItemType, count: number }[]): boolean {
-    const recipe = SMELTING_RECIPES[barType];
-    if (!recipe) return false;
-    
-    // Check if player has all required ingredients
-    return recipe.ingredients.every(ingredient => {
-      const playerItem = inventory.find(item => item.type === ingredient.type);
-      return playerItem && playerItem.count >= ingredient.count;
-    });
-  }
-  
-  // Check if player has the required ingredients for smithing an item
-  public canSmithItem(itemType: string, inventory: { type: ItemType, count: number }[]): boolean {
-    const recipe = SMITHING_RECIPES[itemType];
-    if (!recipe) return false;
-    
-    // Check if player has all required ingredients
-    return recipe.ingredients.every(ingredient => {
-      const playerItem = inventory.find(item => item.type === ingredient.type);
-      return playerItem && playerItem.count >= ingredient.count;
-    });
-  }
-  
   // Start smelting a bar
   public startSmelting(barType: string, inventory: { type: ItemType, count: number }[], playerSkills: any): void {
     console.log(`[SMELTING] Starting smelting request for ${barType}`);
     
     // Only handle bronze bar smelting for now
     if (barType !== 'BRONZE_BAR') {
-      console.log('[SMELTING] Only bronze bar smelting is supported');
-      return;
-    }
-
-    const recipe = SMELTING_RECIPES[barType];
-    if (!recipe) {
-      console.log('[SMELTING] Invalid recipe');
-      return;
-    }
-
-    // Check level requirement
-    const smithingLevel = playerSkills[SkillType.SMITHING]?.level || 1;
-    if (smithingLevel < recipe.requiredLevel) {
-      console.log(`[SMELTING] Requires smithing level ${recipe.requiredLevel}`);
-      return;
-    }
-
-    // Check ingredients
-    const hasIngredients = this.canSmeltBar(barType, inventory);
-    if (!hasIngredients) {
-      console.log('[SMELTING] Missing required ingredients');
-      return;
-    }
+      console.log('[SMELTING] Only bronze bar smelting is supported via this specific event');
+       // Ideally, send a generic smelt event, backend decides based on barType
+       // For now, we just stop if not bronze bar as per original logic
+       return;
+     }
 
     // Get socket and emit simple smelting request
     console.log('[SMELTING] Getting socket to emit smeltBronzeBar event...');
@@ -303,22 +261,6 @@ export class SmithingSystem {
   // Start smithing an item
   public startSmithing(itemType: string, inventory: { type: ItemType, count: number }[], playerSkills: any): void {
     if (this.isProcessing) return;
-    
-    const recipe = SMITHING_RECIPES[itemType];
-    if (!recipe) return;
-    
-    // Check if player has the required level
-    const smithingLevel = playerSkills[SkillType.SMITHING]?.level || 1;
-    if (smithingLevel < recipe.requiredLevel) {
-      console.log(`Smithing level ${recipe.requiredLevel} required to smith ${itemType}`);
-      return;
-    }
-    
-    // Check if player has the required items
-    if (!this.canSmithItem(itemType, inventory)) {
-      console.log(`Missing required items to smith ${itemType}`);
-      return;
-    }
     
     // Start smithing process
     this.isProcessing = true;

@@ -1,8 +1,6 @@
 import * as THREE from 'three';
 import { Player, Item, ItemType } from '../../types/player';
-import { addExperience } from '../state/SkillSystem';
 import { SkillType } from '../../components/ui/SkillsPanel';
-import { XP_REWARDS } from '../state/SkillSystem';
 import soundManager from '../audio/soundManager';
 import { getSocket } from '../network/socket';
 import { isPvpEnabled } from '../world/zones';
@@ -316,147 +314,33 @@ export class CombatSystem {
   
   // Attack current target
   private attackTarget(playerSkills: any): void {
-    if (!this.currentTarget) return;
-    
-    // Reset cooldown
-    this.attackCooldown = this.attackCooldownMax;
-    
-    // Calculate damage based on combat mode and skill levels
-    const attackLevel = playerSkills[SkillType.ATTACK]?.level || 1;
-    const strengthLevel = playerSkills[SkillType.STRENGTH]?.level || 1;
-    
-    // Base damage calculation
-    let baseDamage = 1;
-    
-    // Add bonus damage based on combat mode
-    switch (this.combatMode) {
-      case CombatMode.ATTACK:
-        // Higher chance to hit, lower damage
-        baseDamage = Math.max(1, Math.floor(strengthLevel / 4));
-        break;
-      case CombatMode.STRENGTH:
-        // Higher damage, lower chance to hit
-        baseDamage = Math.max(1, Math.floor(strengthLevel / 2));
-        break;
-      case CombatMode.DEFENSE:
-        // Balanced approach
-        baseDamage = Math.max(1, Math.floor(strengthLevel / 3));
-        break;
+    if (!this.currentTarget || this.currentTarget.isDead || !this.playerRef.current || this.attackCooldown > 0) {
+      return;
     }
+
+    // Play attack sound
+    soundManager.play('attack_swing');
     
-    // Add small random variation
-    const damage = Math.max(1, Math.floor(baseDamage * (0.8 + Math.random() * 0.4)));
-    
-    // Calculate hit chance based on attack level vs enemy level
-    const hitChance = Math.min(0.95, 0.5 + (attackLevel - this.currentTarget.level) * 0.03);
-    
-    // Determine if attack hits
-    const attackHits = Math.random() < hitChance;
-    
-    if (attackHits) {
-      // Apply damage to enemy
-      this.currentTarget.health = Math.max(0, this.currentTarget.health - damage);
-      
-      // Play hit sound
-      soundManager.play('player_hit');
-      
-      // Check if enemy is defeated
-      if (this.currentTarget.health <= 0) {
-        this.defeatEnemy(this.currentTarget);
-      }
-      
-      // Award XP based on damage dealt
-      const xpGain = damage * XP_REWARDS.COMBAT.BASE_XP_PER_DAMAGE;
-      
-      // Award XP based on the combat mode
-      switch (this.combatMode) {
-        case CombatMode.ATTACK:
-          this.awardCombatXP(SkillType.ATTACK, xpGain);
-          break;
-        case CombatMode.STRENGTH:
-          this.awardCombatXP(SkillType.STRENGTH, xpGain);
-          break;
-        case CombatMode.DEFENSE:
-          this.awardCombatXP(SkillType.DEFENSE, xpGain);
-          break;
-      }
-    } else {
-      // Play miss sound
-      soundManager.play('ui_click'); // Using UI click as a placeholder for miss sound
-    }
-  }
-  
-  // Award combat XP
-  private awardCombatXP(skillType: string, xpAmount: number): void {
-    const socket = getSocket();
-    if (!socket) return;
-    
-    socket.then(socket => {
-      if (socket) {
-        socket.emit('updatePlayerSkill', {
-          skillType,
-          xpAmount
+    // Set attack cooldown (Frontend cooldown to prevent spamming events)
+    this.attackCooldown = this.attackCooldownMax; 
+    this.isInCombat = true;
+    this.lastDamageTime = Date.now(); // Reset combat timer on attack
+
+    // Emit attack event to server
+    getSocket().then(socket => {
+      if (socket && this.currentTarget) {
+        console.log(`[COMBAT] Emitting attackEnemy event for target: ${this.currentTarget.id}`);
+        // @ts-ignore - TODO: Add 'attackEnemy' to socket event types
+        socket.emit('attackEnemy', { 
+          targetId: this.currentTarget.id, 
+          combatMode: this.combatMode // Send combat mode for XP distribution
         });
+      } else {
+        console.error('[COMBAT] Socket not available or no target to attack');
       }
+    }).catch(error => {
+      console.error('[COMBAT] Error getting socket:', error);
     });
-  }
-  
-  // Handle enemy defeat
-  private defeatEnemy(enemy: Enemy): void {
-    // Mark enemy as dead
-    enemy.isDead = true;
-    
-    // Hide enemy mesh
-    enemy.mesh.visible = false;
-    
-    // Award XP for defeating enemy
-    this.awardCombatXP(this.combatMode, enemy.experienceReward);
-    
-    // Clear target
-    this.currentTarget = null;
-    this.isInCombat = false;
-    
-    // Handle item drops
-    this.handleEnemyDrops(enemy);
-    
-    // Set respawn timer
-    setTimeout(() => {
-      this.respawnEnemy(enemy);
-    }, enemy.respawnTime);
-  }
-  
-  // Handle enemy item drops
-  private handleEnemyDrops(enemy: Enemy): void {
-    const socket = getSocket();
-    if (!socket) return;
-    
-    socket.then(socket => {
-      if (socket) {
-        // Check each possible drop
-        enemy.drops.forEach(drop => {
-          // Randomize chance to drop
-          if (Math.random() < drop.chance) {
-            // Use updateInventory instead of addItem
-            socket.emit('updateInventory', {
-              type: drop.itemType,
-              count: 1
-            });
-          }
-        });
-      }
-    });
-  }
-  
-  // Respawn enemy
-  private respawnEnemy(enemy: Enemy): void {
-    // Reset health
-    enemy.health = enemy.maxHealth;
-    
-    // Mark as alive
-    enemy.isDead = false;
-    
-    // Show mesh
-    enemy.mesh.visible = true;
   }
   
   // Check for aggressive enemies nearby

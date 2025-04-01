@@ -1,9 +1,7 @@
 import * as THREE from 'three';
 import { getSocket } from '../network/socket';
 import { ItemType } from '../../types/player';
-import { addExperience } from '../state/SkillSystem';
 import { SkillType } from '../../components/ui/SkillsPanel';
-import { XP_REWARDS, SKILL_REQUIREMENTS } from '../state/SkillSystem';
 import { ResourceNode, ResourceType } from '../world/resources';
 import soundManager from '../audio/soundManager';
 
@@ -74,8 +72,7 @@ export const FISH_TO_ITEM_MAP: Record<FishType, ItemType> = {
 // FishingSystem interface options
 interface FishingSystemOptions {
   playerRef: React.MutableRefObject<THREE.Mesh | null>;
-  onFishCaught?: (fishType: FishType) => void;
-  onExperienceGained?: (experience: number) => void;
+  onFishCaught?: (fishType: FishType | ItemType) => void;
 }
 
 export class FishingSystem {
@@ -83,13 +80,11 @@ export class FishingSystem {
   private isFishing: boolean = false;
   private fishingInterval: NodeJS.Timeout | null = null;
   private currentFishingSpot: ResourceNode | null = null;
-  private onFishCaught?: (fishType: FishType) => void;
-  private onExperienceGained?: (experience: number) => void;
+  private onFishCaught?: (fishType: FishType | ItemType) => void;
   
   constructor(options: FishingSystemOptions) {
     this.playerRef = options.playerRef;
     this.onFishCaught = options.onFishCaught;
-    this.onExperienceGained = options.onExperienceGained;
   }
   
   // Start fishing at a specific spot
@@ -101,17 +96,6 @@ export class FishingSystem {
     
     if (!this.playerRef.current) {
       console.log("Player reference not found");
-      return false;
-    }
-    
-    // Check if the fishing spot is close enough
-    const playerPosition = this.playerRef.current.position;
-    const distanceToSpot = playerPosition.distanceTo(
-      new THREE.Vector3(fishingSpot.x, fishingSpot.y, fishingSpot.z)
-    );
-    
-    if (distanceToSpot > 5) {
-      console.log("Too far from fishing spot");
       return false;
     }
     
@@ -164,56 +148,39 @@ export class FishingSystem {
   }
   
   // Handle fish caught event from server
-  public handleFishCaught(data: { fishType: FishType, experience: number }): void {
+  public handleFishCaught(data: { itemType: ItemType, experience: number }): void {
     if (!this.isFishing) return;
     
-    const { fishType, experience } = data;
+    const { itemType, experience } = data;
     
     // Play sound effect
     soundManager.play('fishing_catch');
     
     // Call the callback if provided
     if (this.onFishCaught) {
-      this.onFishCaught(fishType);
+      this.onFishCaught(itemType);
     }
     
-    // Handle experience gained
-    if (this.onExperienceGained) {
-      this.onExperienceGained(experience);
-    }
+    console.log(`Caught a ${itemType} for ${experience} XP!`);
     
-    console.log(`Caught a ${fishType} for ${experience} XP!`);
+    // Example: Dispatch notification event
+    const notificationEvent = new CustomEvent('show-notification', {
+      detail: { message: `Caught ${itemType} (+${experience} XP)`, type: 'info' },
+      bubbles: true
+    });
+    document.dispatchEvent(notificationEvent);
+    
+    // Example: Dispatch XP drop UI event
+    const xpEvent = new CustomEvent('xp-drop', {
+        detail: { skill: SkillType.FISHING, xp: experience },
+        bubbles: true
+    });
+    document.dispatchEvent(xpEvent);
   }
   
   // Clean up resources
   public cleanup(): void {
     this.stopFishing();
-  }
-  
-  // Check if player has the required tool in inventory
-  public static hasRequiredTool(
-    inventory: { type: ItemType }[],
-    spotType: FishingSpotType
-  ): boolean {
-    const config = FISHING_SPOTS[spotType];
-    return inventory.some(item => item.type === config.requiredTool);
-  }
-  
-  // Check if player has the required skill level
-  public static hasRequiredLevel(
-    skills: { [key: string]: { level: number } },
-    spotType: FishingSpotType
-  ): boolean {
-    const config = FISHING_SPOTS[spotType];
-    const fishingLevel = skills[SkillType.FISHING]?.level || 1;
-    return fishingLevel >= config.requiredLevel;
-  }
-  
-  // Get a random fish from a fishing spot
-  public static getRandomFish(spotType: FishingSpotType): FishType {
-    const config = FISHING_SPOTS[spotType];
-    const fishIndex = Math.floor(Math.random() * config.fish.length);
-    return config.fish[fishIndex];
   }
   
   // Initialize socket listeners
@@ -223,12 +190,13 @@ export class FishingSystem {
       
       // Resource gathered event from server
       (socket as any).on('resourceGathered', (data: any) => {
-        // Check if this is a fishing-related update
-        if (data.resourceType === 'fishing_spot' || data.resourceType === 'fish') {
+        if (data && (data.resourceType === ResourceType.FISHING_SPOT) && data.itemType && data.experience !== undefined) {
           this.handleFishCaught({
-            fishType: data.item?.type || FishType.SHRIMP,
-            experience: 10 // Default XP if not provided
+            itemType: data.itemType as ItemType,
+            experience: data.experience
           });
+        } else if (data && data.resourceType === ResourceType.FISHING_SPOT) {
+          console.warn('[FishingSystem] Received resourceGathered event for fishing spot with unexpected data format:', data);
         }
       });
       

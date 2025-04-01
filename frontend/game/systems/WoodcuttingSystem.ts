@@ -1,9 +1,7 @@
 import * as THREE from 'three';
 import { getSocket } from '../network/socket';
 import { ItemType } from '../../types/player';
-import { addExperience } from '../state/SkillSystem';
 import { SkillType } from '../../components/ui/SkillsPanel';
-import { XP_REWARDS, SKILL_REQUIREMENTS } from '../state/SkillSystem';
 import { ResourceNode, ResourceType } from '../world/resources';
 import soundManager from '../audio/soundManager';
 
@@ -83,7 +81,6 @@ export const TREE_TYPE_MAP: Record<string, TreeType> = {
 interface WoodcuttingSystemOptions {
   playerRef: React.MutableRefObject<THREE.Mesh | null>;
   onLogChopped?: (logType: ItemType) => void;
-  onExperienceGained?: (experience: number) => void;
   onTreeDepleted?: (treeId: string) => void;
 }
 
@@ -93,14 +90,12 @@ export class WoodcuttingSystem {
   private choppingInterval: NodeJS.Timeout | null = null;
   private currentTree: ResourceNode | null = null;
   private onLogChopped?: (logType: ItemType) => void;
-  private onExperienceGained?: (experience: number) => void;
   private onTreeDepleted?: (treeId: string) => void;
   private choppingAnimationRef?: THREE.AnimationAction | null = null;
   
   constructor(options: WoodcuttingSystemOptions) {
     this.playerRef = options.playerRef;
     this.onLogChopped = options.onLogChopped;
-    this.onExperienceGained = options.onExperienceGained;
     this.onTreeDepleted = options.onTreeDepleted;
   }
   
@@ -113,23 +108,6 @@ export class WoodcuttingSystem {
     
     if (!this.playerRef.current) {
       console.log("Player reference not found");
-      return false;
-    }
-    
-    // Check if the tree is close enough
-    const playerPosition = this.playerRef.current.position;
-    const distanceToTree = playerPosition.distanceTo(
-      new THREE.Vector3(tree.x, tree.y, tree.z)
-    );
-    
-    if (distanceToTree > 3) {
-      console.log("Too far from tree");
-      return false;
-    }
-    
-    // Check if the tree is already depleted
-    if (tree.state === 'harvested') {
-      console.log("Tree is already depleted");
       return false;
     }
     
@@ -207,12 +185,21 @@ export class WoodcuttingSystem {
       this.onLogChopped(logType);
     }
     
-    // Handle experience gained
-    if (this.onExperienceGained) {
-      this.onExperienceGained(experience);
-    }
-    
+    // Frontend can still log or show XP notification if needed, using backend data
     console.log(`Chopped ${logType} for ${experience} XP!`);
+    // Example: Dispatch notification event
+    const notificationEvent = new CustomEvent('show-notification', {
+        detail: { message: `Chopped ${logType} (+${experience} XP)`, type: 'info' },
+        bubbles: true
+    });
+    document.dispatchEvent(notificationEvent);
+
+    // Example: Dispatch XP drop UI event
+    const xpEvent = new CustomEvent('xp-drop', {
+        detail: { skill: SkillType.WOODCUTTING, xp: experience },
+        bubbles: true
+    });
+    document.dispatchEvent(xpEvent);
   }
   
   // Handle tree depleted event
@@ -234,46 +221,6 @@ export class WoodcuttingSystem {
     this.stopChopping();
   }
   
-  // Check if player has the required axe
-  public static hasRequiredAxe(
-    inventory: { type: ItemType }[],
-    equippedItem?: { type: ItemType } | null
-  ): boolean {
-    // Check equipped item first
-    if (equippedItem) {
-      if (
-        equippedItem.type === ItemType.BRONZE_AXE ||
-        equippedItem.type === ItemType.IRON_AXE ||
-        equippedItem.type === ItemType.STEEL_AXE
-      ) {
-        return true;
-      }
-    }
-    
-    // Check inventory
-    return inventory.some(item => 
-      item.type === ItemType.BRONZE_AXE ||
-      item.type === ItemType.IRON_AXE ||
-      item.type === ItemType.STEEL_AXE
-    );
-  }
-  
-  // Check if player has the required skill level for a tree type
-  public static hasRequiredLevel(
-    skills: { [key: string]: { level: number } },
-    treeType: TreeType
-  ): boolean {
-    const config = TREE_CONFIGS[treeType];
-    const woodcuttingLevel = skills[SkillType.WOODCUTTING]?.level || 1;
-    return woodcuttingLevel >= config.requiredLevel;
-  }
-  
-  // Get the tree type from a resource node
-  public static getTreeType(tree: ResourceNode): TreeType {
-    const treeTypeId = tree.metadata?.treeType || 'tree';
-    return TREE_TYPE_MAP[treeTypeId] || TreeType.NORMAL;
-  }
-  
   // Initialize socket listeners
   public initSocketListeners(): void {
     getSocket().then(socket => {
@@ -281,18 +228,22 @@ export class WoodcuttingSystem {
       
       // Resource gathered event from server
       (socket as any).on('resourceGathered', (data: any) => {
-        // Check if this is a woodcutting-related update
-        if (data.resourceType === 'tree') {
+        // Ensure data structure is as expected from backend for woodcutting
+        if (data && data.resourceType?.startsWith('tree_') &&
+            data.itemType && data.experience !== undefined) {
           this.handleLogChopped({
-            logType: data.item?.type || ItemType.LOG,
-            experience: data.experience || TREE_CONFIGS[TreeType.NORMAL].experienceReward
+            logType: data.itemType as ItemType,
+            experience: data.experience
           });
+        } else if (data && data.resourceType?.startsWith('tree_')) {
+            console.warn('[WoodcuttingSystem] Received resourceGathered event for tree with unexpected data format:', data);
         }
       });
       
       // Resource unavailable event (e.g., tree depleted)
       (socket as any).on('resourceUnavailable', (data: any) => {
-        if (data.resourceId && this.currentTree?.id === data.resourceId) {
+        // Check if the unavailable resource is the tree we are currently chopping
+        if (this.currentTree && data && data.resourceId === this.currentTree.id) {
           this.handleTreeDepleted(data.resourceId);
         }
       });

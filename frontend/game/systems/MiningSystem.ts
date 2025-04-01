@@ -1,9 +1,7 @@
 import * as THREE from 'three';
 import { getSocket } from '../network/socket';
 import { ItemType } from '../../types/player';
-import { addExperience } from '../state/SkillSystem';
 import { SkillType } from '../../components/ui/SkillsPanel';
-import { XP_REWARDS, SKILL_REQUIREMENTS } from '../state/SkillSystem';
 import { ResourceNode, ResourceType } from '../world/resources';
 import soundManager from '../audio/soundManager';
 
@@ -93,7 +91,6 @@ export const ROCK_TYPE_MAP: Record<string, RockType> = {
 interface MiningSystemOptions {
   playerRef: React.MutableRefObject<THREE.Mesh | null>;
   onOreMined?: (oreType: ItemType) => void;
-  onExperienceGained?: (experience: number) => void;
   onRockDepleted?: (rockId: string) => void;
 }
 
@@ -103,14 +100,12 @@ export class MiningSystem {
   private miningInterval: NodeJS.Timeout | null = null;
   private currentRock: ResourceNode | null = null;
   private onOreMined?: (oreType: ItemType) => void;
-  private onExperienceGained?: (experience: number) => void;
   private onRockDepleted?: (rockId: string) => void;
   private miningAnimationRef?: THREE.AnimationAction | null = null;
   
   constructor(options: MiningSystemOptions) {
     this.playerRef = options.playerRef;
     this.onOreMined = options.onOreMined;
-    this.onExperienceGained = options.onExperienceGained;
     this.onRockDepleted = options.onRockDepleted;
   }
   
@@ -123,23 +118,6 @@ export class MiningSystem {
     
     if (!this.playerRef.current) {
       console.log("Player reference not found");
-      return false;
-    }
-    
-    // Check if the rock is close enough
-    const playerPosition = this.playerRef.current.position;
-    const distanceToRock = playerPosition.distanceTo(
-      new THREE.Vector3(rock.x, rock.y, rock.z)
-    );
-    
-    if (distanceToRock > 3) {
-      console.log("Too far from rock");
-      return false;
-    }
-    
-    // Check if the rock is already depleted
-    if (rock.state === 'harvested') {
-      console.log("Rock is already depleted");
       return false;
     }
     
@@ -217,12 +195,21 @@ export class MiningSystem {
       this.onOreMined(oreType);
     }
     
-    // Handle experience gained
-    if (this.onExperienceGained) {
-      this.onExperienceGained(experience);
-    }
-    
     console.log(`Mined ${oreType} for ${experience} XP!`);
+    
+    // Example: Dispatch notification event
+    const notificationEvent = new CustomEvent('show-notification', {
+        detail: { message: `Mined ${oreType} (+${experience} XP)`, type: 'info' },
+        bubbles: true
+    });
+    document.dispatchEvent(notificationEvent);
+    
+    // Example: Dispatch XP drop UI event
+    const xpEvent = new CustomEvent('xp-drop', {
+        detail: { skill: SkillType.MINING, xp: experience },
+        bubbles: true
+    });
+    document.dispatchEvent(xpEvent);
   }
   
   // Handle rock depleted event
@@ -244,46 +231,6 @@ export class MiningSystem {
     this.stopMining();
   }
   
-  // Check if player has the required pickaxe
-  public static hasRequiredPickaxe(
-    inventory: { type: ItemType }[],
-    equippedItem?: { type: ItemType } | null
-  ): boolean {
-    // Check equipped item first
-    if (equippedItem) {
-      if (
-        equippedItem.type === ItemType.BRONZE_PICKAXE ||
-        equippedItem.type === ItemType.IRON_PICKAXE ||
-        equippedItem.type === ItemType.STEEL_PICKAXE
-      ) {
-        return true;
-      }
-    }
-    
-    // Check inventory
-    return inventory.some(item => 
-      item.type === ItemType.BRONZE_PICKAXE ||
-      item.type === ItemType.IRON_PICKAXE ||
-      item.type === ItemType.STEEL_PICKAXE
-    );
-  }
-  
-  // Check if player has the required skill level for a rock type
-  public static hasRequiredLevel(
-    skills: { [key: string]: { level: number } },
-    rockType: RockType
-  ): boolean {
-    const config = ROCK_CONFIGS[rockType];
-    const miningLevel = skills[SkillType.MINING]?.level || 1;
-    return miningLevel >= config.requiredLevel;
-  }
-  
-  // Get the rock type from a resource node
-  public static getRockType(rock: ResourceNode): RockType {
-    const rockTypeId = rock.metadata?.rockType || 'copper_rock';
-    return ROCK_TYPE_MAP[rockTypeId] || RockType.COPPER;
-  }
-  
   // Initialize socket listeners
   public initSocketListeners(): void {
     getSocket().then(socket => {
@@ -291,18 +238,22 @@ export class MiningSystem {
       
       // Resource gathered event from server
       (socket as any).on('resourceGathered', (data: any) => {
-        // Check if this is a mining-related update
-        if (data.resourceType === 'rock') {
+        // Ensure data structure is as expected from backend for mining
+        if (data && data.resourceType?.startsWith('rock_') &&
+            data.itemType && data.experience !== undefined) {
           this.handleOreMined({
-            oreType: data.item?.type || ItemType.COPPER_ORE,
-            experience: data.experience || ROCK_CONFIGS[RockType.COPPER].experienceReward
+            oreType: data.itemType as ItemType,
+            experience: data.experience
           });
+        } else if (data && data.resourceType?.startsWith('rock_')) {
+            console.warn('[MiningSystem] Received resourceGathered event for rock with unexpected data format:', data);
         }
       });
       
       // Resource unavailable event (e.g., rock depleted)
       (socket as any).on('resourceUnavailable', (data: any) => {
-        if (data.resourceId && this.currentRock?.id === data.resourceId) {
+        // Check if the unavailable resource is the rock we are currently mining
+        if (this.currentRock && data && data.resourceId === this.currentRock.id) {
           this.handleRockDepleted(data.resourceId);
         }
       });

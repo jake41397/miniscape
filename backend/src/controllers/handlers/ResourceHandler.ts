@@ -171,17 +171,47 @@ export class ResourceHandler {
         return;
       }
       
+      // ADD: Check player distance to resource
+      const playerDistance = this.calculateDistance(
+        player.x, player.y, player.z,
+        resourceNode.x, resourceNode.y, resourceNode.z
+      );
+      
+      // Maximum distance allowed (3-5 units depending on resource type)
+      const maxDistance = this.getMaxInteractionDistance(resourceNode.type);
+      
+      if (playerDistance > maxDistance) {
+        socket.emit('chatMessage', { 
+          content: `You are too far from this ${resourceNode.type}. Move closer.`, 
+          type: 'system', 
+          timestamp: Date.now() 
+        });
+        socket.emit('resourceUnavailable', { resourceId });
+        return;
+      }
+      
       try {
+        // Check skill level first
+        if (!this.hasRequiredSkillLevel(player, resourceNode.type, action)) {
+          socket.emit('error', `Your ${action} level is too low for this resource`);
+          socket.emit('chatMessage', { 
+            content: `You need a higher ${action} level to ${action} this resource.`, 
+            type: 'system', 
+            timestamp: Date.now() 
+          });
+          return;
+        }
+        
         // Stop any existing gathering activity for this player
         this.stopGatheringForPlayer(socket.id);
         
         // Handle different resource types and actions
-        if (resourceNode.type === 'tree' && action === 'chop') {
-          // Check if player has an axe equipped or in inventory
-          if (this.hasToolForAction(player, 'bronze_axe')) {
+        if (resourceNode.type.includes('tree') && action === 'chop') {
+          // Check if player has an appropriate axe for this tree type
+          if (this.hasToolForResource(player, resourceNode.type, 'chop')) {
             // Send a message to the player's chat
             socket.emit('chatMessage', { 
-              content: `You begin chopping the tree...`, 
+              content: `You begin chopping the ${resourceNode.type}...`, 
               type: 'action', 
               timestamp: Date.now() 
             });
@@ -189,19 +219,19 @@ export class ResourceHandler {
             // Start the gathering process
             this.startResourceGathering(socket, resourceNode, 'chop');
           } else {
-            socket.emit('error', 'You need an axe to chop down this tree');
+            socket.emit('error', 'You need a better axe to chop down this tree');
             socket.emit('chatMessage', { 
-              content: `You need an axe to chop down this tree.`, 
+              content: `You need a better axe to chop down this tree.`, 
               type: 'system', 
               timestamp: Date.now() 
             });
           }
-        } else if (resourceNode.type === 'rock' && action === 'mine') {
-          // Check if player has a pickaxe equipped or in inventory
-          if (this.hasToolForAction(player, 'bronze_pickaxe')) {
+        } else if (resourceNode.type.includes('rock') && action === 'mine') {
+          // Check if player has an appropriate pickaxe for this rock type
+          if (this.hasToolForResource(player, resourceNode.type, 'mine')) {
             // Send a message to the player's chat
             socket.emit('chatMessage', { 
-              content: `You begin mining the rock...`, 
+              content: `You begin mining the ${resourceNode.type}...`, 
               type: 'action', 
               timestamp: Date.now() 
             });
@@ -209,9 +239,29 @@ export class ResourceHandler {
             // Start the gathering process
             this.startResourceGathering(socket, resourceNode, 'mine');
           } else {
-            socket.emit('error', 'You need a pickaxe to mine this rock');
+            socket.emit('error', 'You need a better pickaxe to mine this rock');
             socket.emit('chatMessage', { 
-              content: `You need a pickaxe to mine this rock.`, 
+              content: `You need a better pickaxe to mine this rock.`, 
+              type: 'system', 
+              timestamp: Date.now() 
+            });
+          }
+        } else if (resourceNode.type.includes('fishing_spot') && action === 'fish') {
+          // Check if player has appropriate fishing equipment for this spot
+          if (this.hasToolForResource(player, resourceNode.type, 'fish')) {
+            // Send a message to the player's chat
+            socket.emit('chatMessage', { 
+              content: `You begin fishing...`, 
+              type: 'action', 
+              timestamp: Date.now() 
+            });
+            
+            // Start the gathering process
+            this.startResourceGathering(socket, resourceNode, 'fish');
+          } else {
+            socket.emit('error', 'You need the right fishing equipment for this spot');
+            socket.emit('chatMessage', { 
+              content: `You need the right fishing equipment for this fishing spot.`, 
               type: 'system', 
               timestamp: Date.now() 
             });
@@ -238,16 +288,230 @@ export class ResourceHandler {
   }
   
   /**
-   * Check if player has the required tool either equipped or in inventory
+   * Check if player has the required skill level for a resource
    */
-  private hasToolForAction(player: any, toolType: string): boolean {
-    // Check if the required tool is equipped
-    if (player.equippedItem && player.equippedItem.type === toolType) {
+  private hasRequiredSkillLevel(player: any, resourceType: string, actionType: string): boolean {
+    // Get required skill type and level
+    const { skillType, requiredLevel } = this.getRequiredSkillForResource(resourceType, actionType);
+    
+    // If no skill required, return true
+    if (!skillType || requiredLevel <= 0) {
       return true;
     }
     
-    // Check if the required tool is in the inventory
-    return player.inventory.some((item: any) => item.type === toolType);
+    // Make sure player skills exist
+    if (!player.skills || !player.skills[skillType]) {
+      return requiredLevel <= 1; // Default to level 1 if no skill data exists
+    }
+    
+    // Check if player has the required level
+    const playerLevel = player.skills[skillType].level || 1;
+    return playerLevel >= requiredLevel;
+  }
+  
+  /**
+   * Get the required skill type and level for a resource
+   */
+  private getRequiredSkillForResource(resourceType: string, actionType: string): { skillType: string | null, requiredLevel: number } {
+    // Map action types to skill types
+    let skillType: string | null = null;
+    let requiredLevel = 1;
+    
+    switch (actionType) {
+      case 'chop':
+        skillType = 'woodcutting';
+        // Set required level based on tree type
+        if (resourceType.includes('yew')) {
+          requiredLevel = 60;
+        } else if (resourceType.includes('maple')) {
+          requiredLevel = 45;
+        } else if (resourceType.includes('willow')) {
+          requiredLevel = 30;
+        } else if (resourceType.includes('oak')) {
+          requiredLevel = 15;
+        } else {
+          requiredLevel = 1; // Normal trees
+        }
+        break;
+        
+      case 'mine':
+        skillType = 'mining';
+        // Set required level based on rock type
+        if (resourceType.includes('mithril')) {
+          requiredLevel = 55;
+        } else if (resourceType.includes('gold')) {
+          requiredLevel = 40;
+        } else if (resourceType.includes('coal')) {
+          requiredLevel = 30;
+        } else if (resourceType.includes('iron')) {
+          requiredLevel = 15;
+        } else {
+          requiredLevel = 1; // Copper/tin
+        }
+        break;
+        
+      case 'fish':
+        skillType = 'fishing';
+        // Set required level based on fishing spot type
+        if (resourceType.includes('swordfish') || resourceType.includes('harpoon')) {
+          requiredLevel = 50;
+        } else if (resourceType.includes('lobster') || resourceType.includes('cage')) {
+          requiredLevel = 40;
+        } else if (resourceType.includes('salmon') || resourceType.includes('trout')) {
+          requiredLevel = 20;
+        } else {
+          requiredLevel = 1; // Shrimp/sardines
+        }
+        break;
+    }
+    
+    return { skillType, requiredLevel };
+  }
+  
+  /**
+   * Check if player has the required tool either equipped or in inventory
+   */
+  private hasToolForAction(player: any, action: string): boolean {
+    // Get required tool type and tier based on the action
+    const { toolType, minTier } = this.getRequiredToolForAction(action);
+    
+    if (!toolType) return false; // No tool required or invalid action
+    
+    // Check if the player has any tool that meets or exceeds the minimum tier
+    const hasSufficientTool = this.checkToolInInventoryOrEquipped(player, toolType, minTier);
+    
+    return hasSufficientTool;
+  }
+  
+  /**
+   * Get required tool type and minimum tier for a specific action
+   */
+  private getRequiredToolForAction(action: string): { toolType: string | null, minTier: string } {
+    switch (action) {
+      case 'chop':
+        return { toolType: 'axe', minTier: 'bronze' }; // Default to bronze tier
+      case 'mine':
+        return { toolType: 'pickaxe', minTier: 'bronze' }; // Default to bronze tier
+      case 'fish':
+        return { toolType: 'fishing_rod', minTier: 'basic' }; // Default to basic tier
+      default:
+        return { toolType: null, minTier: 'none' };
+    }
+  }
+  
+  /**
+   * Check if player has the required tool for a specific resource type
+   * @param player The player object
+   * @param resourceType The type of resource being gathered
+   * @param actionType The action being performed (chop, mine, fish)
+   * @returns Boolean indicating if player has the appropriate tool
+   */
+  private hasToolForResource(player: any, resourceType: string, actionType: string): boolean {
+    // Define tool requirements based on resource type
+    let requiredTool = '';
+    let minTier = 'bronze';
+    
+    switch (actionType) {
+      case 'chop':
+        requiredTool = 'axe';
+        // Determine minimum tier based on tree type
+        if (resourceType.includes('yew')) {
+          minTier = 'steel';
+        } else if (resourceType.includes('maple') || resourceType.includes('willow')) {
+          minTier = 'iron';
+        } else {
+          minTier = 'bronze'; // Normal trees need bronze+ axe
+        }
+        break;
+        
+      case 'mine':
+        requiredTool = 'pickaxe';
+        // Determine minimum tier based on rock type
+        if (resourceType.includes('mithril') || resourceType.includes('gold')) {
+          minTier = 'steel';
+        } else if (resourceType.includes('coal') || resourceType.includes('iron')) {
+          minTier = 'iron';
+        } else {
+          minTier = 'bronze'; // Copper/tin needs bronze+ pickaxe
+        }
+        break;
+        
+      case 'fish':
+        // Different fishing spots may require different tools
+        if (resourceType.includes('cage') || resourceType.includes('harpoon')) {
+          requiredTool = 'harpoon';
+        } else if (resourceType.includes('net')) {
+          requiredTool = 'fishing_net';
+        } else {
+          requiredTool = 'fishing_rod';
+        }
+        break;
+        
+      default:
+        return false; // Unknown action type
+    }
+    
+    // Check if the player has the required tool of the minimum tier or better
+    return this.checkToolInInventoryOrEquipped(player, requiredTool, minTier);
+  }
+  
+  /**
+   * Check if a player has a tool of sufficient tier either equipped or in inventory
+   * @param player The player object
+   * @param toolType The type of tool required (axe, pickaxe, etc.)
+   * @param minTier The minimum tier required (bronze, iron, steel, etc.)
+   * @returns Boolean indicating if player has a sufficient tool
+   */
+  private checkToolInInventoryOrEquipped(player: any, toolType: string, minTier: string): boolean {
+    const tierValues: Record<string, number> = {
+      'bronze': 1,
+      'iron': 2,
+      'steel': 3,
+      'mithril': 4,
+      'adamant': 5,
+      'rune': 6,
+      'dragon': 7,
+      // Add special tiers if needed
+      'basic': 1,  // For fishing tools or other basic tools
+      'none': 0    // No tier requirement
+    };
+    
+    const requiredTierValue = tierValues[minTier] || 1;
+    
+    // List of valid tools in the game, with their tier values
+    const toolMappings: { [key: string]: { type: string, tier: number } } = {
+      // Axes
+      'bronze_axe': { type: 'axe', tier: tierValues['bronze'] },
+      'iron_axe': { type: 'axe', tier: tierValues['iron'] },
+      'steel_axe': { type: 'axe', tier: tierValues['steel'] },
+      // Pickaxes
+      'bronze_pickaxe': { type: 'pickaxe', tier: tierValues['bronze'] },
+      'iron_pickaxe': { type: 'pickaxe', tier: tierValues['iron'] },
+      'steel_pickaxe': { type: 'pickaxe', tier: tierValues['steel'] },
+      // Fishing tools
+      'fishing_rod': { type: 'fishing_rod', tier: tierValues['basic'] },
+      'fishing_net': { type: 'fishing_net', tier: tierValues['basic'] },
+      'harpoon': { type: 'harpoon', tier: tierValues['basic'] }
+      // Add more tools as needed
+    };
+    
+    // Check if equipped item meets requirements
+    if (player.equippedItem) {
+      const equippedMapping = toolMappings[player.equippedItem.type];
+      if (equippedMapping && 
+          equippedMapping.type === toolType && 
+          equippedMapping.tier >= requiredTierValue) {
+        return true;
+      }
+    }
+    
+    // Check if any inventory item meets requirements
+    return player.inventory.some((item: any) => {
+      const itemMapping = toolMappings[item.type];
+      return itemMapping && 
+             itemMapping.type === toolType && 
+             itemMapping.tier >= requiredTierValue;
+    });
   }
   
   /**
@@ -354,6 +618,21 @@ export class ResourceHandler {
     const player = this.players[socket.id];
     if (!player) {
       socket.emit('gather_error', { message: 'Player not found' });
+      return;
+    }
+
+    // ADD: Check player distance to resource
+    const playerDistance = this.calculateDistance(
+      player.x, player.y, player.z,
+      resourceNode.x, resourceNode.y, resourceNode.z
+    );
+    
+    // Maximum distance allowed (3-5 units depending on resource type)
+    const maxDistance = this.getMaxInteractionDistance(resourceNode.type);
+    
+    if (playerDistance > maxDistance) {
+      socket.emit('gather_error', { message: `You are too far from this ${resourceNode.type}. Move closer.` });
+      socket.emit('resourceUnavailable', { resourceId });
       return;
     }
 
@@ -1178,6 +1457,33 @@ export class ResourceHandler {
       clearInterval(gatheringInfo.intervalId);
       this.gatheringPlayers.delete(playerId);
       console.log(`Stopped gathering for player ${playerId}`);
+    }
+  }
+
+  /**
+   * Calculate distance between two 3D points
+   */
+  private calculateDistance(x1: number, y1: number, z1: number, x2: number, y2: number, z2: number): number {
+    return Math.sqrt(
+      Math.pow(x2 - x1, 2) +
+      Math.pow(y2 - y1, 2) +
+      Math.pow(z2 - z1, 2)
+    );
+  }
+
+  /**
+   * Get maximum interaction distance based on resource type
+   */
+  private getMaxInteractionDistance(resourceType: string): number {
+    switch (resourceType) {
+      case 'tree':
+        return 3; // Woodcutting distance
+      case 'rock':
+        return 3; // Mining distance  
+      case 'fishing_spot':
+        return 5; // Fishing allows slightly longer distance
+      default:
+        return 3; // Default interaction distance
     }
   }
 }
