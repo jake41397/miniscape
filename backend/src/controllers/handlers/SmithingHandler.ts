@@ -205,11 +205,12 @@ export class SmithingHandler {
     socket.removeAllListeners('smeltBronzeBar');
     
     // Add handler for bronze bar smelting
-    socket.on('smeltBronzeBar', (data: { inventory: any[], skills: any }, callback: Function) => {
+    socket.on('smeltBronzeBar', (data: { inventory: any[], skills: any, recipe?: string }, callback: Function) => {
       console.log(`[SMITHING] Received smeltBronzeBar request from ${socket.id}`, {
         inventorySize: data.inventory.length,
         hasSkills: !!data.skills,
-        skillsData: JSON.stringify(data.skills)
+        skillsData: JSON.stringify(data.skills),
+        recipe: data.recipe || 'BRONZE_BAR'
       });
 
       try {
@@ -222,9 +223,16 @@ export class SmithingHandler {
 
         console.log(`[SMITHING] Found player ${socket.id}, checking requirements...`);
 
-        // Get bronze bar recipe
-        const recipe = SMELTING_RECIPES.BRONZE_BAR;
+        // Get recipe (default to BRONZE_BAR if not specified)
+        const recipeKey = data.recipe || 'BRONZE_BAR';
+        const recipe = SMELTING_RECIPES[recipeKey];
         
+        if (!recipe) {
+          console.log(`[SMITHING] Invalid recipe: ${recipeKey}`);
+          callback({ success: false, error: 'Invalid recipe' });
+          return;
+        }
+
         // Check smithing level
         const smithingLevel = player.skills?.smithing?.level || 1;
         console.log(`[SMITHING] Player smithing level: ${smithingLevel}, required: ${recipe.requiredLevel}`);
@@ -240,7 +248,10 @@ export class SmithingHandler {
         let missingIngredients: string[] = [];
         
         const hasIngredients = recipe.ingredients.every(ingredient => {
-          const playerItem = player.inventory.find((item: any) => item.type === ingredient.type);
+          // Case insensitive match for item types
+          const playerItem = player.inventory.find((item: any) => 
+            item.type.toLowerCase() === ingredient.type.toLowerCase()
+          );
           const itemCount = playerItem ? (playerItem.count || playerItem.quantity || 0) : 0;
           console.log(`[SMITHING] Checking ${ingredient.type}: need ${ingredient.count}, has ${itemCount}`);
           
@@ -253,7 +264,11 @@ export class SmithingHandler {
 
         if (!hasIngredients) {
           console.log(`[SMITHING] Player ${socket.id} missing ingredients: ${missingIngredients.join(', ')}`);
-          callback({ success: false, error: `Missing required ingredients: ${missingIngredients.join(', ')}` });
+          callback({ 
+            success: false, 
+            error: `Missing required ingredients: ${missingIngredients.join(', ')}`,
+            updatedInventory: player.inventory // Return the current inventory so client stays in sync
+          });
           return;
         }
 
@@ -261,7 +276,9 @@ export class SmithingHandler {
 
         // Remove ingredients from inventory
         recipe.ingredients.forEach(ingredient => {
-          const playerItemIndex = player.inventory.findIndex((item: any) => item.type === ingredient.type);
+          const playerItemIndex = player.inventory.findIndex((item: any) => 
+            item.type.toLowerCase() === ingredient.type.toLowerCase()
+          );
           if (playerItemIndex !== -1) {
             const playerItem = player.inventory[playerItemIndex];
             if (playerItem.count !== undefined) {
@@ -279,7 +296,9 @@ export class SmithingHandler {
         });
 
         // Add bronze bar to inventory
-        const existingBarIndex = player.inventory.findIndex((item: any) => item.type === recipe.resultItem);
+        const existingBarIndex = player.inventory.findIndex((item: any) => 
+          item.type.toLowerCase() === recipe.resultItem.toLowerCase()
+        );
         if (existingBarIndex !== -1) {
           const existingBar = player.inventory[existingBarIndex];
           if (existingBar.count !== undefined) {
@@ -333,7 +352,13 @@ export class SmithingHandler {
 
       } catch (error) {
         console.error('[SMITHING] Error in smeltBronzeBar handler:', error);
-        callback({ success: false, error: 'Internal server error' });
+        // Return a graceful error to the client
+        callback({ 
+          success: false, 
+          error: 'Processing error occurred. Please try again.',
+          // If we can access player inventory, return it to keep client in sync
+          updatedInventory: this.players[socket.id]?.inventory || []
+        });
       }
     });
   }

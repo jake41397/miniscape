@@ -44,7 +44,7 @@ export interface ClientToServerEvents {
   getPlayerData: (playerId: string, callback: (player: Player | null) => void) => void;
   ping: (callback: () => void) => void;
   updateDisplayName: (data: { name: string }) => void;
-  smeltBronzeBar: (data: { inventory: any[], skills: any }, callback: (response: { success: boolean, error?: string, updatedInventory?: any[] }) => void) => void;
+  smeltBronzeBar: (data: { inventory: any[], skills: any, recipe?: string }, callback: (response: { success: boolean, error?: string, updatedInventory?: any[] }) => void) => void;
   updatePlayerSkill: (data: { skillType: string, xpAmount: number }) => void;
   updateInventory: (data: { type: string, count: number }) => void;
   updateHealth: (data: { amount: number }) => void;

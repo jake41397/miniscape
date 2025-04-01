@@ -255,7 +255,7 @@ class LandmarkManager {
                 // Format recipe name for display
                 const recipeName = key.replace(/_/g, ' ').toLowerCase()
                   .split(' ')
-                  .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                  .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1))
                   .join(' ');
                 
                 // Create formatted ingredients description
@@ -303,15 +303,13 @@ class LandmarkManager {
                       return;
                     }
                     
-                    // Check if player has required level and items
+                    // Check if player has required level
                     const inventory = window.playerInventory || [];
                     const skills = window.playerSkills || {};
                     const smithingLevel = skills[SkillType.SMITHING]?.level || 1;
                     const recipe = SMELTING_RECIPES[selectedRecipe];
                     
                     console.log(`%c 🔥 Player smithing level: ${smithingLevel}, Required: ${recipe.requiredLevel}`, "color: #ff6600;");
-                    console.log(`%c 🔥 Player inventory:`, "color: #ff6600;", inventory);
-                    console.log(`%c 🔥 Recipe ingredients:`, "color: #ff6600;", recipe.ingredients);
                     
                     // Check if player meets level requirement
                     if (smithingLevel < recipe.requiredLevel) {
@@ -324,87 +322,107 @@ class LandmarkManager {
                       return;
                     }
                     
-                    // Check if player has all ingredients
-                    const hasAllIngredients = recipe.ingredients.every(ingredient => {
-                      const playerItem = inventory.find(item => item.type === ingredient.type);
-                      return playerItem && playerItem.count >= ingredient.count;
-                    });
+                    // Start smelting process immediately without checking for ingredients
+                    console.log('%c 🔥 Starting bronze bar smelting', "background: red; color: white; font-size: 16px;");
                     
-                    if (!hasAllIngredients) {
-                      const notificationEvent = new CustomEvent('show-notification', {
-                        detail: { message: 'You don\'t have all the required materials.', type: 'error' },
-                        bubbles: true
-                      });
-                      document.dispatchEvent(notificationEvent);
-                      this.endDialogue();
-                      return;
+                    // Play initial sound effect
+                    try {
+                      soundManager.play('mining_hit');
+                    } catch (e) {
+                      console.error('%c 🔥 Sound error:', "color: red;", e);
                     }
                     
-                    console.log('%c 🔥 All checks passed - CRUCIAL POINT', "background: red; color: white; font-size: 16px;");
-                    
-                    // DIRECT SOCKET TEST - Check socket first
-                    console.log('%c 🔥 Getting socket for direct test', "background: orange; color: white;");
+                    // Emit smeltBronzeBar event
                     getSocket().then(socket => {
                       if (!socket) {
-                        console.error('%c 🔥 TEST FAILED: Socket is null!', "background: red; color: white;");
+                        console.error('%c 🔥 Socket not available for smelting', "background: red; color: white;");
                         return;
                       }
                       
-                      console.log('%c 🔥 TEST SUCCESS: Got socket', "background: green; color: white;", {
-                        connected: socket.connected,
-                        id: socket.id
-                      });
-                      
-                      // DIRECT DIAGNOSTIC TEST
-                      console.log('%c 🔥 Testing socket with simple diagnostic test event...', "background: blue; color: white;");
-                      
-                      // Set up a one-time listener for the test response
-                      socket.once('testSmeltingResponse' as any, (response: any) => {
-                        console.log('%c 🔥 TEST EVENT RESPONSE RECEIVED!', "background: green; color: white;", response);
-                      });
-                      
-                      socket.emit('testSmelting' as any, { test: true, timestamp: Date.now() });
-                      
-                      // IMPORTANT - FIRST emit the socket event
-                      console.log('%c 🔥 Emitting startSmelting event FIRST', "background: purple; color: white;");
-                      
-                      // Emit the event directly before dialog changes
-                      socket.emit('startSmelting' as any, {
-                        barType: selectedRecipe,
-                        mode: 'SMELTING',
+                      console.log('%c 🔥 Sending smeltBronzeBar event to server', "background: green; color: white;");
+                      socket.emit('smeltBronzeBar', {
                         inventory: window.playerInventory || [],
-                        skills: window.playerSkills || {}
-                      });
-                      
-                      console.log('%c 🔥 Socket emission complete!', "background: green; color: white;");
-                      
-                      // Play sound effect after successful emit
-                      try {
-                        soundManager.play('mining_hit');
-                      } catch (e) {
-                        console.error('%c 🔥 Sound error:', "color: red;", e);
-                      }
-                      
-                      // THEN update the dialog - this must happen after the socket emission
-                      if (this.activeNPC) {
-                        this.activeNPC.currentDialogueId = 'smelting_progress';
-                        if (this.onDialogOpen) {
-                          this.onDialogOpen({...this.activeNPC});
-                        }
+                        skills: window.playerSkills || {},
+                        recipe: selectedRecipe
+                      }, (response: { success: boolean, error?: string, updatedInventory?: any[] }) => {
+                        console.log('%c 🔥 smeltBronzeBar response:', "color: orange;", response);
                         
-                        // Show notification of success
-                        const notificationEvent = new CustomEvent('show-notification', {
-                          detail: { 
-                            message: `Started smelting ${selectedRecipe.replace(/_/g, ' ').toLowerCase()}`,
-                            type: 'info'
-                          },
-                          bubbles: true
-                        });
-                        document.dispatchEvent(notificationEvent);
-                      }
+                        if (response.success) {
+                          // Play success sound
+                          soundManager.play('mining_hit');
+                          
+                          // Update inventory in window global
+                          if (window.playerInventory && response.updatedInventory) {
+                            window.playerInventory = response.updatedInventory;
+                          }
+                          
+                          // Dispatch inventory update event
+                          const inventoryUpdateEvent = new CustomEvent('inventory-updated', {
+                            detail: { inventory: response.updatedInventory },
+                            bubbles: true
+                          });
+                          document.dispatchEvent(inventoryUpdateEvent);
+                          
+                          // Show success notification
+                          const notificationEvent = new CustomEvent('show-notification', {
+                            detail: { 
+                              message: `Successfully smelted a ${selectedRecipe.replace(/_/g, ' ').toLowerCase()}!`,
+                              type: 'success'
+                            },
+                            bubbles: true
+                          });
+                          document.dispatchEvent(notificationEvent);
+                          
+                          // Update dialog to smelting_complete
+                          if (this.activeNPC) {
+                            this.activeNPC.currentDialogueId = 'smelting_complete';
+                            
+                            // Update the completion text with specific recipe
+                            const completeDialogue = this.activeNPC.dialogues.find(d => d.id === 'smelting_complete');
+                            if (completeDialogue) {
+                              const formattedRecipeName = selectedRecipe.replace(/_/g, ' ').toLowerCase()
+                                .split(' ')
+                                .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1))
+                                .join(' ');
+                              
+                              completeDialogue.text = `You have successfully smelted a ${formattedRecipeName}!`;
+                            }
+                            
+                            if (this.onDialogOpen) {
+                              this.onDialogOpen({...this.activeNPC});
+                            }
+                          }
+                        } else if (response.error) {
+                          // Show error notification
+                          const notificationEvent = new CustomEvent('show-notification', {
+                            detail: { 
+                              message: response.error,
+                              type: 'error'
+                            },
+                            bubbles: true
+                          });
+                          document.dispatchEvent(notificationEvent);
+                          
+                          // Return to dialog options
+                          if (this.activeNPC) {
+                            this.activeNPC.currentDialogueId = 'smelting_options';
+                            if (this.onDialogOpen) {
+                              this.onDialogOpen({...this.activeNPC});
+                            }
+                          }
+                        }
+                      });
                     }).catch(err => {
                       console.error('%c 🔥 Socket retrieval error:', "background: red; color: white;", err);
                     });
+                    
+                    // Update the dialog to show progress initially
+                    if (this.activeNPC) {
+                      this.activeNPC.currentDialogueId = 'smelting_progress';
+                      if (this.onDialogOpen) {
+                        this.onDialogOpen({...this.activeNPC});
+                      }
+                    }
                   }
                 },
                 {
@@ -415,26 +433,21 @@ class LandmarkManager {
             },
             {
               id: 'smelting_progress',
-              text: 'Smelting in progress... Please wait.',
+              text: 'Smelting in progress...',
               responses: [
                 {
-                  text: 'Cancel smelting',
-                  nextDialogueId: 'default',
+                  text: 'Cancel',
+                  nextDialogueId: 'smelting_options',
                   action: () => {
-                    // Cancel smelting process
-                    const socket = getSocket();
-                    if (socket) {
-                      socket.then(socket => {
-                        if (socket) {
-                          socket.emit('cancelSmelting' as any);
-                        }
-                      });
-                    }
-                    
-                    // Clear smelting flags
-                    if ((furnaceNPC as any).userData) {
-                      (furnaceNPC as any).userData.smeltingInProgress = false;
-                    }
+                    // Show cancellation message
+                    const notificationEvent = new CustomEvent('show-notification', {
+                      detail: { 
+                        message: 'Smelting operation canceled',
+                        type: 'info'
+                      },
+                      bubbles: true
+                    });
+                    document.dispatchEvent(notificationEvent);
                   }
                 }
               ]
@@ -637,7 +650,7 @@ class LandmarkManager {
                 // Format recipe name for display
                 const recipeName = key.replace(/_/g, ' ').toLowerCase()
                   .split(' ')
-                  .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                  .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1))
                   .join(' ');
                 
                 // Create formatted ingredients description
@@ -1126,6 +1139,13 @@ class LandmarkManager {
       // Run cleanup if available
       if (this.activeNPC.userData?.cleanupSocketListeners) {
         this.activeNPC.userData.cleanupSocketListeners();
+      }
+      
+      // Clear any ongoing smelting interval
+      if (this.activeNPC.userData?.smeltingInterval) {
+        clearInterval(this.activeNPC.userData.smeltingInterval);
+        this.activeNPC.userData.smeltingInterval = null;
+        console.log('Cleared smelting interval');
       }
       
       // Reset dialogue to initial state
