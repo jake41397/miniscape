@@ -1,57 +1,10 @@
 import { io, Socket } from 'socket.io-client';
 import { Player, Item } from '../../types/player';
 import { supabase } from '../../lib/supabase';
+import { ServerToClientEvents, ClientToServerEvents } from './socketEvents';
 
 // Define our socket events
-export interface ServerToClientEvents {
-  initPlayers: (players: Player[]) => void;
-  playerJoined: (player: Player) => void;
-  playerLeft: (playerId: string) => void;
-  playerMoved: (player: { id: string, x: number, y: number, z: number }) => void;
-  playerCount: (data: { count: number }) => void;
-  chatMessage: (message: { 
-    name: string, 
-    text: string,
-    playerId: string,
-    timestamp: number,
-    sender?: string // For backward compatibility
-  }) => void;
-  inventoryUpdate: (inventory: Item[]) => void;
-  itemDropped: (drop: { dropId: string, itemType: string, x: number, y: number, z: number }) => void;
-  itemRemoved: (dropId: string) => void;
-  initWorldItems: (items: { dropId: string, itemType: string, x: number, y: number, z: number }[]) => void;
-  initResourceNodes: (nodes: { id: string, type: string, x: number, y: number, z: number }[]) => void;
-  getPlayerResponse: (player: Player | null) => void;
-  error: (errorMessage: string) => void;
-  checkPlayersSync: (playerIds: string[], callback: (missingPlayerIds: string[]) => void) => void;
-  skillUpdate: (skillData: { skillType: string, level: number, experience: number }) => void;
-  playerData: (playerData: Player) => void;
-  experienceGained: (data: { skill: string, experience: number, totalExperience: number, level: number }) => void;
-  levelUp: (data: { skill: string, level: number }) => void;
-}
-
-export interface ClientToServerEvents {
-  playerMove: (position: { x: number, y: number, z: number }) => void;
-  chat: (text: string) => void;
-  dropItem: (item: { 
-    itemId: string, 
-    itemType: string, 
-    x: number, 
-    y: number, 
-    z: number,
-    clientDropId: string // Added clientDropId for tracking
-  }) => void;
-  pickup: (dropId: string) => void;
-  gather: (resourceId: string) => void;
-  getPlayerData: (playerId: string, callback: (player: Player | null) => void) => void;
-  ping: (callback: () => void) => void;
-  updateDisplayName: (data: { name: string }) => void;
-  smeltBronzeBar: (data: { inventory: any[], skills: any, recipe?: string }, callback: (response: { success: boolean, error?: string, updatedInventory?: any[] }) => void) => void;
-  updatePlayerSkill: (data: { skillType: string, xpAmount: number }) => void;
-  updateInventory: (data: { type: string, count: number }) => void;
-  updateHealth: (data: { amount: number }) => void;
-  playerAction: (data: { type: string, targetId: string, damage: number, combatMode?: string }) => void;
-}
+export type { ServerToClientEvents, ClientToServerEvents };
 
 // Create socket instance with better lifecycle management
 let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
@@ -298,7 +251,10 @@ export const initializeSocket = async () => {
     // Listen for custom error events from the server
     socket.on('error', (errorMsg) => {
       console.error('Received error from socket server:', errorMsg);
-      connectionState.error = new Error(errorMsg);
+      // Fix error creation to handle if errorMsg is an object
+      connectionState.error = typeof errorMsg === 'string' 
+        ? new Error(errorMsg) 
+        : new Error(errorMsg?.message || String(errorMsg));
     });
     
     // Add timeout for connection to prevent hanging

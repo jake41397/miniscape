@@ -568,18 +568,16 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     // Also broadcast to all clients to ensure consistency
     broadcastPlayerCount(io);
 
-    // Set default player health values
-    if (newPlayer) {
-      newPlayer.health = 100;
-      newPlayer.maxHealth = 100;
-      newPlayer.inCombat = false;
-      
-      // Send initial health to client
-      socket.emit('updatePlayerHealth', {
-        current: newPlayer.health,
-        max: newPlayer.maxHealth
-      });
-    }
+    // Ensure player has health properties and send initial health values
+    if (newPlayer.health === undefined) newPlayer.health = 100;
+    if (newPlayer.maxHealth === undefined) newPlayer.maxHealth = 100;
+
+    // Send initial health values to the client
+    socket.emit('updatePlayerHealth', {
+      current: newPlayer.health,
+      max: newPlayer.maxHealth
+    });
+    console.log(`[${socket.id}] Sent initial health values to player: ${newPlayer.health}/${newPlayer.maxHealth}`);
 
     // Handle player movement
     socket.on('playerMove', async (position: PlayerPosition) => {
@@ -1407,6 +1405,7 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           current: player.health,
           max: player.maxHealth
         });
+        console.log(`[COMBAT DEBUG] Emitted updatePlayerHealth event with current: ${player.health}, max: ${player.maxHealth}`);
         
         console.log(`[${socket.id}] Player ${player.name} health ${oldHealth} -> ${player.health} (${data.amount < 0 ? 'damage' : 'heal'}: ${Math.abs(data.amount)})`);
       } catch (error) {
@@ -1837,6 +1836,7 @@ const setupNPCHandlers = (io: Server, socket: ExtendedSocket): void => {
           socket.emit('updateHealth', {
             amount: -damage // Negative for damage
           });
+          console.log(`[COMBAT DEBUG] Emitted updateHealth event with amount: ${-damage}`);
           
           // Send attack message to player
           socket.emit('chatMessage', {

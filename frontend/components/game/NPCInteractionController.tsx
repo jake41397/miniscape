@@ -107,11 +107,13 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
     const socket = getSocket();
     if (!socket) return;
     
+    console.log("Setting up health and combat event listeners...");
+    
     socket.then(socket => {
       if (socket) {
         // Listen for player health updates
-        socket.on('updatePlayerHealth' as any, (data: { current: number, max: number }) => {
-          console.log('Health update received:', data);
+        socket.on('updatePlayerHealth', (data: { current: number, max: number }) => {
+          console.log('[COMBAT CLIENT] Health update received:', data);
           setPlayerHealth(data.current);
           setPlayerMaxHealth(data.max);
           
@@ -135,12 +137,111 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
           }
         });
         
+        // Also listen for the updateHealth event directly
+        socket.on('updateHealth', (data: { amount: number }) => {
+          console.log('[COMBAT CLIENT] updateHealth event received:', data);
+          // Add chat message when player takes damage
+          if (data.amount < 0) {
+            sendChatMessage(`You take ${Math.abs(data.amount)} damage!`, 'combat');
+          } else if (data.amount > 0) {
+            sendChatMessage(`You heal for ${data.amount} health.`, 'system');
+          }
+        });
+        
+        // Listen for NPC state updates to auto-detect combat
+        socket.on('npcStateUpdate', (data) => {
+          console.log('[COMBAT CLIENT] NPC state update received:', data);
+          
+          // If NPC is engaged in combat with this player, set it as combat target
+          if (data.combatState === 'engaged' && data.attacker === socket.id) {
+            console.log('[COMBAT CLIENT] Auto-detecting combat with NPC:', data.id);
+            
+            // Find the NPC in the world manager
+            const landmarkManager = worldManager?.getLandmarkManager();
+            if (landmarkManager) {
+              const npc = landmarkManager.getNPCs().find((npc: any) => npc.id === data.id);
+              if (npc && !combatTarget) {
+                console.log('[COMBAT CLIENT] Auto-setting combat target:', npc);
+                setCombatTarget(npc);
+                setShowHealthBars(true);
+                showNotification(`${npc.name} is attacking you!`);
+                
+                // Start auto-attacking the rat in response
+                if (socket && npc.type === 'rat') {
+                  console.log('[COMBAT CLIENT] Auto-attacking rat in response');
+                  socket.emit('attackNPC', { npcId: npc.id });
+                }
+              } else if (combatTarget && combatTarget.id === data.id) {
+                // Update current combat target's health if it's the same NPC
+                console.log('[COMBAT CLIENT] Updating combat target health:', data.health);
+                setCombatTarget(prevTarget => {
+                  if (!prevTarget) return prevTarget;
+                  return {
+                    ...prevTarget,
+                    health: data.health !== undefined ? data.health : prevTarget.health,
+                    maxHealth: data.maxHealth !== undefined ? data.maxHealth : prevTarget.maxHealth,
+                    combatState: data.combatState || prevTarget.combatState
+                  };
+                });
+              }
+            }
+          }
+          
+          // Even if we're not the attacker, update health if this is our target
+          if (combatTarget && data.id === combatTarget.id && (data.health !== undefined || data.combatState !== undefined)) {
+            console.log('[COMBAT CLIENT] Updating existing combat target:', data);
+            
+            // Check if health decreased to show damage dealt
+            if (data.health !== undefined && data.health < combatTarget.health) {
+              const damageDone = combatTarget.health - data.health;
+              sendChatMessage(`You hit ${combatTarget.name} for ${damageDone} damage!`, 'combat');
+            }
+            
+            setCombatTarget(prevTarget => {
+              if (!prevTarget) return prevTarget;
+              return {
+                ...prevTarget,
+                health: data.health !== undefined ? data.health : prevTarget.health,
+                maxHealth: data.maxHealth !== undefined ? data.maxHealth : prevTarget.maxHealth,
+                combatState: data.combatState || prevTarget.combatState
+              };
+            });
+            
+            // Keep health bars visible during combat
+            setShowHealthBars(true);
+            
+            // If the NPC died, hide combat UI after a delay
+            if (data.combatState === 'dead') {
+              sendChatMessage(`You have defeated ${combatTarget.name}!`, 'success');
+              sendChatMessage(`You gained combat experience!`, 'experience');
+              setTimeout(() => {
+                if (combatTarget && combatTarget.id === data.id) {
+                  setCombatTarget(null);
+                  setShowHealthBars(false);
+                }
+              }, 3000);
+            }
+          }
+        });
+        
         // Listen for combat messages
-        socket.on('chatMessage' as any, (msg: any) => {
+        socket.on('chatMessage', (msg: any) => {
           // Check if it's a combat message and we should display health bars
           if (msg.type === 'combat') {
+            console.log('[COMBAT CLIENT] Combat message received:', msg);
             setShowHealthBars(true);
           }
+        });
+
+        // Add experience-related event listeners
+        socket.on('experienceGained', (data: { skill: string, experience: number, totalExperience: number, level: number }) => {
+          console.log('[EXPERIENCE] Gained XP:', data);
+          sendChatMessage(`You gained ${data.experience} ${data.skill} experience! (Level ${data.level})`, 'success');
+        });
+
+        socket.on('levelUp', (data: { skill: string, level: number }) => {
+          console.log('[EXPERIENCE] Level up:', data);
+          sendChatMessage(`Congratulations! Your ${data.skill} level is now ${data.level}!`, 'experience');
         });
       }
     });
@@ -149,12 +250,16 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
       // Clean up listeners
       socket.then(socket => {
         if (socket) {
-          socket.off('updatePlayerHealth' as any);
-          socket.off('chatMessage' as any);
+          socket.off('updatePlayerHealth');
+          socket.off('updateHealth');
+          socket.off('npcStateUpdate');
+          socket.off('chatMessage');
+          socket.off('experienceGained');
+          socket.off('levelUp');
         }
       });
     };
-  }, [combatTarget]);
+  }, [worldManager, combatTarget]);
   
   // Handle combat logic - periodically deal damage to the target
   useEffect(() => {
@@ -175,7 +280,7 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
             console.log(`Sending damageNPC event with ${damage} damage to ${combatTarget.id}`);
             
             // Send damage to server
-            socket.emit('damageNPC' as any, {
+            socket.emit('damageNPC', {
               npcId: combatTarget.id,
               damage: damage
             });
@@ -189,6 +294,15 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
           attackIntervalRef.current = null;
         }
       };
+    }
+  }, [combatTarget]);
+  
+  // Add an effect to ensure health bars remain visible during combat
+  useEffect(() => {
+    // When combat target changes, ensure health bars are shown
+    if (combatTarget) {
+      setShowHealthBars(true);
+      console.log('[COMBAT] Combat target set, showing health bars:', combatTarget.name);
     }
   }, [combatTarget]);
   
@@ -341,6 +455,18 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
     }
   };
   
+  // Update sendChatMessage function for better type safety
+  const sendChatMessage = (content: string, type: 'combat' | 'system' | 'experience' | 'success' | 'error' | 'warning' = 'combat') => {
+    const chatEvent = new CustomEvent('chat-message', {
+      detail: {
+        content,
+        type,
+        timestamp: Date.now()
+      }
+    });
+    document.dispatchEvent(chatEvent);
+  };
+  
   // Handle attacking an NPC
   const handleAttackNPC = (npc: CombatNPC) => {
     console.log(`Attacking NPC: ${npc.name}`);
@@ -351,11 +477,14 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
     // Show health bars
     setShowHealthBars(true);
     
+    // Add chat message when starting combat
+    sendChatMessage(`You begin attacking ${npc.name}!`, 'combat');
+    
     // Get socket and emit attackNPC event
     const socket = getSocket();
     socket.then(socket => {
       if (socket) {
-        socket.emit('attackNPC' as any, { npcId: npc.id });
+        socket.emit('attackNPC', { npcId: npc.id });
         
         // Show notification
         showNotification(`Attacking ${npc.name}`);
