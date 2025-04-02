@@ -76,10 +76,13 @@ pm2 delete miniscape-prod-frontend miniscape-prod-backend 2>/dev/null || true
 echo "Starting production backend..."
 cd backend
 PORT=5000 pm2 start npm --name miniscape-prod-backend --env production -- run start
-
 cd ..
 
-echo "Production frontend is now served as static files by NGINX from: /var/www/miniscape/frontend/out"
+# Start production frontend using direct npm command
+echo "Starting production frontend..."
+cd frontend
+PORT=3001 pm2 start npm --name miniscape-prod-frontend --env production -- run start
+cd ..
 
 # Configure PM2 to start on system boot
 echo "Configuring PM2 to start on system boot..."
@@ -98,11 +101,11 @@ sudo systemctl reload nginx
 
 echo "=========================================="
 echo "Production environment is now running!"
-echo "Frontend: https://miniscape.io (static files)"
+echo "Frontend: https://miniscape.io (Next.js server on port 3001)"
 echo "Backend API: https://miniscape.io/api (port 5000)"
 echo "Use 'pm2 logs' to view server logs"
 echo "Use './stop-prod.sh' to stop servers"
 echo "=========================================="
 
 # Display logs
-pm2 logs miniscape-prod-backend 
+pm2 logs 

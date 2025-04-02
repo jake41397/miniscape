@@ -102,7 +102,7 @@ export const initializeSocket = async () => {
   
   try {
     // Default backend URL for fallback
-    let BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
+    let BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:5000';
     
     // Use same domain for WebSocket connections to avoid CORS issues
     if (typeof window !== 'undefined') {
