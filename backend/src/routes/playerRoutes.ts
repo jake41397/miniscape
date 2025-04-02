@@ -1,6 +1,8 @@
 import express, { Request, Response, NextFunction, Router } from 'express';
-import supabase from '../config/supabase';
 import logger from '../utils/logger';
+// Import MongoDB models
+import Profile from '../models/mongodb/profileModel';
+import PlayerData from '../models/mongodb/playerDataModel';
 
 // Extended Request interface with user property
 interface AuthenticatedRequest extends Request {
@@ -32,14 +34,10 @@ router.get('/profile', (async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user.id;
     
-    // Get player profile
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
+    // Get player profile from MongoDB
+    const profile = await Profile.findOne({ userId }).lean();
     
-    if (profileError) {
+    if (!profile) {
       return res.status(404).json({ error: 'Profile not found' });
     }
     
@@ -58,23 +56,22 @@ router.put('/profile', (async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user.id;
     const { username, avatar_url } = req.body as ProfileUpdateRequest;
     
-    // Update profile
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({ 
+    // Update profile in MongoDB
+    const result = await Profile.findOneAndUpdate(
+      { userId },
+      { 
         username: username,
-        avatar_url: avatar_url,
-        updated_at: new Date().toISOString()
-      })
-      .eq('user_id', userId)
-      .select()
-      .single();
+        avatarUrl: avatar_url,
+        updatedAt: new Date()
+      },
+      { new: true }
+    );
     
-    if (error) {
-      return res.status(500).json({ error: error.message });
+    if (!result) {
+      return res.status(404).json({ error: 'Profile not found' });
     }
     
-    res.status(200).json({ profile: data });
+    res.status(200).json({ profile: result });
   } catch (error) {
     logger.error('Error updating profile', error instanceof Error ? error : new Error('Unknown error'));
     res.status(500).json({ error: 'Failed to update profile' });
@@ -88,25 +85,14 @@ router.get('/data', (async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user.id;
     
-    // Get player data
-    const { data: playerData, error: playerError } = await supabase
-      .from('player_data')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
+    // Get player data from MongoDB
+    const playerData = await PlayerData.findOne({ userId }).lean();
     
-    if (playerError) {
+    if (!playerData) {
       return res.status(404).json({ error: 'Player data not found' });
     }
     
-    // Parse JSON fields
-    const parsedData = {
-      ...playerData,
-      inventory: JSON.parse(playerData.inventory || '[]'),
-      stats: JSON.parse(playerData.stats || '{}')
-    };
-    
-    res.status(200).json({ playerData: parsedData });
+    res.status(200).json({ playerData });
   } catch (error) {
     logger.error('Error fetching player data', error instanceof Error ? error : new Error('Unknown error'));
     res.status(500).json({ error: 'Failed to fetch player data' });
@@ -120,18 +106,13 @@ router.get('/online', (async (req: Request, res: Response) => {
   try {
     // This would be more efficient with a real-time player list
     // But for demo purposes, we'll use "last login within the last 5 minutes" as "online"
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
     
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, username, avatar_url, last_login')
-      .gt('last_login', fiveMinutesAgo);
+    const onlinePlayers = await Profile.find({
+      lastLogin: { $gt: fiveMinutesAgo }
+    }).select('id username avatarUrl lastLogin').lean();
     
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
-    
-    res.status(200).json({ onlinePlayers: data });
+    res.status(200).json({ onlinePlayers });
   } catch (error) {
     logger.error('Error fetching online players', error instanceof Error ? error : new Error('Unknown error'));
     res.status(500).json({ error: 'Failed to fetch online players' });

@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
-import { savePlayerInventory, savePlayerSkills } from '../../models/gameModel';
+import { savePlayerInventory, savePlayerSkills } from '../../models/mongodb/gameModel';
 import { Player } from '../types';
 import { ExperienceHandler, SkillType } from './ExperienceHandler';
 

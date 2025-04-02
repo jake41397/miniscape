@@ -1,97 +1,96 @@
-// Add logging to file at the top of the file
-import * as fs from 'fs';
-import * as path from 'path';
+import express from 'express';
+import http from 'http';
+import { Server as SocketIOServer } from 'socket.io';
+import cors from 'cors';
+import { initDatabase, closeDatabase } from './db/database';
+import logger from './utils/logger';
+import { setupSocketHandlers } from './controllers/socketController';
+import { verifySocketToken } from './middleware/authMiddleware';
 
-// Set up logging to file
-const logDir = path.join(__dirname, '../logs');
-// Ensure log directory exists
-if (!fs.existsSync(logDir)) {
-  fs.mkdirSync(logDir, { recursive: true });
-}
+// Create Express application
+const app = express();
 
-const logFilePath = path.join(logDir, 'server.log');
-const logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+// Apply middleware
+app.use(cors());
+app.use(express.json());
 
-// Override console.log and console.error to write to file
-const originalConsoleLog = console.log;
-const originalConsoleError = console.error;
-
-console.log = function(...args) {
-  const message = args.map(arg => 
-    typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg
-  ).join(' ');
-  
-  const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] INFO: ${message}\n`;
-  
-  logStream.write(logMessage);
-  originalConsoleLog.apply(console, args);
-};
-
-console.error = function(...args) {
-  const message = args.map(arg => 
-    typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg
-  ).join(' ');
-  
-  const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] ERROR: ${message}\n`;
-  
-  logStream.write(logMessage);
-  originalConsoleError.apply(console, args);
-};
-
-// Process termination handlers
-process.on('exit', () => {
-  logStream.end();
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-process.on('SIGINT', () => {
-  console.log('Server shutting down...');
-  logStream.end();
-  process.exit(0);
+// Create HTTP server
+const server = http.createServer(app);
+
+// Create Socket.IO server
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: process.env.NODE_ENV === 'production' 
+      ? ['https://miniscape.io', /\.miniscape\.io$/]
+      : ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  pingInterval: 10000, // Check connection every 10 seconds
+  pingTimeout: 5000 // Allow 5 seconds for client to respond before considered disconnected
 });
 
-// Load world items from database on startup
-import { getWorldItems } from './db/worldItemsDB';
+// Setup Socket.IO authentication middleware
+io.use(verifySocketToken);
 
-// Import WorldItem interface
-interface WorldItem {
-  dropId: string;
-  itemType: string;
-  x: number;
-  y: number;
-  z: number;
-  droppedBy?: string;
-}
-
-// ... other code
-
-// Initialize game world state
-const worldItems: WorldItem[] = [];
-
-// Load initial world items from database
-async function loadWorldItemsFromDatabase() {
+// Initialize the server
+export async function initServer(): Promise<http.Server> {
   try {
-    console.log('Loading world items from database...');
-    const items = await getWorldItems();
+    // Initialize database connection
+    await initDatabase();
+    logger.info('Database connection established');
     
-    if (items && Array.isArray(items)) {
-      console.log(`Loaded ${items.length} items from database`);
-      
-      // Clear existing items
-      worldItems.length = 0;
-      
-      // Add loaded items
-      items.forEach(item => worldItems.push(item));
-      
-      console.log('World items loaded successfully');
-    } else {
-      console.log('No world items found in database or invalid data format');
-    }
+    // Setup socket handlers
+    setupSocketHandlers(io);
+    logger.info('Socket handlers initialized');
+    
+    return server;
   } catch (error) {
-    console.error('Error loading world items from database:', error);
+    logger.error('Server initialization error', error instanceof Error ? error : new Error('Unknown error'));
+    throw error;
   }
 }
 
-// Call the function on server startup
-loadWorldItemsFromDatabase(); 
+// Handle server shutdown
+export function shutdownServer(): void {
+  logger.info('Server shutting down...');
+  
+  // Close database connection
+  closeDatabase()
+    .then(() => logger.info('Database connection closed'))
+    .catch(err => logger.error('Error closing database', err));
+}
+
+// Export app for testing
+export { app, io };
+
+// Handle unexpected errors
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception', error);
+  shutdownServer();
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason: unknown) => {
+  logger.error('Unhandled rejection', 
+    reason instanceof Error ? reason : new Error(String(reason))
+  );
+});
+
+// Handle termination signals
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received');
+  shutdownServer();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  logger.info('SIGINT received');
+  shutdownServer();
+  process.exit(0);
+}); 

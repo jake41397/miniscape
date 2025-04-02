@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
-import { loadResourceNodes, savePlayerInventory, savePlayerSkills } from '../../models/gameModel';
+import { loadResourceNodes, savePlayerInventory, savePlayerSkills } from '../../models/mongodb/gameModel';
 import { ExtendedSocket, PlayersStore } from '../types';
 import { ExperienceHandler, SkillType } from './ExperienceHandler';
 
@@ -926,7 +926,7 @@ export class ResourceHandler {
     try {
       console.log('Attempting to save default resources to database...');
       
-      const { insertResourceNode } = await import('../../models/gameModel');
+      const { insertResourceNode } = await import('../../models/mongodb/gameModel');
       
       // For each default node, try to insert it into the database
       for (const node of defaultNodes) {
@@ -945,7 +945,7 @@ export class ResourceHandler {
       
       // Try loading from database again after inserts
       console.log('Reloading resources from database after inserting defaults...');
-      const { loadResourceNodes } = await import('../../models/gameModel');
+      const { loadResourceNodes } = await import('../../models/mongodb/gameModel');
       this.resourceNodes = await loadResourceNodes();
       
       if (this.resourceNodes.length > 0) {
@@ -1036,8 +1036,8 @@ export class ResourceHandler {
     try {
       console.log('Persisting resource states to database...');
       
-      // Use Supabase to store the current state of all resources
-      const supabase = (await import('../../config/supabase')).default;
+      // Import MongoDB ResourceNode model 
+      const { default: ResourceNodeModel } = await import('../../models/mongodb/resourceNodeModel');
       
       // For each resource node, update its state in the database
       let successCount = 0;
@@ -1054,16 +1054,14 @@ export class ResourceHandler {
         
         const promises = batch.map(async (node) => {
           try {
-            // Update only the state and respawn time, not position/type
-            const { error } = await supabase
-              .from('resource_nodes')
-              .update({
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', node.id);
+            // Update only the updated timestamp in MongoDB
+            const result = await ResourceNodeModel.updateOne(
+              { _id: node.id },
+              { $set: { updatedAt: new Date() } }
+            );
             
-            if (error) {
-              console.error(`Error updating resource node ${node.id}:`, error);
+            if (!result.matchedCount) {
+              console.error(`Error updating resource node ${node.id}: No document matched`);
               errorCount++;
               return false;
             }

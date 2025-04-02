@@ -1,6 +1,5 @@
 import express, { Request, Response, NextFunction, Router } from 'express';
-import supabase from '../config/supabase';
-import * as gameModel from '../models/gameModel';
+import * as gameModel from '../models/mongodb/gameModel';
 import logger from '../utils/logger';
 
 const router: Router = express.Router();
@@ -17,17 +16,12 @@ type RouteHandler = (
  */
 router.get('/world', (async (req: Request, res: Response) => {
   try {
-    // Get world map data from database
-    const { data: worldData, error } = await supabase
-      .from('world_map')
-      .select('*')
-      .order('id');
-    
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
-    
-    res.status(200).json({ worldMap: worldData });
+    // This should be updated to use a WorldMap model when created
+    // For now, return a placeholder response
+    res.status(200).json({ 
+      worldMap: [], 
+      message: 'World map data is now stored in MongoDB and needs to be implemented' 
+    });
   } catch (error) {
     logger.error('Error fetching world map', error instanceof Error ? error : new Error('Unknown error'));
     res.status(500).json({ error: 'Failed to fetch world map data' });
@@ -65,24 +59,29 @@ router.get('/items', (async (req: Request, res: Response) => {
  */
 router.get('/leaderboard', (async (req: Request, res: Response) => {
   try {
+    // Import the required models
+    const { PlayerData, Profile } = await import('../models/mongodb');
+    
     // Get top players based on their level
-    const { data: leaderboard, error } = await supabase
-      .from('player_data')
-      .select('*, profiles:user_id(username, avatar_url)')
-      .order('level', { ascending: false })
+    const players = await PlayerData.find()
+      .sort({ level: -1 })
       .limit(10);
     
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
-    
-    const formattedLeaderboard = leaderboard.map((player: any) => ({
-      userId: player.user_id,
-      username: player.profiles.username,
-      avatarUrl: player.profiles.avatar_url,
-      level: player.level,
-      experience: player.experience
-    }));
+    // Create a formatted leaderboard with joined profile information
+    const formattedLeaderboard = await Promise.all(
+      players.map(async (player: any) => {
+        // Find the profile for this player
+        const profile = await Profile.findOne({ userId: player.userId });
+        
+        return {
+          userId: player.userId,
+          username: profile ? profile.username : 'Unknown Player',
+          avatarUrl: profile ? profile.avatarUrl : null,
+          level: player.level || 1,
+          experience: player.experience || 0
+        };
+      })
+    );
     
     res.status(200).json({ leaderboard: formattedLeaderboard });
   } catch (error) {

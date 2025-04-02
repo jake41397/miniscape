@@ -42,6 +42,22 @@ export const getLastKnownPosition = (): {x: number, y: number, z: number} | null
   return null;
 };
 
+// Store guest session ID in local storage
+export const saveGuestSessionId = (sessionId: string): void => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('guest_session_id', sessionId);
+    console.log('Saved guest session ID to localStorage:', sessionId);
+  }
+};
+
+// Retrieve guest session ID from local storage
+export const getGuestSessionId = (): string | null => {
+  if (typeof localStorage !== 'undefined') {
+    return localStorage.getItem('guest_session_id');
+  }
+  return null;
+};
+
 // Get the current socket status
 export const getSocketStatus = () => {
   return {
@@ -54,26 +70,12 @@ export const getSocketStatus = () => {
   };
 };
 
-// Generate/get persistent temp user ID
-export const getTempUserId = (): string => {
+// Get JWT token for socket authentication
+export const getAuthToken = (): string | null => {
   if (typeof localStorage !== 'undefined') {
-    // Try to get existing temp user ID
-    let tempUserId = localStorage.getItem('miniscape_temp_user_id');
-    
-    // If no temp user ID exists, generate one
-    if (!tempUserId) {
-      tempUserId = 'temp-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
-      localStorage.setItem('miniscape_temp_user_id', tempUserId);
-      console.log('Generated new temp user ID:', tempUserId);
-    } else {
-      console.log('Using existing temp user ID:', tempUserId);
-    }
-    
-    return tempUserId;
+    return localStorage.getItem('auth_token');
   }
-  
-  // Fallback for server-side rendering
-  return 'temp-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+  return null;
 };
 
 // Initialize socket connection
@@ -102,7 +104,7 @@ export const initializeSocket = async () => {
   
   try {
     // Default backend URL for fallback
-    let BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:5000';
+    let BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:3001';
     
     // Use same domain for WebSocket connections to avoid CORS issues
     if (typeof window !== 'undefined') {
@@ -111,7 +113,7 @@ export const initializeSocket = async () => {
       const hostname = window.location.hostname;
       
       // For production or development server, use the same hostname
-      if (hostname.includes('miniscape.io') || hostname === 'localhost') {
+      if (hostname.includes('miniscape.io')) {
         BACKEND_URL = `${protocol}${hostname}`;
         console.log('Using same-origin WebSocket URL:', BACKEND_URL);
       }
@@ -127,6 +129,14 @@ export const initializeSocket = async () => {
       socket = null;
     }
     
+    // Get JWT token for authentication
+    const token = getAuthToken();
+    console.log('Auth token available for socket connection:', !!token);
+    
+    // Get guest session ID if available
+    const guestSessionId = getGuestSessionId();
+    console.log('Guest session ID available:', !!guestSessionId);
+    
     // Create socket connection with better reconnection and error handling
     socket = io(BACKEND_URL, {
       transports: ['websocket'],  // Use only WebSocket for faster connection
@@ -136,9 +146,10 @@ export const initializeSocket = async () => {
       reconnectionDelayMax: 3000, // Reduced from 5000 to 3000
       timeout: 8000,              // Reduced from 20000 to 8000 for faster timeout
       forceNew: true,
-      // Include the temp user ID in auth
+      // Include auth data
       auth: {
-        tempUserId: getTempUserId()
+        token: token || '',
+        guestSessionId: guestSessionId || ''
       }
     });
 
@@ -156,10 +167,32 @@ export const initializeSocket = async () => {
       // Save connection time for debugging
       localStorage.setItem('socket_connected_at', Date.now().toString());
       
+      // If we have a socket auth object, check for sessionId or save the socket.id for reconnects
+      if (!guestSessionId && socket?.id) {
+        saveGuestSessionId(socket.id);
+        console.log('Saved socket.id as guest session ID for future reconnects:', socket.id);
+      } else if (guestSessionId && socket) {
+        console.log('Connected using existing guest session ID:', guestSessionId);
+        
+        // Verify the session ID was properly used by checking auth data
+        const sessionUsed = socket.auth && typeof socket.auth === 'object' && 'guestSessionId' in socket.auth 
+          ? socket.auth.guestSessionId === guestSessionId 
+          : false;
+        console.log('Session ID was correctly used in authentication:', sessionUsed);
+        
+        // Save session debug info for diagnostics
+        localStorage.setItem('last_session_connection', JSON.stringify({
+          connectedAt: Date.now(),
+          socketId: socket.id,
+          sessionId: guestSessionId,
+          sessionUsed
+        }));
+      }
+      
       // Broadcast event for components to know the socket is ready
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('socket_connected', { 
-          detail: { socketId: socket?.id }
+          detail: { socketId: socket?.id, sessionId: guestSessionId }
         }));
       }
     });
@@ -300,34 +333,18 @@ export const initializeSocket = async () => {
   return socket;
 };
 
-// Get the socket instance with additional validation
-export const getSocket = async () => {
-  
-  // If we have a socket and it's connected, just return it
-  if (socket && socket.connected) {
-    return socket;
+// Get the socket instance, initializing if needed
+export const getSocket = async (): Promise<Socket<ServerToClientEvents, ClientToServerEvents> | null> => {
+  if (!socket || !socket.connected) {
+    console.log('Socket not connected, initializing...');
+    return initializeSocket();
   }
-  
-  // If we have a socket but it's not connected, check if it's a zombie
-  if (socket && !socket.connected && !connectionState.connecting) {
-    return await initializeSocket();
-  }
-  
-  // No socket or already attempting to connect
-  if (!socket || connectionState.connecting) {
-    // If we're already connecting, just return the current socket (which might be null)
-    if (connectionState.connecting) {
-      return socket;
-    }
-    return await initializeSocket();
-  }
-  
   return socket;
 };
 
-// Check if socket is actually usable
+// Check if socket is ready
 export const isSocketReady = () => {
-  return !!(socket && socket.connected);
+  return socket && socket.connected;
 };
 
 // Disconnect socket

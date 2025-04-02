@@ -1,5 +1,5 @@
 import { Server } from 'socket.io';
-import { savePlayerInventory } from '../../models/gameModel';
+import { savePlayerInventory } from '../../models/mongodb/gameModel';
 import { ExtendedSocket, InventoryItem, Player, PlayersStore } from '../types';
 
 export class InventoryHandler {

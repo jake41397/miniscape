@@ -1,5 +1,5 @@
 import { Server } from 'socket.io';
-import { loadWorldItems, removeWorldItem, savePlayerInventory } from '../../models/gameModel';
+import { loadWorldItems, removeWorldItem, savePlayerInventory } from '../../models/mongodb/gameModel';
 import { removeAllWorldItems } from '../../db/worldItemsDB';
 import { ExtendedSocket, InventoryItem, PlayersStore, WorldItem } from '../types';
 import { v4 as uuidv4 } from 'uuid';

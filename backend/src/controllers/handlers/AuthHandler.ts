@@ -1,6 +1,11 @@
 import { Server } from 'socket.io';
-import supabase from '../../config/supabase';
 import { ExtendedSocket, PlayersStore } from '../types';
+// Import MongoDB models
+import User from '../../models/mongodb/userModel';
+import Profile from '../../models/mongodb/profileModel';
+import PlayerData from '../../models/mongodb/playerDataModel';
+// Remove Supabase import and use JWT utils instead
+import { verifyToken } from '../../utils/jwt';
 
 export class AuthHandler {
   private io: Server;
@@ -33,17 +38,17 @@ export class AuthHandler {
     }
     
     try {
-      // Verify token with Supabase
-      const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+      // Verify token with JWT util instead of Supabase
+      const decoded = verifyToken(token);
       
-      if (userError || !user) {
-        console.error(`Invalid auth token for socket ${socket.id}:`, userError);
+      if (!decoded || !decoded.userId) {
+        console.error(`Invalid auth token for socket ${socket.id}`);
         return {
           isAuthenticated: false
         };
       }
       
-      const userId = user.id;
+      const userId = decoded.userId;
       console.log(`Authenticated socket ${socket.id} for user ${userId}`);
       
       // Store user info in socket
@@ -67,26 +72,18 @@ export class AuthHandler {
       // Map user ID to socket ID
       this.userIdToSocketId[userId] = socket.id;
       
-      // Get user profile
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('user_id', userId)
-        .single();
+      // Get user profile from MongoDB
+      const profile = await Profile.findOne({ userId }).lean();
       
-      if (profileError) {
-        console.error(`Error fetching profile for user ${userId}:`, profileError);
+      if (!profile) {
+        console.error(`Profile not found for user ${userId}`);
       }
       
-      // Get player data
-      const { data: playerData, error: playerDataError } = await supabase
-        .from('player_data')
-        .select('*')
-        .eq('user_id', userId)
-        .single();
+      // Get player data from MongoDB
+      const playerData = await PlayerData.findOne({ userId }).lean();
       
-      if (playerDataError && playerDataError.code !== 'PGRST116') {
-        console.error(`Error fetching player data for user ${userId}:`, playerDataError);
+      if (!playerData) {
+        console.error(`Player data not found for user ${userId}`);
       }
       
       return {

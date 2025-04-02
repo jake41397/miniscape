@@ -45,7 +45,7 @@ const useDebugLogger = () => {
 // Home page component with Game Canvas
 export default function Home() {
   const router = useRouter();
-  const { session, loading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [socketError, setSocketError] = useState<string | null>(null);
   const { debugInfo, addDebugInfo, showDebugPanel, setShowDebugPanel } = useDebugLogger();
@@ -84,8 +84,8 @@ export default function Home() {
   
   // Monitor auth state changes
   useEffect(() => {
-    addDebugInfo(`Auth state changed - session: ${!!session}, loading: ${authLoading}`);
-  }, [session, authLoading]);
+    addDebugInfo(`Auth state changed - session: ${!!user}, loading: ${authLoading}`);
+  }, [user, authLoading]);
   
   // Handle authentication check and redirection
   useEffect(() => {
@@ -136,7 +136,7 @@ export default function Home() {
         redirectTimeoutRef.current = null;
       }
     };
-  }, [session, authLoading, router]);
+  }, [user, authLoading, router]);
 
   // Initialize socket connection directly using our client-side implementation
   const initializeSocket = async () => {
@@ -208,6 +208,28 @@ export default function Home() {
     if (authLoading) {
       addDebugInfo('Auth still loading, skipping socket initialization');
       return;
+    }
+    
+    // Ensure we have a guest session ID if we're logged in as a guest
+    if (user?.isGuest) {
+      const { continueAsGuest } = require('../contexts/AuthContext').useAuth();
+      const existingSessionId = localStorage.getItem('guest_session_id');
+      
+      if (!existingSessionId) {
+        // If we don't have a session ID but we're logged in as a guest, 
+        // we need to make sure we get and save one
+        addDebugInfo('Guest user without session ID detected, ensuring guest session');
+        
+        continueAsGuest()
+          .then((response: any) => {
+            addDebugInfo('Guest session ensured with ID:', response?.sessionId);
+          })
+          .catch((error: Error) => {
+            addDebugInfo('Error ensuring guest session:', error.message);
+          });
+      } else {
+        addDebugInfo('Guest user with existing session ID detected:', existingSessionId);
+      }
     }
     
     // Check if we've already successfully initialized

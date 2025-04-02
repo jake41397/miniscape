@@ -29,7 +29,7 @@ const debugLog = (message: string, data?: any) => {
 };
 
 const SignIn: NextPage = () => {
-  const { signInWithGoogle, session, loading } = useAuth();
+  const { signInWithGoogle, user, loading } = useAuth();
   const router = useRouter();
   const [redirecting, setRedirecting] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string[]>([]);
@@ -46,7 +46,7 @@ const SignIn: NextPage = () => {
     addDebugInfo('SignIn component mounted');
     
     // Log auth state
-    addDebugInfo(`Initial auth state: session=${!!session}, loading=${loading}`);
+    addDebugInfo(`Initial auth state: session=${!!user}, loading=${loading}`);
     
     // Return cleanup
     return () => {
@@ -66,8 +66,8 @@ const SignIn: NextPage = () => {
   
   // Monitor auth state changes
   useEffect(() => {
-    addDebugInfo(`Auth state changed: session=${!!session}, loading=${loading}`);
-  }, [session, loading]);
+    addDebugInfo(`Auth state changed: session=${!!user}, loading=${loading}`);
+  }, [user, loading]);
   
   // Check for a stuck state and force a clean auth state if needed
   useEffect(() => {
@@ -80,7 +80,7 @@ const SignIn: NextPage = () => {
           const timeSinceRedirect = Date.now() - redirectTimestamp;
           
           // If we've been on this page for a while after a redirect, try to force a clean state
-          if (timeSinceRedirect > 5000 && !loading && !session) {
+          if (timeSinceRedirect > 5000 && !loading && !user) {
             addDebugInfo(`Potential stuck state detected, clearing auth state (${Math.round(timeSinceRedirect / 1000)}s since redirect)`);
             
             // Clear Supabase auth storage
@@ -118,12 +118,12 @@ const SignIn: NextPage = () => {
     // Also set up a periodic check
     const interval = setInterval(checkStuckState, 10000);
     return () => clearInterval(interval);
-  }, [session, loading]);
+  }, [user, loading]);
   
   // Redirect to home if already authenticated, but with a delay to prevent flickering
   useEffect(() => {
     // Only attempt redirect if not already redirecting and auth is done loading
-    if (session && !redirecting && !loading) {
+    if (user && !redirecting && !loading) {
       addDebugInfo('Session detected but not redirecting - triggering redirect state');
       setRedirecting(true);
       setRedirectStart(Date.now());
@@ -137,7 +137,7 @@ const SignIn: NextPage = () => {
         window.location.href = '/';
       }, 500);
     }
-  }, [session, router, redirecting, loading]);
+  }, [user, router, redirecting, loading]);
   
   // Show debug button when in dev or if query param is present
   const showDebug = process.env.NODE_ENV === 'development' || router.query.debug === 'true';
@@ -249,7 +249,7 @@ const SignIn: NextPage = () => {
   }
   
   // If we have a session but we're not redirecting yet, trigger redirecting state
-  if (session && !redirecting) {
+  if (user && !redirecting) {
     // This is a safety check to make sure we always enter redirecting state
     addDebugInfo('Session detected but not redirecting - triggering redirect state');
     setRedirecting(true);

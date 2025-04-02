@@ -1,6 +1,5 @@
 import { Server } from 'socket.io';
-import supabase from '../../config/supabase';
-import { savePlayerPosition } from '../../models/gameModel';
+import { savePlayerPosition } from '../../models/mongodb/gameModel';
 import { ExtendedSocket, Player, PlayerPosition, PlayersStore, WORLD_BOUNDS } from '../types';
 
 export class PlayerHandler {
@@ -302,13 +301,20 @@ export class PlayerHandler {
         // If user is authenticated, save name to database
         if (socket.user && socket.user.id) {
           try {
-            const { data, error } = await supabase
-              .from('profiles')
-              .update({ username: newName })
-              .eq('id', socket.user.id);
+            // Import the Profile model
+            const { default: Profile } = await import('../../models/mongodb/profileModel');
             
-            if (error) {
-              console.error('Error updating username in database:', error);
+            // Update the profile in MongoDB
+            const result = await Profile.updateOne(
+              { userId: socket.user.id },
+              { 
+                username: newName,
+                updatedAt: new Date()
+              }
+            );
+            
+            if (!result.matchedCount) {
+              console.error(`Profile not found for user ${socket.user.id}`);
             }
           } catch (error) {
             console.error('Exception updating username:', error);

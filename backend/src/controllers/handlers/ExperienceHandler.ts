@@ -1,5 +1,5 @@
 import { Player } from '../types'; // Assuming Player type includes skills
-import { savePlayerSkills } from '../../models/gameModel'; // Import the function to save skills
+import { savePlayerSkills } from '../../models/mongodb/gameModel'; // Import the function to save skills
 
 /**
  * Enum defining the different skill types available in the game.

@@ -3,6 +3,8 @@ import { getSocket } from '../game/network/socket';
 import { Player, Item } from '../types/player';
 import { initializePlayerSkills, PlayerSkills } from '../game/state/SkillSystem';
 import { SkillType } from '../components/ui/SkillsPanel';
+import { gameAPI } from '../lib/api';
+import { useAuth } from './AuthContext';
 
 // Define game state interface
 interface GameState {
@@ -25,6 +27,7 @@ interface GameContextValue {
   isInWilderness: () => boolean;
   isInBarbarianVillage: () => boolean;
   isInGrandExchange: () => boolean;
+  saveGameState: () => Promise<void>;
 }
 
 // Initial game state
@@ -52,6 +55,7 @@ const GameContext = createContext<GameContextValue | undefined>(undefined);
 // Context provider component
 export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [gameState, setGameState] = useState<GameState>(initialGameState);
+  const { user } = useAuth();
 
   // Update player skill
   const updatePlayerSkill = (skillType: string, level: number, experience: number) => {
@@ -71,6 +75,14 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       };
     });
+
+    // Save the updated skills to the server
+    if (user) {
+      const playerSkills = gameState.player?.skills || {};
+      gameAPI.saveSkills(playerSkills).catch(error => {
+        console.error('Error saving skills:', error);
+      });
+    }
   };
 
   // Add experience to a skill
@@ -115,6 +127,13 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       };
     });
+
+    // Save the updated inventory to the server
+    if (user && inventory) {
+      gameAPI.saveInventory(inventory).catch(error => {
+        console.error('Error saving inventory:', error);
+      });
+    }
   };
 
   // Handle player position updates
@@ -133,6 +152,13 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         player: updatedPlayer
       };
     });
+
+    // Save the updated position to the server
+    if (user) {
+      gameAPI.savePosition(x, y, z).catch(error => {
+        console.error('Error saving position:', error);
+      });
+    }
   };
 
   // Handle zone changes
@@ -141,6 +167,34 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       ...prevState,
       currentZone: zoneName
     }));
+  };
+
+  // Save all game state to the server
+  const saveGameState = async (): Promise<void> => {
+    if (!user || !gameState.player) return;
+
+    try {
+      // Save position
+      await gameAPI.savePosition(
+        gameState.player.x,
+        gameState.player.y,
+        gameState.player.z
+      );
+
+      // Save inventory
+      if (gameState.player.inventory) {
+        await gameAPI.saveInventory(gameState.player.inventory);
+      }
+
+      // Save skills
+      if (gameState.player.skills) {
+        await gameAPI.saveSkills(gameState.player.skills);
+      }
+
+      console.log('Game state saved successfully');
+    } catch (error) {
+      console.error('Error saving game state:', error);
+    }
   };
 
   // Zone check helpers
@@ -160,14 +214,48 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return gameState.currentZone === 'Grand Exchange';
   };
 
+  // Load player data from the server
+  useEffect(() => {
+    if (!user) return;
+
+    const loadPlayerData = async () => {
+      try {
+        const data = await gameAPI.getPlayerData();
+        
+        if (data) {
+          setGameState(prevState => ({
+            ...prevState,
+            player: {
+              ...prevState.player!,
+              id: user.id,
+              name: data.profile?.username || 'Player',
+              x: data.x || 0,
+              y: data.y || 1,
+              z: data.z || 0,
+              inventory: data.inventory || [],
+              skills: data.stats || initializePlayerSkills(),
+            }
+          }));
+        }
+      } catch (error) {
+        console.error('Error loading player data:', error);
+      }
+    };
+
+    loadPlayerData();
+  }, [user]);
+
   // Setup socket listeners and custom events
   useEffect(() => {
+    if (!user) return;
+
     const setupSocketListeners = async () => {
       const socket = await getSocket();
       if (!socket) return;
 
       socket.on('connect', () => {
         setGameState(prev => ({ ...prev, isConnected: true }));
+        console.log('Socket connected with JWT authentication');
       });
 
       socket.on('disconnect', () => {
@@ -199,104 +287,94 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       // Handle level up events from server
       socket.on('levelUp', (data: { skill: string, level: number }) => {
-        console.log(`Level up: ${data.skill} to level ${data.level}`);
-        
-        // Update the skill level
-        setGameState(prevState => {
-          if (!prevState.player || !prevState.player.skills) return prevState;
-
-          const currentSkill = prevState.player.skills[data.skill] || { level: 1, experience: 0 };
-          
-          const updatedSkills = {
-            ...prevState.player.skills,
-            [data.skill]: { 
-              level: data.level,
-              experience: currentSkill.experience  // Keep the current experience value
-            }
-          };
-
-          return {
-            ...prevState,
-            player: {
-              ...prevState.player,
-              skills: updatedSkills
-            }
-          };
-        });
+        console.log(`Level up! ${data.skill} is now level ${data.level}`);
       });
 
-      socket.on('playerData', (playerData: Player) => {
+      // Handle other player events
+      socket.on('playerJoined', (player: any) => {
         setGameState(prev => ({
           ...prev,
-          player: {
-            ...playerData,
-            skills: playerData.skills || initializePlayerSkills()
-          }
+          otherPlayers: [...prev.otherPlayers.filter(p => p.id !== player.id), player as Player]
         }));
       });
-      
-      // Listen for custom inventory-updated event (from smithing, etc.)
-      const handleCustomInventoryUpdate = (e: CustomEvent) => {
-        if (e.detail && e.detail.inventory) {
-          handleInventoryUpdate(e.detail.inventory);
-        }
-      };
-      
-      document.addEventListener('inventory-updated', handleCustomInventoryUpdate as EventListener);
 
-      // Clean up listeners
+      socket.on('playerLeft', (playerId: string) => {
+        setGameState(prev => ({
+          ...prev,
+          otherPlayers: prev.otherPlayers.filter(p => p.id !== playerId)
+        }));
+      });
+
+      socket.on('playerMoved', (data: { id: string, x: number, y: number, z: number, rotation?: number }) => {
+        setGameState(prev => ({
+          ...prev,
+          otherPlayers: prev.otherPlayers.map(p => 
+            p.id === data.id 
+              ? { ...p, x: data.x, y: data.y, z: data.z, rotation: data.rotation } 
+              : p
+          )
+        }));
+      });
+
+      // Periodically save game state
+      const saveInterval = setInterval(() => {
+        saveGameState().catch(console.error);
+      }, 60000); // Save every minute
+
       return () => {
-        if (socket) {
-          socket.off('connect');
-          socket.off('disconnect');
-          socket.off('playerCount');
-          socket.off('inventoryUpdate');
-          socket.off('skillUpdate');
-          socket.off('experienceGained');
-          socket.off('levelUp');
-          socket.off('playerData');
-        }
-        document.removeEventListener('inventory-updated', handleCustomInventoryUpdate as EventListener);
+        clearInterval(saveInterval);
+        
+        // Cleanup socket listeners on unmount
+        socket.off('connect');
+        socket.off('disconnect');
+        socket.off('playerCount');
+        socket.off('inventoryUpdate');
+        socket.off('skillUpdate');
+        socket.off('experienceGained');
+        socket.off('levelUp');
+        socket.off('playerJoined');
+        socket.off('playerLeft');
+        socket.off('playerMoved');
       };
     };
 
-    setupSocketListeners();
-  }, []);
-
-  // Expose player inventory and skills to the window object for global access
-  useEffect(() => {
-    if (gameState.player) {
-      window.playerInventory = gameState.player.inventory;
-      window.playerSkills = gameState.player.skills;
-    }
-  }, [gameState.player?.inventory, gameState.player?.skills]);
-
-  // Context value
-  const contextValue: GameContextValue = {
-    gameState,
-    updatePlayerSkill,
-    addExperienceToSkill,
-    handleInventoryUpdate,
-    handlePlayerPositionUpdate,
-    handleZoneChange,
-    isInLumbridge,
-    isInWilderness,
-    isInBarbarianVillage,
-    isInGrandExchange,
-  };
+    const cleanup = setupSocketListeners();
+    
+    return () => {
+      if (cleanup instanceof Promise) {
+        cleanup.then(cleanupFn => cleanupFn && cleanupFn());
+      }
+    };
+  }, [user]);
 
   return (
-    <GameContext.Provider value={contextValue}>
+    <GameContext.Provider
+      value={{
+        gameState,
+        updatePlayerSkill,
+        addExperienceToSkill,
+        handleInventoryUpdate,
+        handlePlayerPositionUpdate,
+        handleZoneChange,
+        isInLumbridge,
+        isInWilderness,
+        isInBarbarianVillage,
+        isInGrandExchange,
+        saveGameState
+      }}
+    >
       {children}
     </GameContext.Provider>
   );
 };
 
-// Context hook
+// Custom hook to use the game context
 export const useGame = () => {
   const context = useContext(GameContext);
-  if (context === undefined) {
+  
+  if (!context) {
     throw new Error('useGame must be used within a GameProvider');
   }
+  
   return context;
 }; 

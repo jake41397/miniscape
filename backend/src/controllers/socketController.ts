@@ -1,4 +1,3 @@
-import supabase from '../config/supabase';
 import { Server, Socket } from 'socket.io';
 import { 
   loadWorldItems, 
@@ -7,7 +6,7 @@ import {
   savePlayerInventory,
   dropItemInWorld,
   removeWorldItem
-} from '../models/gameModel';
+} from '../models/mongodb/gameModel';
 import { verifySocketToken } from '../middleware/authMiddleware';
 import { ResourceHandler } from './handlers/ResourceHandler';
 import { InventoryHandler } from './handlers/InventoryHandler';
@@ -15,6 +14,9 @@ import { WorldItemHandler } from './handlers/WorldItemHandler';
 import { ChatHandler } from './handlers/ChatHandler';
 import { SmithingHandler } from './handlers/SmithingHandler';
 import { ExperienceHandler } from './handlers/ExperienceHandler';
+
+// Replace with MongoDB imports
+import { PlayerData, Profile } from '../models/mongodb';
 
 // Define interfaces for type safety
 interface WorldBounds {
@@ -222,20 +224,42 @@ const isDefaultPosition = (x: number, y: number, z: number): boolean => {
 // Initialize game state by loading data from the database
 const initializeGameState = async (): Promise<void> => {
   try {
-    // Load world items
-    worldItems = await loadWorldItems();
-    console.log(`Loaded ${worldItems.length} world items from database`);
+    // Import the isDatabaseConnected utility
+    const { isDatabaseConnected } = require('../utils/dbUtils');
     
-    // Load resource nodes
-    resourceNodes = await loadResourceNodes();
-    console.log(`Loaded ${resourceNodes.length} resource nodes from database`);
+    // Check if database is connected before making queries
+    const connected = await isDatabaseConnected();
+    if (!connected) {
+      console.error('FATAL: Database not connected - cannot initialize game state');
+      throw new Error('Database connection required for game initialization');
+    }
+    
+    try {
+      // Load world items
+      worldItems = await loadWorldItems();
+      console.log(`Loaded ${worldItems.length} world items from database`);
+    } catch (itemError) {
+      console.error('Failed to load world items:', itemError);
+      throw itemError; // Rethrow to prevent startup with incomplete data
+    }
+    
+    try {
+      // Load resource nodes
+      resourceNodes = await loadResourceNodes();
+      console.log(`Loaded ${resourceNodes.length} resource nodes from database`);
+    } catch (nodeError) {
+      console.error('Failed to load resource nodes:', nodeError);
+      throw nodeError; // Rethrow to prevent startup with incomplete data
+    }
     
     // Initialize NPCs
     initializeNPCs();
     
     console.log('Game state initialized successfully');
   } catch (error) {
-    console.error('Failed to initialize game state:', error instanceof Error ? error : new Error(String(error)));
+    console.error('FATAL: Failed to initialize game state:', error instanceof Error ? error : new Error(String(error)));
+    // Rethrow to prevent server from starting
+    throw error;
   }
 };
 
@@ -422,115 +446,127 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     };
     
     // Try to load existing temporary player data
-    let { data: tempData, error: tempError } = await supabase
-      .from('temp_player_data')
-      .select('*')
-      .eq('session_id', sessionId)
-      .single();
+    let tempData;
+    try {
+      // Import the withDatabaseRetry utility
+      const { withDatabaseRetry } = require('../utils/dbUtils');
       
-    if (tempError && tempError.code === 'PGRST116') {
-      // No existing data found - check if we have any previous records for this player
-      // This could help with reconnections from the same device/browser
+      // Use withDatabaseRetry to handle potential timeouts
+      tempData = await withDatabaseRetry(
+        async () => {
+          const result = await PlayerData.findOne({ sessionId }).lean();
+          return result;
+        },
+        `Load temp player data for session ${sessionId}`,
+        3, // 3 retries
+        1000 // 1 second initial delay
+      );
       
-      console.log(`No existing data for session ${sessionId}, creating new temp player data`);
-      
-      // Default temp data uses random spawn point instead of 0,1,0
-      // Here we could implement spawn points around the world
-      const spawnPoints = [
-        { x: 5, y: 1, z: 5 },
-        { x: -5, y: 1, z: 5 },
-        { x: 5, y: 1, z: -5 },
-        { x: -5, y: 1, z: -5 },
-        { x: 10, y: 1, z: 0 },
-        { x: 0, y: 1, z: 10 }
-      ];
-      
-      // Select a random spawn point
-      const randomSpawn = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
-      
-      const defaultTempData = {
-        session_id: sessionId,
-        username: `Guest-${socket.id.substring(0, 4)}`,
-        x: randomSpawn.x,
-        y: randomSpawn.y,
-        z: randomSpawn.z,
-        inventory: '[]'
-      };
-      
-      try {
-        const { data: newTempData, error: createError } = await supabase
-          .from('temp_player_data')
-          .insert(defaultTempData)
-          .select()
-          .single();
+      if (!tempData) {
+        // No existing data found - we need to create a new player
+        console.log(`No existing data for session ${sessionId}, creating new temp player data`);
         
-        if (createError) {
-          console.error(`Failed to create temp player data for session ${sessionId}:`, createError);
-          tempData = defaultTempData;
-        } else {
-          tempData = newTempData;
+        // Default temp data uses random spawn point instead of 0,1,0
+        const spawnPoints = [
+          { x: 5, y: 1, z: 5 },
+          { x: -5, y: 1, z: 5 },
+          { x: 5, y: 1, z: -5 },
+          { x: -5, y: 1, z: -5 },
+          { x: 10, y: 1, z: 0 },
+          { x: 0, y: 1, z: 10 }
+        ];
+        
+        // Select a random spawn point
+        const randomSpawn = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
+        
+        const defaultTempData = {
+          sessionId,
+          username: `Guest-${socket.id.substring(0, 4)}`,
+          x: randomSpawn.x,
+          y: randomSpawn.y,
+          z: randomSpawn.z,
+          inventory: [],
+          lastActive: new Date(),
+          isTemporary: true // Add this flag to properly mark as temporary
+        };
+        
+        try {
+          // Use withDatabaseRetry for creating player data too
+          const newPlayerData = new PlayerData(defaultTempData);
+          await withDatabaseRetry(
+            async () => newPlayerData.save(),
+            `Create new temp player data for session ${sessionId}`,
+            3, // 3 retries
+            1000 // 1 second initial delay
+          );
+          tempData = newPlayerData.toObject();
           console.log(`Created new player at position (${randomSpawn.x}, ${randomSpawn.y}, ${randomSpawn.z})`);
+        } catch (error) {
+          console.error(`Failed to create temp player data for session ${sessionId}:`, error);
+          tempData = defaultTempData;
         }
-      } catch (error) {
-        console.error(`Exception creating temp player data for session ${sessionId}:`, error);
-        tempData = defaultTempData;
+      } else {
+        console.log(`Found existing player data for session ${sessionId}:`, {
+          position: { x: tempData.x, y: tempData.y, z: tempData.z },
+          username: (tempData as any).username || `Guest-${sessionId.substring(0, 4)}`
+        });
       }
-    } else if (tempError) {
-      console.error(`Error loading temp player data for session ${sessionId}:`, tempError);
+    } catch (error) {
+      console.error(`Error loading temp player data for session ${sessionId}:`, error);
       // As a fallback, still use a random spawn point
       const spawnPoint = { x: 10 * (Math.random() - 0.5), y: 1, z: 10 * (Math.random() - 0.5) };
       
       tempData = {
-        session_id: sessionId,
+        sessionId,
         username: `Guest-${socket.id.substring(0, 4)}`,
         x: spawnPoint.x,
         y: spawnPoint.y,
         z: spawnPoint.z,
-        inventory: '[]'
+        inventory: [],
+        isAdmin: false
       };
-    } else {
-      console.log(`Found existing player data for session ${sessionId}:`, {
-        position: { x: tempData.x, y: tempData.y, z: tempData.z },
-        username: tempData.username
-      });
     }
     
-    // Check if this guest player is an admin
-    if (tempData.isAdmin) {
-      console.log(`Player ${tempData.username} (${sessionId}) has admin privileges`);
-      // Create the user object if it doesn't exist yet
-      if (!socket.user) {
-        socket.user = {
-          id: sessionId // Required property
-        };
+    // For temporary users, we generate a default guest username
+    let username = `Guest-${socket.id.substring(0, 4)}`;
+    
+    // Try to extract a username from the player data
+    if (tempData) {
+      // Cast to any to access potential properties without TypeScript errors
+      const tempDataAny = tempData as any;
+      
+      // Check for admin privileges
+      if (tempDataAny.isAdmin === true) {
+        console.log(`Player ${username} (${sessionId}) has admin privileges`);
+        
+        // Create the user object if it doesn't exist yet
+        if (!socket.user) {
+          socket.user = {
+            id: sessionId // Required property
+          };
+        }
+        
+        // Set admin flag on socket.user
+        socket.user!.isAdmin = true;
       }
-      // Set admin flag on socket.user
-      socket.user!.isAdmin = true;
+      
+      // Try to extract username from various possible locations in the document
+      if (typeof tempDataAny.username === 'string') {
+        username = tempDataAny.username;
+      } else if (tempDataAny.stats && typeof tempDataAny.stats.username === 'string') {
+        username = tempDataAny.stats.username;
+      }
     }
-    
-    // Convert temp data to player data format
-    playerData = {
-      user_id: sessionId,
-      x: tempData.x,
-      y: tempData.y,
-      z: tempData.z,
-      inventory: tempData.inventory
-    };
-    
-    profile = {
-      user_id: sessionId,
-      username: tempData.username
-    };
     
     // Create player object
     const newPlayer: Player = {
       id: socket.id,
       userId: sessionId,
-      name: profile?.username || `Player-${socket.id.substring(0, 4)}`,
-      x: playerData?.x ?? 0,
-      y: playerData?.y ?? 1,
-      z: playerData?.z ?? 0,
-      inventory: JSON.parse(playerData?.inventory || '[]')
+      name: username,
+      x: tempData.x ?? 0,
+      y: tempData.y ?? 1,
+      z: tempData.z ?? 0,
+      inventory: Array.isArray(tempData.inventory) ? tempData.inventory : []
     };
     
     // Store the player in our players object
@@ -641,23 +677,57 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
               // Update authenticated player position
               await savePlayerPosition(socket.user.id, validX, position.y, validZ);
             } else {
-              // Update temporary player position
-              const { error: tempError } = await supabase
-                .from('temp_player_data')
-                .update({ 
-                  x: validX,
-                  y: position.y,
-                  z: validZ,
-                  last_active: new Date().toISOString()
-                })
-                .eq('session_id', socket.id);
+              // Update temporary player position in MongoDB using retry mechanism
+              try {
+                // Import the withDatabaseRetry utility
+                const { withDatabaseRetry } = require('../utils/dbUtils');
                 
-              if (tempError) {
-                console.error(`Failed to update temp player position for session ${socket.id}:`, tempError);
+                await withDatabaseRetry(
+                  async () => {
+                    const result = await PlayerData.updateOne(
+                      { sessionId },
+                      { 
+                        $set: {
+                          x: validX,
+                          y: position.y,
+                          z: validZ,
+                          lastActive: new Date()
+                        }
+                      }
+                    );
+                    
+                    if (!result.matchedCount) {
+                      console.error(`Failed to update temp player position for session ${sessionId}: Player not found`);
+                    }
+                    
+                    return result;
+                  },
+                  `Update temp player position for session ${sessionId}`,
+                  3,  // 3 retries
+                  1000 // 1 second initial delay
+                );
+              } catch (err) {
+                console.error(`Failed to update temp player position for session ${sessionId}:`, err);
+                
+                // Store position in memory even if DB update fails
+                if (players[socket.id]) {
+                  players[socket.id].x = validX;
+                  players[socket.id].y = position.y;
+                  players[socket.id].z = validZ;
+                  console.log(`Stored position in memory for player ${socket.id} after database failure`);
+                }
               }
             }
           } catch (error) {
             console.error('Failed to update player position:', error);
+            
+            // Store position in memory even if DB update fails
+            if (players[socket.id]) {
+              players[socket.id].x = validX;
+              players[socket.id].y = position.y;
+              players[socket.id].z = validZ;
+              console.log(`Stored position in memory for player ${socket.id} after database failure`);
+            }
           }
         }
       }
@@ -730,31 +800,54 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
 
       try {
         if (socket.user && socket.user.id) {
-          // Update authenticated user's profile
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .update({ username: newName })
-            .eq('user_id', socket.user.id);
-
-          if (profileError) {
-            console.error(`Failed to update profile for user ${socket.user.id}:`, profileError);
+          // Update authenticated user's profile in MongoDB
+          try {
+            const result = await Profile.updateOne(
+              { userId: socket.user.id },
+              { username: newName }
+            );
+            
+            if (!result.matchedCount) {
+              console.error(`Failed to update profile for user ${socket.user.id}: Profile not found`);
+              return;
+            }
+          } catch (err) {
+            console.error(`Failed to update profile for user ${socket.user.id}:`, err);
             return;
           }
         } else {
-          // Get the persistent session ID
-          const sessionId = socket.data.sessionId || socket.id;
-          
-          // Update temporary player's name
-          const { error: tempError } = await supabase
-            .from('temp_player_data')
-            .update({ 
-              username: newName,
-              last_active: new Date().toISOString()
-            })
-            .eq('session_id', sessionId);
+          // Update temporary player's name in MongoDB
+          try {
+            // First check if the player exists
+            const playerDoc = await PlayerData.findOne({ sessionId });
             
-          if (tempError) {
-            console.error(`Failed to update temp player name for session ${sessionId}:`, tempError);
+            if (!playerDoc) {
+              console.error(`Failed to update temp player name for session ${sessionId}: Player not found`);
+              return;
+            }
+            
+            // Update the document based on its available fields
+            const updateData: any = { lastActive: new Date() };
+            
+            // Store username in the stats field if it exists, otherwise directly in the document
+            if (playerDoc.stats) {
+              updateData.$set = { "stats.username": newName };
+            } else {
+              // Create a stats field if it doesn't exist
+              updateData.$set = { stats: { username: newName } };
+            }
+            
+            const result = await PlayerData.updateOne(
+              { sessionId },
+              updateData
+            );
+            
+            if (!result.matchedCount) {
+              console.error(`Failed to update temp player name for session ${sessionId}: Update failed`);
+              return;
+            }
+          } catch (err) {
+            console.error(`Failed to update temp player name for session ${sessionId}:`, err);
             return;
           }
         }
@@ -1094,22 +1187,26 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
           // Get the persistent session ID
           const sessionId = socket.data.sessionId || socket.id;
           
-          // Save temporary player data
-          const { error: tempError } = await supabase
-            .from('temp_player_data')
-            .update({ 
-              x: player.x,
-              y: player.y,
-              z: player.z,
-              inventory: JSON.stringify(player.inventory || []),
-              last_active: new Date().toISOString()
-            })
-            .eq('session_id', sessionId);
+          // Save temporary player data to MongoDB
+          try {
+            const result = await PlayerData.updateOne(
+              { sessionId },
+              { 
+                x: player.x,
+                y: player.y,
+                z: player.z,
+                inventory: player.inventory || [],
+                lastActive: new Date()
+              }
+            );
             
-          if (tempError) {
-            console.error(`Failed to save temp player data for session ${sessionId}:`, tempError);
-          } else {
-            console.log(`Successfully saved player data for session ${sessionId}`);
+            if (!result.matchedCount) {
+              console.error(`Failed to save temp player data for session ${sessionId}: Player not found`);
+            } else {
+              console.log(`Successfully saved player data for session ${sessionId}`);
+            }
+          } catch (dbError) {
+            console.error(`Failed to save temp player data for session ${sessionId}:`, dbError);
           }
         } catch (error) {
           console.error('Error during player disconnect save:', error);

@@ -15,6 +15,8 @@ import logger from './utils/logger';
 import { configureSocketIO } from './middleware/corsMiddleware';
 // Import the InventoryHandler class
 import InventoryHandler from './controllers/handlers/InventoryHandler';
+// Import the database initialization function
+import { initDatabase } from './db/database';
 
 // Define the extended Socket interface
 interface ExtendedSocket extends Socket {
@@ -57,8 +59,8 @@ app.get('/health', (req: Request, res: Response) => {
 app.use('/auth', authRoutes);
 
 // Protected routes
-app.use('/api/player', authMiddleware.verifyToken, playerRoutes);
-app.use('/api/game', authMiddleware.verifyToken, gameRoutes);
+app.use('/api/player', authMiddleware.verifyJwtToken, playerRoutes);
+app.use('/api/game', authMiddleware.verifyJwtToken, gameRoutes);
 
 // Create HTTP Server
 const server = http.createServer(app);
@@ -112,8 +114,18 @@ io.use(async (socket: ExtendedSocket, next) => {
   }
 });
 
-// Initialize game state
-initializeGameState()
+// First ensure database is connected before attempting to initialize game state
+logger.info('Starting MiniScape backend server...');
+logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
+// Initialize database first
+initDatabase()
+  .then(() => {
+    logger.info('Database connection established successfully');
+    
+    // Then initialize game state
+    return initializeGameState();
+  })
   .then(() => {
     logger.info('Game state initialized successfully');
     
@@ -154,26 +166,28 @@ initializeGameState()
       // Set up other socket handlers
       setupSocketHandlers(io, socket);
     });
+    
+    // Only start the server after successful game state initialization
+    server.listen(PORT, () => {
+      logger.info(`MiniScape backend server running on port ${PORT}`);
+      logger.info(`Socket.IO server available at path /socket.io`);
+      
+      // Broadcast initial player count in case there are any connected players
+      setTimeout(() => {
+        // Import broadcastPlayerCount function from socketController
+        const { broadcastPlayerCount } = require('./controllers/socketController');
+        if (typeof broadcastPlayerCount === 'function') {
+          broadcastPlayerCount(io);
+          logger.info('Initial player count broadcast sent');
+        }
+      }, 5000); // Wait 5 seconds to ensure everything is initialized
+    });
   })
   .catch((error) => {
-    logger.error('Failed to initialize game state', error);
+    logger.error('FATAL: Server initialization failed', error);
+    // Exit process with failure code to prevent server from starting in an inconsistent state
+    process.exit(1);
   });
-
-// Start server
-server.listen(PORT, () => {
-  logger.info(`MiniScape backend server running on port ${PORT}`);
-  logger.info(`Socket.IO server available at path /socket.io`);
-  
-  // Broadcast initial player count in case there are any connected players
-  setTimeout(() => {
-    // Import broadcastPlayerCount function from socketController
-    const { broadcastPlayerCount } = require('./controllers/socketController');
-    if (typeof broadcastPlayerCount === 'function') {
-      broadcastPlayerCount(io);
-      logger.info('Initial player count broadcast sent');
-    }
-  }, 5000); // Wait 5 seconds to ensure everything is initialized
-});
 
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
