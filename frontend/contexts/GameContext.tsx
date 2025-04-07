@@ -67,22 +67,16 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         [skillType]: { level, experience }
       };
 
-      return {
+      const newState = {
         ...prevState,
         player: {
           ...prevState.player,
           skills: updatedSkills
         }
       };
-    });
 
-    // Save the updated skills to the server
-    if (user) {
-      const playerSkills = gameState.player?.skills || {};
-      gameAPI.saveSkills(playerSkills).catch(error => {
-        console.error('Error saving skills:', error);
-      });
-    }
+      return newState;
+    });
   };
 
   // Add experience to a skill
@@ -233,7 +227,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               y: data.y || 1,
               z: data.z || 0,
               inventory: data.inventory || [],
-              skills: data.stats || initializePlayerSkills(),
+              skills: data.skills || initializePlayerSkills(),
             }
           }));
         }
@@ -285,11 +279,6 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         updatePlayerSkill(data.skill, data.level, data.totalExperience);
       });
 
-      // Handle level up events from server
-      socket.on('levelUp', (data: { skill: string, level: number }) => {
-        console.log(`Level up! ${data.skill} is now level ${data.level}`);
-      });
-
       // Handle other player events
       socket.on('playerJoined', (player: any) => {
         setGameState(prev => ({
@@ -331,7 +320,6 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         socket.off('inventoryUpdate');
         socket.off('skillUpdate');
         socket.off('experienceGained');
-        socket.off('levelUp');
         socket.off('playerJoined');
         socket.off('playerLeft');
         socket.off('playerMoved');
@@ -345,7 +333,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         cleanup.then(cleanupFn => cleanupFn && cleanupFn());
       }
     };
-  }, [user]);
+  }, [user, updatePlayerSkill, handleInventoryUpdate, saveGameState]);
 
   return (
     <GameContext.Provider

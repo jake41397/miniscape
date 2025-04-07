@@ -1,8 +1,9 @@
 import { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 import { loadResourceNodes, savePlayerInventory, savePlayerSkills } from '../../models/mongodb/gameModel';
-import { ExtendedSocket, PlayersStore } from '../types';
-import { ExperienceHandler, SkillType } from './ExperienceHandler';
+import { ExtendedSocket, PlayersStore, Player } from '../types';
+import { ExperienceHandler, SkillType, levelFromExperience } from './ExperienceHandler';
+import { getResourceLevelRequirement, getResourceXpReward } from '../../constants/resourceConstants';
 
 interface ResourceNode {
   id: string;
@@ -251,10 +252,53 @@ export class ResourceHandler {
   }
   
   /**
+   * Check if player meets the skill requirement for a resource node.
+   */
+  private checkSkillRequirement(player: Player, resourceNode: ResourceNode): boolean {
+    if (!resourceNode.metadata?.specificType) {
+      console.warn(`Resource node ${resourceNode.id} missing specificType in metadata. Allowing interaction.`);
+      return true; // Allow if type is unknown for now
+    }
+    const requirement = getResourceLevelRequirement(resourceNode.metadata.specificType);
+    if (requirement.skill === 'none') return true; // No requirement
+
+    // Ensure player skills structure exists
+    if (!player.skills) {
+      console.warn(`Player ${player.id} has no skills object.`);
+      return false; // Cannot meet requirement without skills object
+    }
+
+    const playerSkill = player.skills[requirement.skill];
+    const playerLevel = playerSkill ? levelFromExperience(playerSkill.experience) : 1;
+
+    if (playerLevel < requirement.level) {
+      console.log(`Player ${player.id} level ${playerLevel} too low for ${requirement.skill} requirement ${requirement.level} on ${resourceNode.metadata.specificType}`);
+      return false;
+    }
+    return true;
+  }
+  
+  /**
    * Start gathering with a tool
    */
   private startResourceGathering(socket: ExtendedSocket, resourceNode: ResourceNode, action: string): void {
     const playerId = socket.id;
+    const player = this.players[playerId];
+
+    if (!player) return; // Should not happen if called from setup handler
+
+    // --- ADD SKILL CHECK HERE ---
+    if (!this.checkSkillRequirement(player, resourceNode)) {
+      const requirement = getResourceLevelRequirement(resourceNode.metadata?.specificType ?? 'default');
+      socket.emit('gather_error', { message: `You need level ${requirement.level} ${requirement.skill} to gather this.` });
+      socket.emit('chatMessage', { 
+        content: `You need level ${requirement.level} ${requirement.skill} to gather this.`, 
+        type: 'system', 
+        timestamp: Date.now() 
+      });
+      return; // Stop gathering if level requirement not met
+    }
+    // --- END SKILL CHECK ---
     
     // Initialize remaining resources if not set
     if (resourceNode.remainingResources === undefined) {
@@ -473,15 +517,16 @@ export class ResourceHandler {
   private async handleTreeGathering(socket: ExtendedSocket, resourceNode: ResourceNode): Promise<void> {
     const player = this.players[socket.id];
     
-    // Get tree type from metadata
-    const treeType = resourceNode.metadata?.treeType || 'normal_tree';
+    // Get tree type from metadata or specificType if metadata is missing
+    const specificType = resourceNode.metadata?.treeType || resourceNode.metadata?.specificType || 'normal_tree';
     
     // Determine log type based on tree type
-    const logType = treeType.includes('normal') ? 'log' : 
-                    treeType.includes('oak') ? 'oak_log' :
-                    treeType.includes('willow') ? 'willow_log' :
-                    treeType.includes('maple') ? 'maple_log' :
-                    treeType.includes('yew') ? 'yew_log' : 'log';
+    const logType = specificType.includes('normal') ? 'log' : 
+                    specificType.includes('oak') ? 'oak_log' :
+                    specificType.includes('willow') ? 'willow_log' :
+                    specificType.includes('maple') ? 'maple_log' :
+                    specificType.includes('yew') ? 'yew_log' : 
+                    specificType.includes('magic') ? 'magic_log' : 'log'; // Added magic
     
     // Add to player inventory
     player.inventory.push({
@@ -490,20 +535,14 @@ export class ResourceHandler {
       quantity: 1
     });
     
-    // Determine XP gain based on tree type
-    let xpGained = 0;
-    const xpBase = treeType.includes('normal') ? 'normal' :
-                   treeType.includes('oak') ? 'oak' :
-                   treeType.includes('willow') ? 'willow' :
-                   treeType.includes('maple') ? 'maple' :
-                   treeType.includes('yew') ? 'yew' : 'normal';
-    
-    // Get XP reward from ExperienceHandler
-    xpGained = this.experienceHandler.getXpReward(SkillType.WOODCUTTING, xpBase);
+    // Determine XP gain based on specificType using constants
+    const xpGained = getResourceXpReward(specificType);
     
     // Use ExperienceHandler to add experience
     if (xpGained > 0) {
-      const xpResult = this.experienceHandler.addExperience(player, SkillType.WOODCUTTING, xpGained);
+      // Use the SkillType enum member
+      const skill = SkillType.WOODCUTTING;
+      const xpResult = this.experienceHandler.addExperience(player, skill, xpGained);
       
       if (xpResult && xpResult.leveledUp) {
         console.log(`Player ${socket.id} leveled up Woodcutting to level ${xpResult.newLevel}!`);
@@ -526,9 +565,16 @@ export class ResourceHandler {
         level: xpResult?.newLevel
       });
       
+      // ---> ADD LOGGING HERE <--- 
+      console.log(`[${socket.id}] Woodcutting: Checking socket.user before save:`, socket.user ? JSON.stringify(socket.user) : 'undefined');
+      console.log(`[${socket.id}] Woodcutting: Attempting to save skills:`, player.skills ? JSON.stringify(player.skills) : 'undefined');
+      console.log(`[${socket.id}] Woodcutting: Checking player.userId before save:`, player.userId);
+
       // Save updated skills
-      if (socket.user && socket.user.id) {
-        await savePlayerSkills(socket.user.id, player.skills);
+      if (player && player.userId) {
+        await savePlayerSkills(player.userId, player.skills);
+      } else {
+        console.warn(`[${socket.id}] Woodcutting: Cannot save skills: player or player.userId is missing.`);
       }
     }
     
@@ -550,9 +596,16 @@ export class ResourceHandler {
       timestamp: Date.now() 
     });
     
+    // ---> ADD LOGGING HERE <--- 
+    console.log(`[${socket.id}] Woodcutting: Checking socket.user before save:`, socket.user ? JSON.stringify(socket.user) : 'undefined');
+    console.log(`[${socket.id}] Woodcutting: Attempting to save skills:`, player.skills ? JSON.stringify(player.skills) : 'undefined');
+    console.log(`[${socket.id}] Woodcutting: Checking player.userId before save:`, player.userId);
+
     // Save inventory
-    if (socket.user && socket.user.id) {
-      await savePlayerInventory(socket.user.id, player.inventory);
+    if (player && player.userId) {
+      await savePlayerInventory(player.userId, player.inventory);
+    } else {
+      console.warn(`[${socket.id}] Woodcutting: Cannot save inventory: player or player.userId is missing.`);
     }
   }
   
@@ -562,16 +615,18 @@ export class ResourceHandler {
   private async handleRockGathering(socket: ExtendedSocket, resourceNode: ResourceNode): Promise<void> {
     const player = this.players[socket.id];
     
-    // Get rock type from metadata
-    const rockType = resourceNode.metadata?.rockType || 'stone_rock';
+    // Get rock type from metadata or specificType if metadata is missing
+    const specificType = resourceNode.metadata?.rockType || resourceNode.metadata?.specificType || 'copper_rock';
     
     // Determine ore type based on rock type
-    const oreType = rockType.includes('copper') ? 'copper_ore' : 
-                    rockType.includes('tin') ? 'tin_ore' :
-                    rockType.includes('iron') ? 'iron_ore' :
-                    rockType.includes('coal') ? 'coal' :
-                    rockType.includes('gold') ? 'gold_ore' :
-                    rockType.includes('mithril') ? 'mithril_ore' : 'stone';
+    const oreType = specificType.includes('copper') ? 'copper_ore' : 
+                    specificType.includes('tin') ? 'tin_ore' :
+                    specificType.includes('iron') ? 'iron_ore' :
+                    specificType.includes('coal') ? 'coal' :
+                    specificType.includes('gold') ? 'gold_ore' :
+                    specificType.includes('mithril') ? 'mithril_ore' : 
+                    specificType.includes('adamantite') ? 'adamantite_ore' : 
+                    specificType.includes('runite') ? 'runite_ore' : 'stone'; // Added adamantite & runite
     
     // Add to player inventory
     player.inventory.push({
@@ -580,21 +635,14 @@ export class ResourceHandler {
       quantity: 1
     });
     
-    // Determine XP gain based on ore type
-    let xpGained = 0;
-    const xpBase = oreType.includes('copper') ? 'copper' :
-                   oreType.includes('tin') ? 'tin' :
-                   oreType.includes('iron') ? 'iron' :
-                   oreType.includes('coal') ? 'coal' :
-                   oreType.includes('gold') ? 'gold' :
-                   oreType.includes('mithril') ? 'mithril' : 'copper';
-    
-    // Get XP reward from ExperienceHandler
-    xpGained = this.experienceHandler.getXpReward(SkillType.MINING, xpBase);
+    // Determine XP gain based on specificType using constants
+    const xpGained = getResourceXpReward(specificType);
     
     // Use ExperienceHandler to add experience
     if (xpGained > 0) {
-      const xpResult = this.experienceHandler.addExperience(player, SkillType.MINING, xpGained);
+      // Use the SkillType enum member
+      const skill = SkillType.MINING;
+      const xpResult = this.experienceHandler.addExperience(player, skill, xpGained);
       
       if (xpResult && xpResult.leveledUp) {
         console.log(`Player ${socket.id} leveled up Mining to level ${xpResult.newLevel}!`);
@@ -617,9 +665,16 @@ export class ResourceHandler {
         level: xpResult?.newLevel
       });
       
+      // ---> ADD LOGGING HERE <--- 
+      console.log(`[${socket.id}] Mining: Checking socket.user before save:`, socket.user ? JSON.stringify(socket.user) : 'undefined');
+      console.log(`[${socket.id}] Mining: Attempting to save skills:`, player.skills ? JSON.stringify(player.skills) : 'undefined');
+      console.log(`[${socket.id}] Mining: Checking player.userId before save:`, player.userId);
+
       // Save updated skills
-      if (socket.user && socket.user.id) {
-        await savePlayerSkills(socket.user.id, player.skills);
+      if (player && player.userId) {
+        await savePlayerSkills(player.userId, player.skills);
+      } else {
+        console.warn(`[${socket.id}] Mining: Cannot save skills: player or player.userId is missing.`);
       }
     }
     
@@ -641,9 +696,16 @@ export class ResourceHandler {
       timestamp: Date.now() 
     });
     
+    // ---> ADD LOGGING HERE <--- 
+    console.log(`[${socket.id}] Mining: Checking socket.user before save:`, socket.user ? JSON.stringify(socket.user) : 'undefined');
+    console.log(`[${socket.id}] Mining: Attempting to save skills:`, player.skills ? JSON.stringify(player.skills) : 'undefined');
+    console.log(`[${socket.id}] Mining: Checking player.userId before save:`, player.userId);
+
     // Save inventory
-    if (socket.user && socket.user.id) {
-      await savePlayerInventory(socket.user.id, player.inventory);
+    if (player && player.userId) {
+      await savePlayerInventory(player.userId, player.inventory);
+    } else {
+      console.warn(`[${socket.id}] Mining: Cannot save inventory: player or player.userId is missing.`);
     }
   }
   
@@ -774,36 +836,30 @@ export class ResourceHandler {
    * Handle fish interaction (fishing)
    */
   private async handleFishInteraction(socket: ExtendedSocket, resourceNode: ResourceNode): Promise<void> {
+    // Example: Add level check
     const player = this.players[socket.id];
-    
-    // Make fishing spot unavailable
-    this.makeResourceUnavailable(resourceNode.id, resourceNode.respawnTime || 5000);
-    
-    // Generate fish
-    const fishCount = 1;
-    const fish = {
-      id: uuidv4(),
-      type: 'fish',
-      quantity: fishCount
-    };
-    
-    // Add fish to player inventory
-    player.inventory.push(fish);
-    
-    // Save inventory to database
-    if (socket.user && socket.user.id) {
-      await savePlayerInventory(socket.user.id, player.inventory);
+    if (!this.checkSkillRequirement(player, resourceNode)) {
+      const requirement = getResourceLevelRequirement(resourceNode.metadata?.specificType ?? 'default');
+      socket.emit('gather_error', { message: `You need level ${requirement.level} ${requirement.skill} to fish here.` });
+      socket.emit('chatMessage', { 
+        content: `You need level ${requirement.level} ${requirement.skill} to fish here.`, 
+        type: 'system', 
+        timestamp: Date.now() 
+      });
+      return;
     }
-    
-    // Send success message
-    socket.emit('resourceGathered', {
-      resourceId: resourceNode.id,
-      resourceType: 'fish',
-      item: fish
-    });
-    
-    // Update inventory
-    socket.emit('inventoryUpdate', player.inventory);
+
+    // Example: Grant XP
+    const specificType = resourceNode.metadata?.specificType || 'shrimp_spot';
+    const xpGained = getResourceXpReward(specificType);
+    if (xpGained > 0) {
+      const skill = SkillType.FISHING;
+      this.experienceHandler.addExperience(player, skill, xpGained);
+      // ... handle level up messages ...
+      socket.emit('experienceGained', { skill: skill, experience: xpGained /*, ... other fields*/ });
+    }
+
+    // ... rest of fishing logic ...
   }
   
   /**

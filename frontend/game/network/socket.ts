@@ -164,32 +164,14 @@ export const initializeSocket = async () => {
       // Reset the error state
       connectionState.error = null;
       
-      // Save connection time for debugging
-      localStorage.setItem('socket_connected_at', Date.now().toString());
+      // Moved socket_connected dispatch to sessionEstablished handler
       
-      // If we have a socket auth object, check for sessionId or save the socket.id for reconnects
-      if (!guestSessionId && socket?.id) {
-        saveGuestSessionId(socket.id);
-        console.log('Saved socket.id as guest session ID for future reconnects:', socket.id);
-      } else if (guestSessionId && socket) {
-        console.log('Connected using existing guest session ID:', guestSessionId);
-        
-        // Verify the session ID was properly used by checking auth data
-        const sessionUsed = socket.auth && typeof socket.auth === 'object' && 'guestSessionId' in socket.auth 
-          ? socket.auth.guestSessionId === guestSessionId 
-          : false;
-        console.log('Session ID was correctly used in authentication:', sessionUsed);
-        
-        // Save session debug info for diagnostics
-        localStorage.setItem('last_session_connection', JSON.stringify({
-          connectedAt: Date.now(),
-          socketId: socket.id,
-          sessionId: guestSessionId,
-          sessionUsed
-        }));
+      // Original debug logging for session usage
+      if (guestSessionId && socket) {
+        console.log('Attempted connection using guest session ID from storage:', guestSessionId);
       }
-      
-      // Broadcast event for components to know the socket is ready
+
+      // The socket_connected event is now dispatched AFTER sessionEstablished is received
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('socket_connected', { 
           detail: { socketId: socket?.id, sessionId: guestSessionId }
@@ -278,6 +260,23 @@ export const initializeSocket = async () => {
             detail: { error: err.message, attempts: reconnectAttempts }
           }));
         }
+      }
+    });
+
+    // Listen for server confirmation of the session ID
+    socket.on('sessionEstablished', (data: { sessionId: string }) => {
+      if (data && data.sessionId) {
+        console.log('Received confirmed sessionId from server:', data.sessionId);
+        saveGuestSessionId(data.sessionId);
+
+        // Broadcast event for components to know the socket is ready *with the confirmed ID*
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('socket_connected', { 
+            detail: { socketId: socket?.id, sessionId: data.sessionId }
+          }));
+        }
+      } else {
+        console.warn('Received sessionEstablished event without a valid sessionId:', data);
       }
     });
 

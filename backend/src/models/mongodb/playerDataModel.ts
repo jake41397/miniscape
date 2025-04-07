@@ -6,17 +6,30 @@ export interface IPlayerData extends Document {
   x: number;
   y: number;
   z: number;
-  level: number;
-  experience: number;
   gold: number;
   inventory: any[]; // Using any[] for flexibility, but could be more strictly typed
-  stats: Record<string, any>;
+  skills: { [skillName: string]: { level: number; experience: number } };
   isTemporary: boolean;
   sessionId?: string;
   lastActive?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
+
+// Define default skills
+const defaultSkills = {
+  attack: { level: 1, experience: 0 },
+  strength: { level: 1, experience: 0 },
+  defence: { level: 1, experience: 0 },
+  hitpoints: { level: 1, experience: 0 }, // Should HP start at 1 or 10? Assuming 1 for now based on level 1.
+  ranged: { level: 1, experience: 0 },
+  magic: { level: 1, experience: 0 },
+  cooking: { level: 1, experience: 0 },
+  woodcutting: { level: 1, experience: 0 },
+  fishing: { level: 1, experience: 0 },
+  mining: { level: 1, experience: 0 },
+  smithing: { level: 1, experience: 0 }
+};
 
 const PlayerDataSchema: Schema = new Schema({
   userId: {
@@ -47,16 +60,6 @@ const PlayerDataSchema: Schema = new Schema({
     required: true,
     default: 0
   },
-  level: {
-    type: Number,
-    required: true,
-    default: 1
-  },
-  experience: {
-    type: Number,
-    required: true,
-    default: 0
-  },
   gold: {
     type: Number,
     required: true,
@@ -67,10 +70,14 @@ const PlayerDataSchema: Schema = new Schema({
     required: true,
     default: []
   },
-  stats: {
-    type: Schema.Types.Mixed, // Using Mixed for flexible JSON
+  skills: {
+    type: Map, // Using Map for flexibility in skill names
+    of: new Schema({
+        level: { type: Number, default: 1 },
+        experience: { type: Number, default: 0 }
+    }),
     required: true,
-    default: {}
+    default: defaultSkills
   },
   isTemporary: {
     type: Boolean,

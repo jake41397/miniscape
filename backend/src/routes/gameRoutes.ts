@@ -62,26 +62,43 @@ router.get('/leaderboard', (async (req: Request, res: Response) => {
     // Import the required models
     const { PlayerData, Profile } = await import('../models/mongodb');
     
-    // Get top players based on their level
-    const players = await PlayerData.find()
-      .sort({ level: -1 })
-      .limit(10);
+    // Get all players (we'll sort in memory based on calculated total level)
+    // Limit the initial fetch to avoid loading too many documents if the player base grows
+    const players = await PlayerData.find({ isTemporary: false })
+      .limit(100) // Fetch more players than needed for top 10
+      .lean(); // Use lean for performance
     
-    // Create a formatted leaderboard with joined profile information
-    const formattedLeaderboard = await Promise.all(
-      players.map(async (player: any) => {
+    // Calculate total level and format
+    const playersWithTotalLevel = await Promise.all(
+      players.map(async (player) => {
+        // Calculate total level from skills
+        let totalLevel = 0;
+        let totalExperience = 0;
+        if (player.skills) {
+          // Use Object.values if player.skills is a Map or plain object
+          const skillValues = player.skills instanceof Map ? Array.from(player.skills.values()) : Object.values(player.skills);
+          totalLevel = skillValues.reduce((sum, skill) => sum + (skill.level || 1), 0);
+          totalExperience = skillValues.reduce((sum, skill) => sum + (skill.experience || 0), 0);
+        }
+        
         // Find the profile for this player
-        const profile = await Profile.findOne({ userId: player.userId });
+        const profile = await Profile.findOne({ userId: player.userId }).lean();
         
         return {
           userId: player.userId,
           username: profile ? profile.username : 'Unknown Player',
           avatarUrl: profile ? profile.avatarUrl : null,
-          level: player.level || 1,
-          experience: player.experience || 0
+          totalLevel: totalLevel,
+          totalExperience: totalExperience
         };
       })
     );
+    
+    // Sort players by total level (descending)
+    playersWithTotalLevel.sort((a, b) => b.totalLevel - a.totalLevel);
+    
+    // Get the top 10
+    const formattedLeaderboard = playersWithTotalLevel.slice(0, 10);
     
     res.status(200).json({ leaderboard: formattedLeaderboard });
   } catch (error) {

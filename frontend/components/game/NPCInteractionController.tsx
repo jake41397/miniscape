@@ -232,17 +232,6 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
             setShowHealthBars(true);
           }
         });
-
-        // Add experience-related event listeners
-        socket.on('experienceGained', (data: { skill: string, experience: number, totalExperience: number, level: number }) => {
-          console.log('[EXPERIENCE] Gained XP:', data);
-          sendChatMessage(`You gained ${data.experience} ${data.skill} experience! (Level ${data.level})`, 'success');
-        });
-
-        socket.on('levelUp', (data: { skill: string, level: number }) => {
-          console.log('[EXPERIENCE] Level up:', data);
-          sendChatMessage(`Congratulations! Your ${data.skill} level is now ${data.level}!`, 'experience');
-        });
       }
     });
     
@@ -254,8 +243,6 @@ const NPCInteractionController: React.FC<NPCInteractionControllerProps> = ({
           socket.off('updateHealth');
           socket.off('npcStateUpdate');
           socket.off('chatMessage');
-          socket.off('experienceGained');
-          socket.off('levelUp');
         }
       });
     };

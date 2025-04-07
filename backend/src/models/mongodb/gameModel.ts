@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 import logger from '../../utils/logger';
 import { PlayerData, ResourceNode, WorldItem } from './index';
+import { getResourceRespawnTime } from '../../constants/resourceConstants';
 
 // Define interfaces for model objects
 export interface IWorldItem extends Document {
@@ -287,6 +288,29 @@ export const removeWorldItem = async (dropId: string): Promise<void> => {
  * Save player skills to the database
  */
 export const savePlayerSkills = async (userId: string, skills: any): Promise<void> => {
+  logger.info(`[gameModel] savePlayerSkills called for userId: ${userId}`);
+  // Original skills object might have internal Mongoose _id fields
+  logger.info(`[gameModel] Original skills object received: ${JSON.stringify(skills, null, 2)}`); 
+
+  // Prepare a clean skills object/Map without internal _id fields for saving
+  const skillsToSave: { [key: string]: { level: number; experience: number } } = {};
+  if (skills) {
+    // Check if skills is a Map or a plain object and iterate appropriately
+    if (skills instanceof Map) {
+      skills.forEach((value, key) => {
+        skillsToSave[key] = { level: value.level, experience: value.experience };
+      });
+    } else if (typeof skills === 'object') {
+      Object.keys(skills).forEach(key => {
+        // Exclude potential prototype properties and ensure it has level/experience
+        if (skills.hasOwnProperty(key) && skills[key] && typeof skills[key].level !== 'undefined') {
+          skillsToSave[key] = { level: skills[key].level, experience: skills[key].experience };
+        }
+      });
+    }
+  }
+  logger.info(`[gameModel] Cleaned skills object to save: ${JSON.stringify(skillsToSave, null, 2)}`);
+
   try {
     // Check if this is a temporary user
     const isTemporaryUser = userId.startsWith('temp-');
@@ -296,11 +320,13 @@ export const savePlayerSkills = async (userId: string, skills: any): Promise<voi
       const result = await PlayerData.updateOne(
         { sessionId: userId },
         { 
-          stats: { ...skills },
+          $set: { skills: skillsToSave }, // Use the cleaned object
           lastActive: new Date()
         }
       );
       
+      logger.info(`[gameModel] Update result for temp user ${userId}: ${JSON.stringify(result)}`);
+
       if (!result.matchedCount) {
         logger.warn(`Player data not found for temp user ${userId}`);
         
@@ -312,11 +338,13 @@ export const savePlayerSkills = async (userId: string, skills: any): Promise<voi
       const result = await PlayerData.updateOne(
         { userId },
         { 
-          stats: { ...skills },
+          $set: { skills: skillsToSave }, // Use the cleaned object
           updatedAt: new Date()
         }
       );
       
+      logger.info(`[gameModel] Update result for user ${userId}: ${JSON.stringify(result)}`);
+
       if (!result.matchedCount) {
         logger.error(`Player data not found for user ${userId}`);
       }
@@ -438,6 +466,46 @@ export const insertResourceNode = async (node: {
     return null;
   } catch (error) {
     console.error('Error inserting resource node:', error);
+    return null;
+  }
+};
+
+/**
+ * Add a new resource node to the database
+ * This function now looks up the respawn time based on the specificType.
+ */
+export const addResourceNode = async (nodeData: { 
+  nodeType: string; 
+  specificType: string; 
+  x: number; 
+  y: number; 
+  z: number; 
+}): Promise<string | null> => {
+  try {
+    const { withDatabaseRetry } = require('../../utils/dbUtils');
+    
+    // Get standardized respawn time
+    const respawnTimeInSeconds = getResourceRespawnTime(nodeData.specificType);
+
+    const newNode = new ResourceNode({
+      nodeType: nodeData.nodeType,
+      specificType: nodeData.specificType,
+      x: nodeData.x,
+      y: nodeData.y,
+      z: nodeData.z,
+      respawnTime: respawnTimeInSeconds // Use looked-up value
+    });
+
+    const savedNode = await withDatabaseRetry(
+      async () => newNode.save(),
+      `Save resource node ${nodeData.specificType}`,
+      3,
+      1000
+    );
+    
+    return savedNode._id.toString();
+  } catch (error) {
+    logger.error('Error adding resource node to database', error instanceof Error ? error : new Error('Unknown error'));
     return null;
   }
 }; 

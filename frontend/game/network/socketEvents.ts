@@ -71,6 +71,9 @@ interface ServerToClientEvents {
   ping: (startTime: number, callback: (startTime: number) => void) => void;
   initPlayers: (players: any[]) => void;
   
+  // Session events
+  sessionEstablished: (data: { sessionId: string }) => void;
+  
   // Smithing events
   smithingProgress: (data: any) => void;
   smithingComplete: (data: any) => void;

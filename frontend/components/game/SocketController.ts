@@ -14,6 +14,7 @@ import WorldManager from '../../game/world/WorldManager';
 import ItemManager from '../../game/world/ItemManager';
 import { ChatRefHandle } from '../chat/Chat';
 import soundManager from '../../game/audio/soundManager';
+import { ResourceNode } from '../../game/world/resources';
 
 // Add chat bubble interface
 interface ChatBubble {
@@ -502,6 +503,17 @@ export class SocketController {
             console.log("%c 🔄 Attempting to re-initialize ResourceController through WorldManager", "background: #FF9800; color: white;");
             this.requestWorldData();
           }
+        }
+      });
+      
+      // Listen for a single resource node added by admin
+      (socket as any).on('resourceNodeAdded', (node: ResourceNode) => {
+        console.log(`%c ✨ Received new resource node added: ${node.id} (${node.type})`, "background: #9C27B0; color: white; font-size: 14px;");
+        const resourceController = this.worldManagerRef.current?.getResourceController();
+        if (resourceController) {
+          resourceController.addResourceNode(node);
+        } else {
+          console.error("%c ❌ Resource controller not available for adding single resource node", "background: #F44336; color: white;");
         }
       });
     };

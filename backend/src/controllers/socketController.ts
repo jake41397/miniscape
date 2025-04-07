@@ -1,22 +1,18 @@
 import { Server, Socket } from 'socket.io';
-import { 
-  loadWorldItems, 
-  loadResourceNodes,
-  savePlayerPosition,
-  savePlayerInventory,
-  dropItemInWorld,
-  removeWorldItem
-} from '../models/mongodb/gameModel';
-import { verifySocketToken } from '../middleware/authMiddleware';
-import { ResourceHandler } from './handlers/ResourceHandler';
+import { v4 as uuidv4 } from 'uuid';
+import logger from '../utils/logger';
+import { savePlayerPosition, loadWorldItems, loadResourceNodes, removeWorldItem, dropItemInWorld, savePlayerInventory, addResourceNode, savePlayerSkills } from '../models/mongodb/gameModel';
+import PlayerData from '../models/mongodb/playerDataModel';
+import Profile from '../models/mongodb/profileModel';
+import { RESOURCE_RESPAWN_TIMES, getResourceRespawnTime } from '../constants/resourceConstants';
+
+// Import Handlers
 import { InventoryHandler } from './handlers/InventoryHandler';
 import { WorldItemHandler } from './handlers/WorldItemHandler';
 import { ChatHandler } from './handlers/ChatHandler';
+import { ResourceHandler } from './handlers/ResourceHandler';
 import { SmithingHandler } from './handlers/SmithingHandler';
-import { ExperienceHandler } from './handlers/ExperienceHandler';
-
-// Replace with MongoDB imports
-import { PlayerData, Profile } from '../models/mongodb';
+import { ExperienceHandler, SkillType } from './handlers/ExperienceHandler'; // Import SkillType
 
 // Define interfaces for type safety
 interface WorldBounds {
@@ -34,6 +30,12 @@ interface Player {
   y: number;
   z: number;
   inventory: InventoryItem[];
+  skills?: { // Add skills property
+    [key: string]: {
+      level: number;
+      experience: number;
+    };
+  };
   equippedItem?: InventoryItem; // Currently equipped item
   health?: number; // Player's current health
   maxHealth?: number; // Player's maximum health
@@ -59,6 +61,7 @@ interface WorldItem {
 interface ResourceNode {
   id: string;
   type: string;
+  specificType: string;
   x: number;
   y: number;
   z: number;
@@ -73,10 +76,10 @@ interface ExtendedSocket extends Socket {
     id: string;
     [key: string]: any;
   };
+  sessionId?: string; // Add sessionId property used by middleware
   data: {
     lastPositionUpdate?: number;
     movementCount?: number;
-    sessionId?: string;
     [key: string]: any;
   };
 }
@@ -424,18 +427,14 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       console.error('[SOCKET CONNECT] SmithingHandler still not available');
     }
     
-    let playerData;
-    let profile;
-    
-    // Generate a session ID for this connection
-    // Use the persistent tempUserId if available, otherwise fallback to socket.id
-    const tempUserId = socket.handshake.auth.tempUserId;
-    const sessionId = tempUserId || socket.id;
-    
-    // Store the sessionId in the socket for future reference
+    // Determine the session ID. Prioritize the ID set by the auth middleware.
+    // Fallback to socket.id ONLY if the middleware didn't set one.
+    const sessionId = socket.sessionId || socket.id; // Use socket.sessionId first!
+
+    // Ensure the determined sessionId is stored in socket.data for consistent use (e.g., on disconnect)
     socket.data.sessionId = sessionId;
-    
-    console.log(`Using session ID: ${sessionId} (${tempUserId ? 'from persistent ID' : 'from socket ID'})`);
+
+    console.log(`Using session ID: ${sessionId} (From middleware: ${!!socket.sessionId}, Fallback to socket.id: ${!socket.sessionId})`);
     
     // Default starting position - only used as a fallback
     // We'll try to find a saved position first
@@ -527,6 +526,12 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       };
     }
     
+    // ---> ADD LOGGING HERE (Moved inside try block) <--- 
+    console.log(`[${socket.id}] Loaded tempData:`, tempData ? JSON.stringify(tempData, null, 2) : 'null');
+    if (tempData) {
+      console.log(`[${socket.id}] Skills from tempData:`, tempData.skills ? JSON.stringify(tempData.skills) : 'undefined');
+    }
+    
     // For temporary users, we generate a default guest username
     let username = `Guest-${socket.id.substring(0, 4)}`;
     
@@ -550,11 +555,9 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
         socket.user!.isAdmin = true;
       }
       
-      // Try to extract username from various possible locations in the document
+      // Try to extract username from the root of the document
       if (typeof tempDataAny.username === 'string') {
         username = tempDataAny.username;
-      } else if (tempDataAny.stats && typeof tempDataAny.stats.username === 'string') {
-        username = tempDataAny.stats.username;
       }
     }
     
@@ -566,11 +569,21 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
       x: tempData.x ?? 0,
       y: tempData.y ?? 1,
       z: tempData.z ?? 0,
-      inventory: Array.isArray(tempData.inventory) ? tempData.inventory : []
+      inventory: Array.isArray(tempData.inventory) ? tempData.inventory : [],
+      skills: tempData.skills ?? undefined // Load skills from tempData
     };
+    
+    // ---> ADD LOGGING HERE <--- 
+    console.log(`[${socket.id}] Created newPlayer object:`, JSON.stringify(newPlayer, null, 2));
+    console.log(`[${socket.id}] Skills on newPlayer:`, newPlayer.skills ? JSON.stringify(newPlayer.skills) : 'undefined');
     
     // Store the player in our players object
     players[socket.id] = newPlayer;
+    
+    // ---> ADD EMIT HERE <--- 
+    // Send the complete initial player state (including skills) to the connecting client
+    socket.emit('initSelf', newPlayer); 
+    console.log(`[${socket.id}] Emitted 'initSelf' with initial player data.`);
     
     // Log connected players
     console.log(`Player ${newPlayer.name} (${socket.id}) added. Total players: ${Object.keys(players).length}`);
@@ -586,6 +599,10 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
     // Send the new player the list of existing players
     const existingPlayers = Object.values(players).filter(p => p.id !== socket.id);
     socket.emit('initPlayers', existingPlayers);
+    
+    // Confirm the session ID being used back to the client
+    socket.emit('sessionEstablished', { sessionId });
+    console.log(`[${socket.id}] Emitted sessionEstablished event with sessionId: ${sessionId}`);
     
     // Send world items
     socket.emit('initWorldItems', worldItems);
@@ -827,15 +844,10 @@ const handleSingleConnection = async (io: Server, socket: ExtendedSocket): Promi
             }
             
             // Update the document based on its available fields
-            const updateData: any = { lastActive: new Date() };
-            
-            // Store username in the stats field if it exists, otherwise directly in the document
-            if (playerDoc.stats) {
-              updateData.$set = { "stats.username": newName };
-            } else {
-              // Create a stats field if it doesn't exist
-              updateData.$set = { stats: { username: newName } };
-            }
+            const updateData: any = {
+              $set: { username: newName },
+              lastActive: new Date()
+            };
             
             const result = await PlayerData.updateOne(
               { sessionId },
@@ -1603,6 +1615,10 @@ const setupChatCommandHandler = (io: Server, socket: ExtendedSocket) => {
           handleCleanupCommand(io, socket, player);
           break;
           
+        case 'add': // New case for /add
+          handleAddCommand(io, socket, player, data.params);
+          break;
+          
         default:
           socket.emit('chatMessage', { 
             content: `Unknown command: ${data.command}`, 
@@ -1861,6 +1877,121 @@ const handleCleanupCommand = async (io: Server, socket: ExtendedSocket, player: 
   }
 };
 
+// Handle the /add command
+const handleAddCommand = async (io: Server, socket: ExtendedSocket, player: Player, params: any) => {
+  console.log(`[${socket.id}] Processing /add command from player ${player.name}`);
+  
+  // Check if the player has admin privileges
+  if (!socket.user?.isAdmin) {
+    console.log(`[${socket.id}] /add command rejected - user is not an admin`);
+    socket.emit('chatMessage', { 
+      content: 'Error: You do not have permission to use this command.', 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  // Parse the command parameters
+  const { subcommand, specificType } = params;
+  
+  // Check if the subcommand is 'node'
+  if (subcommand !== 'node') {
+    socket.emit('chatMessage', { 
+      content: 'Usage: /add node [specific_type] - Adds a resource node of the specified type at your current location', 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  // Check if the specificType is provided
+  if (!specificType) {
+    socket.emit('chatMessage', { 
+      content: 'Usage: /add node [specific_type] - Adds a resource node of the specified type at your current location', 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  // Get the player's current position
+  const { x, y, z } = player;
+  
+  // Determine nodeType based on specificType (add this logic here)
+  let nodeType: string;
+  if (specificType.includes('tree')) {
+    nodeType = 'tree';
+  } else if (specificType.includes('rock') || specificType.includes('ore')) {
+    nodeType = 'rock'; // or 'ore'
+  } else if (specificType.includes('fish') || specificType.includes('spot')) {
+    nodeType = 'fish';
+  } else if (specificType.includes('herb')) {
+    nodeType = 'herb';
+  } else {
+     socket.emit('chatMessage', { 
+      content: `Error: Could not determine base node type for "${specificType}".`, 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+
+  // Correct the object passed to addResourceNode
+  const nodeData = {
+    nodeType: nodeType, // Use nodeType
+    specificType,
+    x,
+    y,
+    z,
+    respawnTime: 60 // Use a default respawn time like in the other function
+  };
+  
+  try {
+    // Save the new node to the database using the correct data structure
+    const newNodeId = await addResourceNode(nodeData); // Pass nodeData
+    
+    if (!newNodeId) {
+      throw new Error('Failed to save node to database.');
+    }
+
+    // Construct the object to broadcast (needs full structure including ID)
+    const broadcastNode: ResourceNode = {
+      id: newNodeId.toString(),
+      type: nodeData.nodeType, 
+      specificType: nodeData.specificType,
+      x: nodeData.x,
+      y: nodeData.y,
+      z: nodeData.z,
+      respawnTime: nodeData.respawnTime * 1000, // ms for client
+      state: 'normal',
+      remainingResources: 5, // Default
+      metadata: {}
+    };
+
+    // TODO: Add metadata similar to addResourceNodeToWorld if needed
+
+    // Broadcast the new node to all players
+    io.emit('resourceNodeAdded', broadcastNode); // Broadcast the constructed node
+    
+    // Send success message
+    socket.emit('chatMessage', { 
+      content: `Added resource node of type ${specificType} at your current location.`, 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    
+    console.log(`[${socket.id}] Successfully added resource node of type ${specificType} at (${x}, ${y}, ${z})`);
+  } catch (error) {
+    console.error(`[${socket.id}] Error adding resource node:`, error);
+    socket.emit('chatMessage', { 
+      content: `Error adding resource node: ${error instanceof Error ? error.message : 'Unknown error'}`, 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+  }
+};
+
 // Setup handlers for NPC interactions
 const setupNPCHandlers = (io: Server, socket: ExtendedSocket): void => {
   // Send all NPCs to the newly connected player
@@ -2055,22 +2186,49 @@ const handleNPCDefeat = (io: Server, socket: ExtendedSocket, npc: NPC, player: P
   
   // Award experience to player
   if (socket.user) {
-    const skillType = "attack"; // Default to attack skill for now
+    const skillType = SkillType.ATTACK; // Use enum
     const xpAmount = npc.experienceReward;
     
-    socket.emit('updatePlayerSkill', {
-      skillType,
-      xpAmount
-    });
-    
-    // Send XP reward message
-    socket.emit('chatMessage', {
-      content: `You gained ${xpAmount} ${skillType} XP.`, 
-      type: 'experience',
-      timestamp: Date.now()
-    });
-    
-    console.log(`[${socket.id}] Awarded ${xpAmount} ${skillType} XP to player for defeating ${npc.name}`);
+    const experienceHandler = new ExperienceHandler(); // Instantiate handler
+    const xpResult = experienceHandler.addExperience(player, skillType, xpAmount);
+
+    if (xpResult) {
+      // Send XP reward message
+      socket.emit('chatMessage', {
+        content: `You gained ${xpAmount} ${skillType} XP.`, 
+        type: 'experience',
+        timestamp: Date.now()
+      });
+      
+      // Emit experience gained event (for UI updates)
+      socket.emit('experienceGained', {
+        skill: skillType,
+        experience: xpAmount,
+        totalExperience: xpResult.newExperience,
+        level: xpResult.newLevel
+      });
+
+      if (xpResult.leveledUp) {
+        console.log(`[${socket.id}] Player ${player.name} leveled up ${skillType} to level ${xpResult.newLevel}!`);
+        socket.emit('levelUp', {
+          skill: skillType,
+          level: xpResult.newLevel
+        });
+        socket.emit('chatMessage', {
+          content: `Congratulations! You've reached ${skillType} level ${xpResult.newLevel}!`, 
+          type: 'system',
+          timestamp: Date.now()
+        });
+      }
+
+      // Save updated skills to DB
+      savePlayerSkills(socket.user.id, player.skills)
+        .catch((error: Error) => console.error(`[${socket.id}] Error saving player skills after NPC defeat:`, error));
+        
+      console.log(`[${socket.id}] Awarded ${xpAmount} ${skillType} XP to player for defeating ${npc.name}. Total XP: ${xpResult.newExperience}`);
+    } else {
+      console.warn(`[${socket.id}] Failed to add ${skillType} experience for player ${player.name}`);
+    }
   }
   
   // Set respawn timer
@@ -2166,6 +2324,140 @@ const handlePlayerDeath = (io: Server, socket: ExtendedSocket, player: Player): 
       timestamp: Date.now()
     });
   }, 1000);
+};
+
+// Handle the specific /add node command
+const handleAddNodeCommand = async (io: Server, socket: ExtendedSocket, player: Player, specificType: string): Promise<void> => {
+  console.log(`[${socket.id}] Processing add node command for type: ${specificType} at (${player.x}, ${player.y}, ${player.z})`);
+
+  // --- VALIDATE specificType --- 
+  if (!RESOURCE_RESPAWN_TIMES.hasOwnProperty(specificType)) {
+    const validTypes = Object.keys(RESOURCE_RESPAWN_TIMES)
+      .filter(key => key !== 'default') // Exclude the default key
+      .sort() // Sort alphabetically
+      .join(', '); // Join into a readable string
+    
+    socket.emit('chatMessage', { 
+      content: `Error: Invalid specificType "${specificType}". Available types: ${validTypes}`, 
+      type: 'error', 
+      timestamp: Date.now() 
+    });
+    console.warn(`[${socket.id}] Invalid specificType provided for /add node: ${specificType}`);
+    return;
+  }
+  // --- END VALIDATION ---
+
+  // Determine nodeType based on specificType (basic example)
+  let nodeType: string;
+  if (specificType.includes('tree')) {
+    nodeType = 'tree';
+  } else if (specificType.includes('rock') || specificType.includes('ore')) {
+    nodeType = 'rock'; // or 'ore' based on convention
+  } else if (specificType.includes('fish') || specificType.includes('spot')) {
+    nodeType = 'fish';
+  } else if (specificType.includes('herb')) {
+    nodeType = 'herb';
+  } else {
+     socket.emit('chatMessage', { 
+      content: `Error: Could not determine base node type for "${specificType}". Valid types usually contain 'tree', 'rock', 'ore', 'fish', 'spot', or 'herb'.`, 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+  
+  // Basic validation (can be expanded)
+  const validNodeTypes = ['tree', 'rock', 'fish', 'herb', 'ore'];
+  if (!validNodeTypes.includes(nodeType)) {
+     socket.emit('chatMessage', { 
+      content: `Error: Invalid base node type "${nodeType}" derived from "${specificType}".`, 
+      type: 'system', 
+      timestamp: Date.now() 
+    });
+    return;
+  }
+
+
+  const nodeData = {
+    nodeType: nodeType,
+    specificType: specificType,
+    x: player.x,
+    y: player.y, // Use player's current Y
+    z: player.z
+    // respawnTime is no longer passed here
+  };
+
+  try {
+    // The addResourceNodeToWorld function will handle respawn time internally now
+    const newNode = await addResourceNodeToWorld(io, nodeData);
+    
+    if (newNode) {
+       socket.emit('chatMessage', { 
+        content: `Successfully added resource node: ${specificType} at your location (ID: ${newNode.id}).`, 
+        type: 'success', // Use a success type
+        timestamp: Date.now() 
+      });
+      console.log(`[${socket.id}] Successfully added node ${newNode.id} (${specificType})`);
+    } else {
+      throw new Error('Failed to create node in world.');
+    }
+  } catch (error) {
+    console.error(`[${socket.id}] Error adding node:`, error);
+    socket.emit('chatMessage', { 
+      content: `Error adding node "${specificType}": ${error instanceof Error ? error.message : 'Unknown error'}`, 
+      type: 'error', // Use an error type
+      timestamp: Date.now() 
+    });
+  }
+};
+
+
+// Function to add a resource node to the DB and broadcast
+const addResourceNodeToWorld = async (io: Server, nodeData: { 
+  nodeType: string; 
+  specificType: string; 
+  x: number; 
+  y: number; 
+  z: number; 
+  // respawnTime removed from input here as well
+}): Promise<ResourceNode | null> => {
+  
+  // Add node to the database - addResourceNode will handle respawn time
+  const newNodeId = await addResourceNode(nodeData);
+  if (!newNodeId) {
+    console.error('Failed to add resource node to database');
+    return null;
+  }
+  
+  // Get the respawn time again for broadcasting (client needs it in ms)
+  const respawnTimeInSeconds = getResourceRespawnTime(nodeData.specificType);
+
+  // Construct the full ResourceNode object for broadcasting and internal state
+  const newNode: ResourceNode = {
+    id: newNodeId.toString(), // Ensure ID is a string
+    type: nodeData.nodeType,
+    specificType: nodeData.specificType, // Make sure specificType is included
+    x: nodeData.x,
+    y: nodeData.y,
+    z: nodeData.z,
+    respawnTime: respawnTimeInSeconds * 1000, // Use respawnTimeInSeconds here
+    state: 'normal',
+    remainingResources: 5, // Default remaining resources
+    metadata: {} // Add basic metadata structure if needed
+  };
+
+  // TODO: Add metadata based on type like in loadResourceNodes if required for frontend
+
+  // Add to the in-memory resourceNodes store (assuming resourceHandler manages this)
+  // This might require accessing or updating resourceHandler.resourceNodes
+  // For simplicity, let's assume it gets reloaded or handled elsewhere for now.
+  // resourceHandler.addNode(newNode); // Ideal scenario
+
+  // Broadcast the new node to all clients
+  io.emit('resourceNodeAdded', newNode);
+  console.log(`Broadcasting new resource node added: ${newNode.id}`);
+
+  return newNode;
 };
 
 // Export functions as ES modules

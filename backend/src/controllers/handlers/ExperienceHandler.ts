@@ -1,5 +1,6 @@
 import { Player } from '../types'; // Assuming Player type includes skills
 import { savePlayerSkills } from '../../models/mongodb/gameModel'; // Import the function to save skills
+import { getResourceXpReward, RESOURCE_XP_REWARDS } from '../../constants/resourceConstants'; // Import the new constant getter AND the constant itself
 
 /**
  * Enum defining the different skill types available in the game.
@@ -21,6 +22,8 @@ export enum SkillType {
  * Keys should correspond to specific actions or items (e.g., tree types, ore types, fish types).
  */
 export const BASE_XP_REWARDS: Partial<Record<SkillType, { [actionKey: string]: number }>> = {
+  // THIS WHOLE OBJECT IS NOW DEPRECATED AND REPLACED BY RESOURCE_XP_REWARDS
+  /*
   [SkillType.WOODCUTTING]: {
     'normal': 25,
     'oak': 37.5,
@@ -56,6 +59,7 @@ export const BASE_XP_REWARDS: Partial<Record<SkillType, { [actionKey: string]: n
     'iron_item': 25,   // Placeholder
     'steel_item': 37,  // Placeholder
   },
+  */
   // COMBAT XP might be handled differently (e.g., per damage dealt)
 };
 
@@ -146,18 +150,19 @@ export class ExperienceHandler {
 
   /**
    * Retrieves the base XP reward for a specific action within a skill.
+   * This now uses the centralized constants.
    *
-   * @param skillType The skill the action belongs to.
-   * @param actionKey A key representing the specific action (e.g., 'normal' for woodcutting normal trees).
+   * @param skillType The skill the action belongs to (used for context, but reward lookup is by specificType).
+   * @param specificType A key representing the specific resource type (e.g., 'normal_tree', 'copper_rock').
    * @returns The base XP reward amount, or 0 if not found.
    */
-  public getXpReward(skillType: SkillType, actionKey: string): number {
-     const skillRewards = BASE_XP_REWARDS[skillType];
-     if (skillRewards && typeof skillRewards[actionKey] === 'number') {
-       return skillRewards[actionKey];
+  public getXpReward(skillType: SkillType, specificType: string): number {
+     // We directly use the specificType to look up in the new constants
+     const xp = getResourceXpReward(specificType);
+     if (xp === undefined || xp === (RESOURCE_XP_REWARDS['default'] ?? 10)) { // Check if default was used
+       console.warn(`[ExperienceHandler] XP Reward not found or using default for skill '${skillType}', specificType '${specificType}'. Returning ${xp ?? 0}`);
      }
-     console.warn(`[ExperienceHandler] XP Reward not found for skill '${skillType}', action '${actionKey}'`);
-     return 0;
+     return xp ?? 0;
   }
 
   // Potential future methods:
